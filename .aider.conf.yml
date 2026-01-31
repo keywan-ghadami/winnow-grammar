@@ -1,0 +1,26 @@
+# .aider.conf.yml
+
+# Das Hauptmodell (Architect)
+model: gemini/gemini-3-pro-preview
+
+# Modus auf Architect setzen
+chat-mode: architect
+
+yes-always: true
+
+weak-model: gemini/gemini-3-flash-preview
+
+# Optional: Editor-Modell festlegen (Aider wählt sonst ein passendes Standardmodell)
+editor-model: gemini/gemini-3-pro-preview
+
+# Falls du Git-Commits automatisch erstellen lassen willst:
+auto-commits: true
+
+# Erlaubt Aider, Dateien ohne Bestätigung im Architect-Modus zu bearbeiten
+auto-accept-architect: true
+
+test-cmd: "cargo test"
+auto-test: true
+auto-lint: true
+#lint-cmd: "rust: cargo clippy --fix --allow-dirty --allow-staged -- -D warnings && cargo fmt"
+
