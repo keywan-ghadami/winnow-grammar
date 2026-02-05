@@ -1,6 +1,10 @@
 [package]
-name = "winnow-grammar"
+name = "syn-grammar-client"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+syn-grammar = { version = "0.4.0", path = "../syn-grammar" }
