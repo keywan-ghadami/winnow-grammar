@@ -13,6 +13,12 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
             use winnow::prelude::*;
             use winnow::token::literal;
             
+            // Whitespace handling (similar to syn)
+            #[allow(dead_code)]
+            fn ws(input: &mut &str) -> PResult<()> {
+                winnow::ascii::multispace0.void().parse_next(input)
+            }
+
             // Re-export testing framework if needed or define specific test helpers
             
             #(#rules)*
@@ -33,6 +39,7 @@ fn generate_rule(rule: &Rule) -> TokenStream {
         pub fn #fn_name(input: &mut &str) -> PResult<#ret_type> {
             // Placeholder: This needs to be implemented by traversing rule.variants
             // and converting ModelPattern to winnow combinators (alt, seq, etc.)
+            // Remember to use `ws` before terminals to handle whitespace automatically.
             todo!("Implement winnow generation for rule {}", stringify!(#rule_name));
         }
     }
