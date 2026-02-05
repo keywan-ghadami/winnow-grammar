@@ -4,7 +4,7 @@
 model: gemini/gemini-3-pro-preview
 
 # Modus auf Architect setzen
-chat-mode: architect
+#chat-mode: architect
 
 yes-always: true
 
@@ -17,7 +17,7 @@ editor-model: gemini/gemini-3-pro-preview
 auto-commits: true
 
 # Erlaubt Aider, Dateien ohne Bestätigung im Architect-Modus zu bearbeiten
-auto-accept-architect: true
+#auto-accept-architect: true
 
 test-cmd: "cargo test"
 auto-test: true
