@@ -148,6 +148,14 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
              quote! { let _ = repeat(0.., #p).parse_next(input)?; }
         }
 
+        // Handle Bind (e.g. label:pattern)
+        ModelPattern::Bind { binding, pattern } => {
+            let p = generate_parser_expr(pattern);
+            quote! {
+                let #binding = #p.parse_next(input)?;
+            }
+        }
+
         _ => quote! {
             compile_error!("Unsupported pattern type in generate_step");
         }
@@ -206,6 +214,9 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
             let p = generate_parser_expr(inner);
             // Assuming Repeat is *
             quote! { repeat(0.., #p) }
+        }
+        ModelPattern::Bind { pattern, .. } => {
+            generate_parser_expr(pattern)
         }
         _ => quote! {
             compile_error!("Unsupported pattern type in generate_parser_expr")
