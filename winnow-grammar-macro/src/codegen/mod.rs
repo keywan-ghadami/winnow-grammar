@@ -1,15 +1,11 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn_grammar_model::model::GrammarDefinition;
-// Attempt to use Rule from parser to match Pattern type, assuming they are compatible or the same
-use syn_grammar_model::parser::{Pattern, Rule};
+use syn_grammar_model::model::{GrammarDefinition, Rule, Pattern};
 
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let grammar_name = &grammar.name;
     
     // Generate rules
-    // grammar.rules is Vec<model::Rule>. We hope model::Rule is compatible with parser::Rule
-    // or that we can use parser::Rule here.
     let rules = grammar.rules.iter().map(generate_rule);
 
     Ok(quote! {
@@ -108,9 +104,12 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         }
         
         // Handle Literals (e.g. "fn", "+")
-        // Pattern::Lit holds a LitStr directly
-        Pattern::Lit(lit_str) => {
-            let s = lit_str.value();
+        Pattern::Lit(lit) => {
+            let s = match lit {
+                syn::Lit::Str(s) => s.value(),
+                syn::Lit::Char(c) => c.value().to_string(),
+                _ => panic!("Unsupported literal type"),
+            };
             quote! {
                 let _ = (ws, literal(#s)).map(|(_, s)| s).parse_next(input)?;
             }
@@ -185,8 +184,12 @@ fn generate_parser_expr(pattern: &Pattern) -> TokenStream {
                 }
             }
         }
-        Pattern::Lit(lit_str) => {
-            let s = lit_str.value();
+        Pattern::Lit(lit) => {
+            let s = match lit {
+                syn::Lit::Str(s) => s.value(),
+                syn::Lit::Char(c) => c.value().to_string(),
+                _ => panic!("Unsupported literal type"),
+            };
             quote! {
                 (ws, literal(#s)).map(|(_, s)| s)
             }
