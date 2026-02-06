@@ -162,7 +162,7 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
         
         // Handle Repetitions
         // ModelPattern::Repeat(inner, op)
-        ModelPattern::Repeat(inner, _op) => {
+        ModelPattern::Repeat(inner, _span) => {
              let p = generate_parser_expr(inner);
              // Check if inner has a binding that we should use for the list
              let binding = get_inner_binding(inner);
@@ -173,9 +173,34 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
              }
         }
 
+        // Handle Plus (e.g. term+)
+        ModelPattern::Plus(inner, _span) => {
+             let p = generate_parser_expr(inner);
+             let binding = get_inner_binding(inner);
+             
+             match binding {
+                 Some(name) => quote! { let #name = repeat(1.., #p).parse_next(input)?; },
+                 None => quote! { let _ = repeat(1.., #p).parse_next(input)?; }
+             }
+        }
+
+        // Handle Delimiters
+        ModelPattern::Parenthesized(inner, _span) => generate_delimited_step(inner, "(", ")"),
+        ModelPattern::Bracketed(inner, _span) => generate_delimited_step(inner, "[", "]"),
+        ModelPattern::Braced(inner, _span) => generate_delimited_step(inner, "{", "}"),
+
         _ => quote! {
             compile_error!("Unsupported pattern type in generate_step");
         }
+    }
+}
+
+fn generate_delimited_step(inner: &[ModelPattern], open: &str, close: &str) -> TokenStream {
+    let steps: Vec<TokenStream> = inner.iter().map(|p| generate_step(p)).collect();
+    quote! {
+        let _ = (ws, literal(#open)).parse_next(input)?;
+        #(#steps)*
+        let _ = (ws, literal(#close)).parse_next(input)?;
     }
 }
 
@@ -194,6 +219,16 @@ fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
         },
         ModelPattern::Optional(inner, _) => get_inner_binding(inner),
         ModelPattern::Repeat(inner, _) => get_inner_binding(inner),
+        ModelPattern::Plus(inner, _) => get_inner_binding(inner),
+        ModelPattern::Parenthesized(inner, _) 
+        | ModelPattern::Bracketed(inner, _) 
+        | ModelPattern::Braced(inner, _) => {
+            if inner.len() == 1 {
+                get_inner_binding(&inner[0])
+            } else {
+                None
+            }
+        },
         _ => None,
     }
 }
@@ -246,13 +281,33 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
             let p = generate_parser_expr(inner);
             quote! { opt(#p) }
         }
-        ModelPattern::Repeat(inner, _op) => {
+        ModelPattern::Repeat(inner, _span) => {
             let p = generate_parser_expr(inner);
             // Assuming Repeat is *
             quote! { repeat(0.., #p) }
         }
+        ModelPattern::Plus(inner, _span) => {
+            let p = generate_parser_expr(inner);
+            quote! { repeat(1.., #p) }
+        }
+        ModelPattern::Parenthesized(inner, _) => generate_delimited_expr(inner, "(", ")"),
+        ModelPattern::Bracketed(inner, _) => generate_delimited_expr(inner, "[", "]"),
+        ModelPattern::Braced(inner, _) => generate_delimited_expr(inner, "{", "}"),
         _ => quote! {
             compile_error!("Unsupported pattern type in generate_parser_expr")
         }
+    }
+}
+
+fn generate_delimited_expr(inner: &[ModelPattern], open: &str, close: &str) -> TokenStream {
+    let seq_parsers: Vec<TokenStream> = inner.iter().map(|p| generate_parser_expr(p)).collect();
+    let inner_parser = if seq_parsers.len() == 1 {
+        quote! { #(#seq_parsers)* }
+    } else {
+        quote! { ( #(#seq_parsers),* ) }
+    };
+    
+    quote! {
+        delimited((ws, literal(#open)), #inner_parser, (ws, literal(#close)))
     }
 }
