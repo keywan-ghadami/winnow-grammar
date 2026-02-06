@@ -85,10 +85,10 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 "integer" => quote! {
-                    (ws, ::winnow::combinator::recognize((
+                    (ws, (
                         ::winnow::combinator::opt(::winnow::token::one_of(['+', '-'])),
                         ::winnow::ascii::digit1
-                    ))).try_map(|(_, s): (_, &str)| s.parse())
+                    ).recognize()).try_map(|(_, s): (_, &str)| s.parse())
                 },
                 "string" => quote! {
                      (ws, delimited(
@@ -256,10 +256,10 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 "integer" => quote! {
-                    (ws, ::winnow::combinator::recognize((
+                    (ws, (
                         ::winnow::combinator::opt(::winnow::token::one_of(['+', '-'])),
                         ::winnow::ascii::digit1
-                    ))).try_map(|(_, s): (_, &str)| s.parse())
+                    ).recognize()).try_map(|(_, s): (_, &str)| s.parse())
                 },
                 "string" => quote! {
                      (ws, delimited(
