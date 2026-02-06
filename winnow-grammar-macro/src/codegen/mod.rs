@@ -139,7 +139,10 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
         // ModelPattern::Repeat(inner, op)
         ModelPattern::Repeat(inner, op) => {
              let p = generate_parser_expr(inner);
-             let op_str = quote!(#op).to_string();
+             // op is likely a char or String. If it is a Span, this will fail compilation,
+             // but quote!(#op) failed because Span doesn't implement ToTokens.
+             // If op is char, to_string() works.
+             let op_str = op.to_string();
              if op_str == "*" {
                  quote! { let _ = repeat(0.., #p).parse_next(input)?; }
              } else if op_str == "+" {
@@ -206,7 +209,7 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
         }
         ModelPattern::Repeat(inner, op) => {
             let p = generate_parser_expr(inner);
-            let op_str = quote!(#op).to_string();
+            let op_str = op.to_string();
              if op_str == "*" {
                  quote! { repeat(0.., #p) }
              } else if op_str == "+" {
