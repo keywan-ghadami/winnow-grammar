@@ -9,6 +9,7 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let rules = grammar.rules.iter().map(generate_rule);
 
     Ok(quote! {
+        #[allow(non_snake_case)]
         pub mod #grammar_name {
             #![allow(unused_imports)]
             // Import types from parent module (e.g. AST structs)
@@ -85,10 +86,7 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 "integer" => quote! {
-                    (ws, (
-                        ::winnow::combinator::opt(::winnow::token::one_of(['+', '-'])),
-                        ::winnow::ascii::digit1
-                    ).recognize()).try_map(|(_, s): (_, &str)| s.parse())
+                    (ws, ::winnow::ascii::dec_int).map(|(_, i)| i)
                 },
                 "string" => quote! {
                      (ws, delimited(
@@ -256,10 +254,7 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 "integer" => quote! {
-                    (ws, (
-                        ::winnow::combinator::opt(::winnow::token::one_of(['+', '-'])),
-                        ::winnow::ascii::digit1
-                    ).recognize()).try_map(|(_, s): (_, &str)| s.parse())
+                    (ws, ::winnow::ascii::dec_int).map(|(_, i)| i)
                 },
                 "string" => quote! {
                      (ws, delimited(
