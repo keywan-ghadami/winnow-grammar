@@ -35,9 +35,9 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
 
 fn generate_rule(rule: &Rule) -> TokenStream {
     let rule_name = &rule.name;
-    let fn_name = format_ident!("parse_{}", rule_name);
-    let ret_type = &rule.return_type;
     let span = Span::mixed_site();
+    let fn_name = format_ident!("parse_{}", rule_name, span = span);
+    let ret_type = &rule.return_type;
 
     let variants = rule.variants.iter().map(|v| {
         // RuleVariant has 'pattern' (Vec<ModelPattern>) and 'action' (Expr)
@@ -104,7 +104,7 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
                     .map(|(_, s): (_, &str)| s.to_string())
                 },
                 _ => {
-                    let fn_name = format_ident!("parse_{}", rule_name);
+                    let fn_name = format_ident!("parse_{}", rule_name, span = span);
                     quote_spanned! {span=> #fn_name }
                 }
             };
@@ -274,7 +274,7 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
                     .map(|(_, s): (_, &str)| s.to_string())
                 },
                 _ => {
-                    let fn_name = format_ident!("parse_{}", rule_name);
+                    let fn_name = format_ident!("parse_{}", rule_name, span = span);
                     quote_spanned! {span=> #fn_name }
                 }
             }
