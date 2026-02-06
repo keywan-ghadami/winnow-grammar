@@ -14,14 +14,14 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
             // Import types from parent module (e.g. AST structs)
             use super::*;
             
-            use winnow::prelude::*;
-            use winnow::token::literal;
-            use winnow::combinator::{alt, repeat, opt, delimited};
+            use ::winnow::prelude::*;
+            use ::winnow::token::literal;
+            use ::winnow::combinator::{alt, repeat, opt, delimited};
             
             // Whitespace handling (similar to syn)
             #[allow(dead_code)]
             fn ws(input: &mut &str) -> ModalResult<()> {
-                winnow::ascii::multispace0.parse_next(input).map(|_| ())
+                ::winnow::ascii::multispace0.parse_next(input).map(|_| ())
             }
 
             // Re-export testing framework if needed or define specific test helpers
@@ -81,18 +81,26 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
             let name_str = rule_name.to_string();
             let parser = match name_str.as_str() {
                 "ident" => quote! { 
-                    (ws, winnow::token::take_while(1.., |c: char| c.is_alphanumeric() || c == '_'))
+                    (ws, ::winnow::token::take_while(1.., |c: char| c.is_alphanumeric() || c == '_'))
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 "integer" => quote! {
-                    (ws, winnow::combinator::recognize((
-                        winnow::combinator::opt(winnow::token::one_of(['+', '-'])),
-                        winnow::ascii::digit1
+                    (ws, ::winnow::combinator::recognize((
+                        ::winnow::combinator::opt(::winnow::token::one_of(['+', '-'])),
+                        ::winnow::ascii::digit1
                     ))).try_map(|(_, s): (_, &str)| s.parse())
                 },
                 "string" => quote! {
-                     (ws, delimited('"', winnow::ascii::escaped(winnow::token::none_of("\\\""), '\\', winnow::token::one_of("\\\"")), '"'))
-                        .map(|(_, s): (_, &str)| s.to_string())
+                     (ws, delimited(
+                        '"', 
+                        ::winnow::ascii::take_escaped(
+                            ::winnow::token::none_of(['\\', '"']), 
+                            '\\', 
+                            ::winnow::token::one_of(['\\', '"'])
+                        ), 
+                        '"'
+                    ))
+                    .map(|(_, s): (_, &str)| s.to_string())
                 },
                 _ => {
                     let fn_name = format_ident!("parse_{}", rule_name);
@@ -244,18 +252,26 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
             let name_str = rule_name.to_string();
             match name_str.as_str() {
                 "ident" => quote! { 
-                    (ws, winnow::token::take_while(1.., |c: char| c.is_alphanumeric() || c == '_'))
+                    (ws, ::winnow::token::take_while(1.., |c: char| c.is_alphanumeric() || c == '_'))
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 "integer" => quote! {
-                    (ws, winnow::combinator::recognize((
-                        winnow::combinator::opt(winnow::token::one_of(['+', '-'])),
-                        winnow::ascii::digit1
+                    (ws, ::winnow::combinator::recognize((
+                        ::winnow::combinator::opt(::winnow::token::one_of(['+', '-'])),
+                        ::winnow::ascii::digit1
                     ))).try_map(|(_, s): (_, &str)| s.parse())
                 },
                 "string" => quote! {
-                     (ws, delimited('"', winnow::ascii::escaped(winnow::token::none_of("\\\""), '\\', winnow::token::one_of("\\\"")), '"'))
-                        .map(|(_, s): (_, &str)| s.to_string())
+                     (ws, delimited(
+                        '"', 
+                        ::winnow::ascii::take_escaped(
+                            ::winnow::token::none_of(['\\', '"']), 
+                            '\\', 
+                            ::winnow::token::one_of(['\\', '"'])
+                        ), 
+                        '"'
+                    ))
+                    .map(|(_, s): (_, &str)| s.to_string())
                 },
                 _ => {
                     let fn_name = format_ident!("parse_{}", rule_name);
