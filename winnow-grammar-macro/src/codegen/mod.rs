@@ -1,6 +1,9 @@
 use proc_macro2::{TokenStream, Span};
-use quote::{format_ident, quote_spanned};
-use syn_grammar_model::model::{GrammarDefinition, Rule, ModelPattern};
+use quote::{format_ident, quote, quote_spanned};
+use syn_grammar_model::{
+    analysis,
+    model::{GrammarDefinition, Rule, ModelPattern, RuleVariant},
+};
 
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let grammar_name = &grammar.name;
@@ -47,11 +50,51 @@ fn generate_rule(rule: &Rule) -> TokenStream {
     let fn_name = format_ident!("parse_{}", rule_name, span = span);
     let ret_type = &rule.return_type;
 
-    let variants = rule.variants.iter().map(|v| {
-        // RuleVariant has 'pattern' (Vec<ModelPattern>) and 'action' (Expr)
+    // Check for direct left recursion
+    let (recursive_refs, base_refs) = analysis::split_left_recursive(&rule.name, &rule.variants);
+
+    let body = if recursive_refs.is_empty() {
+        // Standard generation
+        generate_variants_body(&rule.variants, ret_type)
+    } else {
+        // Left-recursive generation
+        if base_refs.is_empty() {
+            quote_spanned! {span=>
+                compile_error!("Left-recursive rule requires at least one non-recursive base variant.")
+            }
+        } else {
+            let base_owned: Vec<RuleVariant> = base_refs.into_iter().cloned().collect();
+            let recursive_owned: Vec<RuleVariant> = recursive_refs.into_iter().cloned().collect();
+
+            let base_parser = generate_variants_body(&base_owned, ret_type);
+            let loop_body = generate_recursive_loop_body(&recursive_owned, ret_type);
+
+            quote_spanned! {span=>
+                // 1. Parse Base
+                let mut lhs = #base_parser?;
+                
+                // 2. Loop to consume recursive tails
+                loop {
+                    #loop_body
+                    break;
+                }
+                Ok(lhs)
+            }
+        }
+    };
+
+    quote_spanned! {span=>
+        pub fn #fn_name(input: &mut &str) -> ModalResult<#ret_type> {
+            #body
+        }
+    }
+}
+
+fn generate_variants_body(variants: &[RuleVariant], ret_type: &syn::Type) -> TokenStream {
+    let span = Span::mixed_site();
+    let variant_parsers = variants.iter().map(|v| {
         let steps: Vec<TokenStream> = v.pattern.iter().map(generate_step).collect();
         let action = &v.action;
-        
         quote_spanned! {span=>
             |input: &mut &str| -> ModalResult<#ret_type> {
                 #(#steps)*
@@ -60,27 +103,76 @@ fn generate_rule(rule: &Rule) -> TokenStream {
         }
     });
 
-    // If multiple variants, use alt.
-    let body = if rule.variants.len() == 1 {
-        let v = &rule.variants[0];
+    if variants.len() == 1 {
+        let v = &variants[0];
         let steps: Vec<TokenStream> = v.pattern.iter().map(generate_step).collect();
         let action = &v.action;
         quote_spanned! {span=>
-            #(#steps)*
-            Ok(#action)
+            {
+                #(#steps)*
+                Ok(#action)
+            }
         }
     } else {
         quote_spanned! {span=>
             alt((
-                #(#variants),*
+                #(#variant_parsers),*
             )).parse_next(input)
         }
-    };
+    }
+}
+
+fn generate_recursive_loop_body(variants: &[RuleVariant], ret_type: &syn::Type) -> TokenStream {
+    let span = Span::mixed_site();
+    
+    let arms = variants.iter().map(|v| {
+        // The first pattern is the recursive call (e.g. `l:expression`).
+        // We skip it for parsing, but we need its binding name to inject `lhs`.
+        let lhs_binding = match &v.pattern[0] {
+            ModelPattern::RuleCall { binding: Some(b), .. } => Some(b),
+            _ => None,
+        };
+
+        let bind_lhs = if let Some(b) = lhs_binding {
+            quote! { let #b = lhs.clone(); }
+        } else {
+            quote! {}
+        };
+
+        // Generate steps for the *rest* of the pattern (the tail)
+        let tail_steps: Vec<TokenStream> = v.pattern.iter().skip(1).map(generate_step).collect();
+        let action = &v.action;
+
+        // We construct an imperative attempt block.
+        // We use `input.checkpoint()` to backtrack if the tail fails.
+        quote_spanned! {span=>
+            {
+                let checkpoint = ::winnow::stream::Stream::checkpoint(input);
+                let attempt = (|| -> ModalResult<#ret_type> {
+                    #(#tail_steps)*
+                    #bind_lhs
+                    Ok(#action)
+                })();
+
+                match attempt {
+                    Ok(val) => {
+                        lhs = val;
+                        continue;
+                    },
+                    Err(e) => {
+                        // If it's a recoverable error (Backtrack), reset and try next.
+                        // If it's a failure (Cut), we should probably propagate, but for now
+                        // we treat it as "variant didn't match" unless we implement cut logic.
+                        // Winnow's `alt` backtracks on standard errors.
+                        ::winnow::stream::Stream::reset(input, &checkpoint);
+                    }
+                }
+            }
+        }
+    });
 
     quote_spanned! {span=>
-        pub fn #fn_name(input: &mut &str) -> ModalResult<#ret_type> {
-            #body
-        }
+        #(#arms)*
     }
 }
 
