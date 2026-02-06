@@ -1,14 +1,15 @@
-use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use proc_macro2::{TokenStream, Span};
+use quote::{format_ident, quote, quote_spanned};
 use syn_grammar_model::model::{GrammarDefinition, Rule, ModelPattern};
 
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let grammar_name = &grammar.name;
+    let span = Span::mixed_site();
     
     // Generate rules
     let rules = grammar.rules.iter().map(generate_rule);
 
-    Ok(quote! {
+    Ok(quote_spanned! {span=>
         #[allow(non_snake_case)]
         pub mod #grammar_name {
             #![allow(unused_imports)]
@@ -36,13 +37,14 @@ fn generate_rule(rule: &Rule) -> TokenStream {
     let rule_name = &rule.name;
     let fn_name = format_ident!("parse_{}", rule_name);
     let ret_type = &rule.return_type;
+    let span = Span::mixed_site();
 
     let variants = rule.variants.iter().map(|v| {
         // RuleVariant has 'pattern' (Vec<ModelPattern>) and 'action' (Expr)
         let steps: Vec<TokenStream> = v.pattern.iter().map(generate_step).collect();
         let action = &v.action;
         
-        quote! {
+        quote_spanned! {span=>
             |input: &mut &str| -> ModalResult<#ret_type> {
                 #(#steps)*
                 Ok(#action)
@@ -55,19 +57,19 @@ fn generate_rule(rule: &Rule) -> TokenStream {
         let v = &rule.variants[0];
         let steps: Vec<TokenStream> = v.pattern.iter().map(generate_step).collect();
         let action = &v.action;
-        quote! {
+        quote_spanned! {span=>
             #(#steps)*
             Ok(#action)
         }
     } else {
-        quote! {
+        quote_spanned! {span=>
             alt((
                 #(#variants),*
             )).parse_next(input)
         }
     };
 
-    quote! {
+    quote_spanned! {span=>
         pub fn #fn_name(input: &mut &str) -> ModalResult<#ret_type> {
             #body
         }
@@ -75,20 +77,21 @@ fn generate_rule(rule: &Rule) -> TokenStream {
 }
 
 fn generate_step(pattern: &ModelPattern) -> TokenStream {
+    let span = Span::mixed_site();
     match pattern {
         // Handle RuleCall (identifiers, builtins, rule references)
         ModelPattern::RuleCall { binding, rule_name, .. } => {
             // Check for builtins based on rule_name
             let name_str = rule_name.to_string();
             let parser = match name_str.as_str() {
-                "ident" => quote! { 
+                "ident" => quote_spanned! {span=> 
                     (ws, ::winnow::token::take_while(1.., |c: char| c.is_alphanumeric() || c == '_'))
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
-                "integer" => quote! {
+                "integer" => quote_spanned! {span=>
                     (ws, ::winnow::ascii::dec_int).map(|(_, i)| i)
                 },
-                "string" => quote! {
+                "string" => quote_spanned! {span=>
                      (ws, delimited(
                         '"', 
                         ::winnow::ascii::take_escaped(
@@ -102,15 +105,15 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
                 },
                 _ => {
                     let fn_name = format_ident!("parse_{}", rule_name);
-                    quote! { #fn_name }
+                    quote_spanned! {span=> #fn_name }
                 }
             };
 
             match binding {
-                Some(name) => quote! {
+                Some(name) => quote_spanned! {span=>
                     let #name = #parser.parse_next(input)?;
                 },
-                None => quote! {
+                None => quote_spanned! {span=>
                     let _ = #parser.parse_next(input)?;
                 }
             }
@@ -119,7 +122,7 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
         // Handle Literals (e.g. "fn", "+")
         ModelPattern::Lit(lit_str) => {
             let s = lit_str.value();
-            quote! {
+            quote_spanned! {span=>
                 let _ = (ws, literal(#s)).map(|(_, s)| s).parse_next(input)?;
             }
         }
@@ -130,12 +133,12 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
             // Outer vec is alt, inner vec is sequence
             let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<ModelPattern>| {
                 let seq_parsers: Vec<TokenStream> = seq.iter().map(generate_parser_expr).collect();
-                quote! {
+                quote_spanned! {span=>
                     ( #(#seq_parsers),* )
                 }
             }).collect();
             
-            let parser = quote! {
+            let parser = quote_spanned! {span=>
                 alt(( #(#alts),* ))
             };
 
@@ -143,10 +146,10 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
             let binding = get_inner_binding(pattern);
 
             match binding {
-                Some(name) => quote! {
+                Some(name) => quote_spanned! {span=>
                     let #name = #parser.parse_next(input)?;
                 },
-                None => quote! {
+                None => quote_spanned! {span=>
                     let _ = #parser.parse_next(input)?;
                 }
             }
@@ -155,15 +158,15 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
         // Handle Optional (e.g. term?)
         ModelPattern::Optional(inner, _span) => {
             let p = generate_parser_expr(inner);
-            let parser = quote! { opt(#p) };
+            let parser = quote_spanned! {span=> opt(#p) };
             
             let binding = get_inner_binding(inner);
 
             match binding {
-                Some(name) => quote! {
+                Some(name) => quote_spanned! {span=>
                     let #name = #parser.parse_next(input)?;
                 },
-                None => quote! {
+                None => quote_spanned! {span=>
                     let _ = #parser.parse_next(input)?;
                 }
             }
@@ -177,8 +180,8 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
              let binding = get_inner_binding(inner);
              
              match binding {
-                 Some(name) => quote! { let #name: Vec<_> = repeat(0.., #p).parse_next(input)?; },
-                 None => quote! { let _: Vec<_> = repeat(0.., #p).parse_next(input)?; }
+                 Some(name) => quote_spanned! {span=> let #name: Vec<_> = repeat(0.., #p).parse_next(input)?; },
+                 None => quote_spanned! {span=> let _: Vec<_> = repeat(0.., #p).parse_next(input)?; }
              }
         }
 
@@ -188,8 +191,8 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
              let binding = get_inner_binding(inner);
              
              match binding {
-                 Some(name) => quote! { let #name: Vec<_> = repeat(1.., #p).parse_next(input)?; },
-                 None => quote! { let _: Vec<_> = repeat(1.., #p).parse_next(input)?; }
+                 Some(name) => quote_spanned! {span=> let #name: Vec<_> = repeat(1.., #p).parse_next(input)?; },
+                 None => quote_spanned! {span=> let _: Vec<_> = repeat(1.., #p).parse_next(input)?; }
              }
         }
 
@@ -198,15 +201,16 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
         ModelPattern::Bracketed(inner, _span) => generate_delimited_step(inner, "[", "]"),
         ModelPattern::Braced(inner, _span) => generate_delimited_step(inner, "{", "}"),
 
-        _ => quote! {
+        _ => quote_spanned! {span=>
             compile_error!("Unsupported pattern type in generate_step");
         }
     }
 }
 
 fn generate_delimited_step(inner: &[ModelPattern], open: &str, close: &str) -> TokenStream {
+    let span = Span::mixed_site();
     let steps: Vec<TokenStream> = inner.iter().map(generate_step).collect();
-    quote! {
+    quote_spanned! {span=>
         let _ = (ws, literal(#open)).parse_next(input)?;
         #(#steps)*
         let _ = (ws, literal(#close)).parse_next(input)?;
@@ -245,18 +249,19 @@ fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
 // Helper to generate just the parser expression (without 'let _ = ...')
 // Used for nesting inside combinators
 fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
+    let span = Span::mixed_site();
     match pattern {
         ModelPattern::RuleCall { rule_name, .. } => {
             let name_str = rule_name.to_string();
             match name_str.as_str() {
-                "ident" => quote! { 
+                "ident" => quote_spanned! {span=> 
                     (ws, ::winnow::token::take_while(1.., |c: char| c.is_alphanumeric() || c == '_'))
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
-                "integer" => quote! {
+                "integer" => quote_spanned! {span=>
                     (ws, ::winnow::ascii::dec_int).map(|(_, i)| i)
                 },
-                "string" => quote! {
+                "string" => quote_spanned! {span=>
                      (ws, delimited(
                         '"', 
                         ::winnow::ascii::take_escaped(
@@ -270,13 +275,13 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
                 },
                 _ => {
                     let fn_name = format_ident!("parse_{}", rule_name);
-                    quote! { #fn_name }
+                    quote_spanned! {span=> #fn_name }
                 }
             }
         }
         ModelPattern::Lit(lit_str) => {
             let s = lit_str.value();
-            quote! {
+            quote_spanned! {span=>
                 (ws, literal(#s)).map(|(_, s)| s)
             }
         }
@@ -285,46 +290,47 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
                 let seq_parsers: Vec<TokenStream> = seq.iter().map(generate_parser_expr).collect();
                 // If sequence has multiple items, tuple combinator
                 if seq.len() == 1 {
-                    quote! { #(#seq_parsers)* }
+                    quote_spanned! {span=> #(#seq_parsers)* }
                 } else {
-                    quote! { ( #(#seq_parsers),* ) }
+                    quote_spanned! {span=> ( #(#seq_parsers),* ) }
                 }
             }).collect();
-            quote! {
+            quote_spanned! {span=>
                 alt(( #(#alts),* ))
             }
         }
         ModelPattern::Optional(inner, _) => {
             let p = generate_parser_expr(inner);
-            quote! { opt(#p) }
+            quote_spanned! {span=> opt(#p) }
         }
         ModelPattern::Repeat(inner, _span) => {
             let p = generate_parser_expr(inner);
             // Assuming Repeat is *
-            quote! { repeat(0.., #p) }
+            quote_spanned! {span=> repeat(0.., #p) }
         }
         ModelPattern::Plus(inner, _span) => {
             let p = generate_parser_expr(inner);
-            quote! { repeat(1.., #p) }
+            quote_spanned! {span=> repeat(1.., #p) }
         }
         ModelPattern::Parenthesized(inner, _) => generate_delimited_expr(inner, "(", ")"),
         ModelPattern::Bracketed(inner, _) => generate_delimited_expr(inner, "[", "]"),
         ModelPattern::Braced(inner, _) => generate_delimited_expr(inner, "{", "}"),
-        _ => quote! {
+        _ => quote_spanned! {span=>
             compile_error!("Unsupported pattern type in generate_parser_expr")
         }
     }
 }
 
 fn generate_delimited_expr(inner: &[ModelPattern], open: &str, close: &str) -> TokenStream {
+    let span = Span::mixed_site();
     let seq_parsers: Vec<TokenStream> = inner.iter().map(generate_parser_expr).collect();
     let inner_parser = if seq_parsers.len() == 1 {
-        quote! { #(#seq_parsers)* }
+        quote_spanned! {span=> #(#seq_parsers)* }
     } else {
-        quote! { ( #(#seq_parsers),* ) }
+        quote_spanned! {span=> ( #(#seq_parsers),* ) }
     };
     
-    quote! {
+    quote_spanned! {span=>
         delimited((ws, literal(#open)), #inner_parser, (ws, literal(#close)))
     }
 }
