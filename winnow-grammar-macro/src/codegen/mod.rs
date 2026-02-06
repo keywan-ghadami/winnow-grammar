@@ -74,7 +74,7 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
         // Handle RuleCall (identifiers, builtins, rule references)
         ModelPattern::RuleCall { binding, rule_name, .. } => {
             // Check for builtins based on rule_name
-            let name_str = quote!(#rule_name).to_string();
+            let name_str = rule_name.to_string();
             let parser = match name_str.as_str() {
                 "ident" => quote! { 
                     (ws, winnow::token::take_while(1.., |c: char| c.is_alphanumeric() || c == '_'))
@@ -155,7 +155,7 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
 fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
     match pattern {
         ModelPattern::RuleCall { rule_name, .. } => {
-            let name_str = quote!(#rule_name).to_string();
+            let name_str = rule_name.to_string();
             match name_str.as_str() {
                 "ident" => quote! { 
                     (ws, winnow::token::take_while(1.., |c: char| c.is_alphanumeric() || c == '_'))

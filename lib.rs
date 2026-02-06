@@ -1,5 +1,8 @@
 // src/lib.rs
 
+// Ensure the macro crate is linked
+extern crate winnow_grammar_macro;
+
 // Re-export the macro
 pub use winnow_grammar_macro::grammar;
 

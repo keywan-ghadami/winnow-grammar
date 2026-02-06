@@ -1,4 +1,5 @@
 use winnow::prelude::*;
+extern crate winnow_grammar;
 use winnow_grammar::grammar;
 
 // -----------------------------------------------------------------------------
