@@ -1,6 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn_grammar_model::model::{GrammarDefinition, Rule, Pattern};
+use syn_grammar_model::model::{GrammarDefinition, Rule};
+use syn_grammar_model::parser::Pattern;
 
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let grammar_name = &grammar.name;
@@ -115,7 +116,7 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         Pattern::Group(alternatives, _) => {
             // alternatives is Vec<Vec<Pattern>>
             // Outer vec is alt, inner vec is sequence
-            let alts: Vec<_> = alternatives.iter().map(|seq| {
+            let alts: Vec<_> = alternatives.iter().map(|seq: &Vec<Pattern>| {
                 let seq_parsers: Vec<_> = seq.iter().map(generate_parser_expr).collect();
                 quote! {
                     ( #(#seq_parsers),* )
@@ -187,7 +188,7 @@ fn generate_parser_expr(pattern: &Pattern) -> TokenStream {
             }
         }
         Pattern::Group(alternatives, _) => {
-            let alts: Vec<_> = alternatives.iter().map(|seq| {
+            let alts: Vec<_> = alternatives.iter().map(|seq: &Vec<Pattern>| {
                 let seq_parsers: Vec<_> = seq.iter().map(generate_parser_expr).collect();
                 // If sequence has multiple items, tuple combinator
                 if seq.len() == 1 {
