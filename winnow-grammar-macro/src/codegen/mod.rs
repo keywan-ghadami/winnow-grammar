@@ -1,7 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn_grammar_model::model::{GrammarDefinition, Rule};
-use syn_grammar_model::parser::Pattern;
+use syn_grammar_model::model::{GrammarDefinition, Rule, ModelPattern};
 
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let grammar_name = &grammar.name;
@@ -34,7 +33,7 @@ fn generate_rule(rule: &Rule) -> TokenStream {
     let ret_type = &rule.return_type;
 
     let variants = rule.variants.iter().map(|v| {
-        // RuleVariant has 'pattern' (Vec<Pattern>) and 'action' (Expr)
+        // RuleVariant has 'pattern' (Vec<ModelPattern>) and 'action' (Expr)
         let steps: Vec<TokenStream> = v.pattern.iter().map(|p| generate_step(p)).collect();
         let action = &v.action;
         
@@ -70,10 +69,10 @@ fn generate_rule(rule: &Rule) -> TokenStream {
     }
 }
 
-fn generate_step(pattern: &Pattern) -> TokenStream {
+fn generate_step(pattern: &ModelPattern) -> TokenStream {
     match pattern {
         // Handle RuleCall (identifiers, builtins, rule references)
-        Pattern::RuleCall { binding, rule_name, .. } => {
+        ModelPattern::RuleCall { binding, rule_name, .. } => {
             // Check for builtins based on rule_name
             let name_str = quote!(#rule_name).to_string();
             let parser = match name_str.as_str() {
@@ -105,7 +104,7 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         }
         
         // Handle Literals (e.g. "fn", "+")
-        Pattern::Lit(lit_str) => {
+        ModelPattern::Lit(lit_str) => {
             let s = lit_str.value();
             quote! {
                 let _ = (ws, literal(#s)).map(|(_, s)| s).parse_next(input)?;
@@ -113,10 +112,10 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         }
 
         // Handle Groups (e.g. (a b | c))
-        Pattern::Group(alternatives, _) => {
-            // alternatives is Vec<Vec<Pattern>>
+        ModelPattern::Group(alternatives, _) => {
+            // alternatives is Vec<Vec<ModelPattern>>
             // Outer vec is alt, inner vec is sequence
-            let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<Pattern>| {
+            let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<ModelPattern>| {
                 let seq_parsers: Vec<TokenStream> = seq.iter().map(|p| generate_parser_expr(p)).collect();
                 quote! {
                     ( #(#seq_parsers),* )
@@ -129,7 +128,7 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         }
 
         // Handle Optional (e.g. term?)
-        Pattern::Optional(inner, _) => {
+        ModelPattern::Optional(inner, _) => {
             let p = generate_parser_expr(inner);
             quote! {
                 let _ = opt(#p).parse_next(input)?;
@@ -137,8 +136,8 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         }
         
         // Handle Repetitions
-        // Pattern::Repeat(inner, op)
-        Pattern::Repeat(inner, op) => {
+        // ModelPattern::Repeat(inner, op)
+        ModelPattern::Repeat(inner, op) => {
              let p = generate_parser_expr(inner);
              let op_str = quote!(#op).to_string();
              if op_str == "*" {
@@ -159,9 +158,9 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
 
 // Helper to generate just the parser expression (without 'let _ = ...')
 // Used for nesting inside combinators
-fn generate_parser_expr(pattern: &Pattern) -> TokenStream {
+fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
     match pattern {
-        Pattern::RuleCall { rule_name, .. } => {
+        ModelPattern::RuleCall { rule_name, .. } => {
             let name_str = quote!(#rule_name).to_string();
             match name_str.as_str() {
                 "ident" => quote! { 
@@ -181,14 +180,14 @@ fn generate_parser_expr(pattern: &Pattern) -> TokenStream {
                 }
             }
         }
-        Pattern::Lit(lit_str) => {
+        ModelPattern::Lit(lit_str) => {
             let s = lit_str.value();
             quote! {
                 (ws, literal(#s)).map(|(_, s)| s)
             }
         }
-        Pattern::Group(alternatives, _) => {
-            let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<Pattern>| {
+        ModelPattern::Group(alternatives, _) => {
+            let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<ModelPattern>| {
                 let seq_parsers: Vec<TokenStream> = seq.iter().map(|p| generate_parser_expr(p)).collect();
                 // If sequence has multiple items, tuple combinator
                 if seq.len() == 1 {
@@ -201,11 +200,11 @@ fn generate_parser_expr(pattern: &Pattern) -> TokenStream {
                 alt(( #(#alts),* ))
             }
         }
-        Pattern::Optional(inner, _) => {
+        ModelPattern::Optional(inner, _) => {
             let p = generate_parser_expr(inner);
             quote! { opt(#p) }
         }
-        Pattern::Repeat(inner, op) => {
+        ModelPattern::Repeat(inner, op) => {
             let p = generate_parser_expr(inner);
             let op_str = quote!(#op).to_string();
              if op_str == "*" {
