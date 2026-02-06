@@ -81,7 +81,7 @@ grammar! {
 
 #[test]
 fn test_builtins() {
-    let mut input = r#" "hello" 123 world "#;
+    let mut input = r#" "hello" 123 world"#;
     let result = TestBuiltins::parse_main.parse(&mut input).unwrap();
     assert_eq!(result, Builtins {
         s: "hello".to_string(),
