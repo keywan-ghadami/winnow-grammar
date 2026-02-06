@@ -116,7 +116,7 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
         }
 
         // Handle Groups (e.g. (a b | c))
-        ModelPattern::Group(alternatives, binding) => {
+        ModelPattern::Group(alternatives, _span) => {
             // alternatives is Vec<Vec<ModelPattern>>
             // Outer vec is alt, inner vec is sequence
             let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<ModelPattern>| {
@@ -130,6 +130,9 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
                 alt(( #(#alts),* ))
             };
 
+            // Try to find a binding on the inner element if possible
+            let binding = get_inner_binding(pattern);
+
             match binding {
                 Some(name) => quote! {
                     let #name = #parser.parse_next(input)?;
@@ -141,10 +144,12 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
         }
 
         // Handle Optional (e.g. term?)
-        ModelPattern::Optional(inner, binding) => {
+        ModelPattern::Optional(inner, _span) => {
             let p = generate_parser_expr(inner);
             let parser = quote! { opt(#p) };
             
+            let binding = get_inner_binding(inner);
+
             match binding {
                 Some(name) => quote! {
                     let #name = #parser.parse_next(input)?;
@@ -175,12 +180,20 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
 }
 
 // Helper to extract binding from a pattern if it exists.
-// Used for Repeat to lift the binding from inner element to the list.
+// Used for Repeat/Optional to lift the binding from inner element.
 fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
     match pattern {
         ModelPattern::RuleCall { binding, .. } => binding.as_ref(),
-        ModelPattern::Group(_, binding) => binding.as_ref(),
-        ModelPattern::Optional(_, binding) => binding.as_ref(),
+        // For Group, if it's a single item, we might be able to lift the binding
+        ModelPattern::Group(alts, _) => {
+            if alts.len() == 1 && alts[0].len() == 1 {
+                get_inner_binding(&alts[0][0])
+            } else {
+                None
+            }
+        },
+        ModelPattern::Optional(inner, _) => get_inner_binding(inner),
+        ModelPattern::Repeat(inner, _) => get_inner_binding(inner),
         _ => None,
     }
 }
