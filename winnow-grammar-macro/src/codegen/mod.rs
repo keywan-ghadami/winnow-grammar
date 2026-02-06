@@ -6,13 +6,17 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let grammar_name = &grammar.name;
     let span = Span::mixed_site();
     
-    // Generate rules
-    let rules = grammar.rules.iter().map(generate_rule);
+    // Generate rules, filtering out builtins we injected
+    let rules = grammar.rules.iter()
+        .filter(|r| !is_builtin(&r.name.to_string()))
+        .map(generate_rule);
 
     Ok(quote_spanned! {span=>
         #[allow(non_snake_case)]
         pub mod #grammar_name {
             #![allow(unused_imports)]
+            #![allow(dead_code)]
+            
             // Import types from parent module (e.g. AST structs)
             use super::*;
             
@@ -31,6 +35,10 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
             #(#rules)*
         }
     })
+}
+
+fn is_builtin(name: &str) -> bool {
+    matches!(name, "uint" | "integer" | "ident" | "string")
 }
 
 fn generate_rule(rule: &Rule) -> TokenStream {
