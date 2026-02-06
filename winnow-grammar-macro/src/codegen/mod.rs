@@ -53,6 +53,9 @@ fn generate_rule(rule: &Rule) -> TokenStream {
     // Check for direct left recursion
     let (recursive_refs, base_refs) = analysis::split_left_recursive(&rule.name, &rule.variants);
 
+    // Create identifier for left-hand side accumulator with consistent span
+    let lhs_ident = format_ident!("lhs", span = span);
+
     let body = if recursive_refs.is_empty() {
         // Standard generation
         generate_variants_body(&rule.variants, ret_type)
@@ -67,18 +70,18 @@ fn generate_rule(rule: &Rule) -> TokenStream {
             let recursive_owned: Vec<RuleVariant> = recursive_refs.into_iter().cloned().collect();
 
             let base_parser = generate_variants_body(&base_owned, ret_type);
-            let loop_body = generate_recursive_loop_body(&recursive_owned, ret_type);
+            let loop_body = generate_recursive_loop_body(&recursive_owned, ret_type, &lhs_ident);
 
             quote_spanned! {span=>
                 // 1. Parse Base
-                let mut lhs = #base_parser?;
+                let mut #lhs_ident = #base_parser?;
                 
                 // 2. Loop to consume recursive tails
                 loop {
                     #loop_body
                     break;
                 }
-                Ok(lhs)
+                Ok(#lhs_ident)
             }
         }
     };
@@ -122,7 +125,7 @@ fn generate_variants_body(variants: &[RuleVariant], ret_type: &syn::Type) -> Tok
     }
 }
 
-fn generate_recursive_loop_body(variants: &[RuleVariant], ret_type: &syn::Type) -> TokenStream {
+fn generate_recursive_loop_body(variants: &[RuleVariant], ret_type: &syn::Type, lhs_ident: &syn::Ident) -> TokenStream {
     let span = Span::mixed_site();
     
     let arms = variants.iter().map(|v| {
@@ -134,7 +137,7 @@ fn generate_recursive_loop_body(variants: &[RuleVariant], ret_type: &syn::Type) 
         };
 
         let bind_lhs = if let Some(b) = lhs_binding {
-            quote! { let #b = lhs.clone(); }
+            quote! { let #b = #lhs_ident.clone(); }
         } else {
             quote! {}
         };
@@ -156,7 +159,7 @@ fn generate_recursive_loop_body(variants: &[RuleVariant], ret_type: &syn::Type) 
 
                 match attempt {
                     Ok(val) => {
-                        lhs = val;
+                        #lhs_ident = val;
                         continue;
                     },
                     Err(e) => {
