@@ -35,7 +35,7 @@ fn generate_rule(rule: &Rule) -> TokenStream {
 
     let variants = rule.variants.iter().map(|v| {
         // RuleVariant has 'pattern' (Vec<Pattern>) and 'action' (Expr)
-        let steps: Vec<_> = v.pattern.iter().map(generate_step).collect();
+        let steps: Vec<TokenStream> = v.pattern.iter().map(|p| generate_step(p)).collect();
         let action = &v.action;
         
         quote! {
@@ -49,7 +49,7 @@ fn generate_rule(rule: &Rule) -> TokenStream {
     // If multiple variants, use alt.
     let body = if rule.variants.len() == 1 {
         let v = &rule.variants[0];
-        let steps: Vec<_> = v.pattern.iter().map(generate_step).collect();
+        let steps: Vec<TokenStream> = v.pattern.iter().map(|p| generate_step(p)).collect();
         let action = &v.action;
         quote! {
             #(#steps)*
@@ -116,8 +116,8 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         Pattern::Group(alternatives, _) => {
             // alternatives is Vec<Vec<Pattern>>
             // Outer vec is alt, inner vec is sequence
-            let alts: Vec<_> = alternatives.iter().map(|seq: &Vec<Pattern>| {
-                let seq_parsers: Vec<_> = seq.iter().map(generate_parser_expr).collect();
+            let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<Pattern>| {
+                let seq_parsers: Vec<TokenStream> = seq.iter().map(|p| generate_parser_expr(p)).collect();
                 quote! {
                     ( #(#seq_parsers),* )
                 }
@@ -188,8 +188,8 @@ fn generate_parser_expr(pattern: &Pattern) -> TokenStream {
             }
         }
         Pattern::Group(alternatives, _) => {
-            let alts: Vec<_> = alternatives.iter().map(|seq: &Vec<Pattern>| {
-                let seq_parsers: Vec<_> = seq.iter().map(generate_parser_expr).collect();
+            let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<Pattern>| {
+                let seq_parsers: Vec<TokenStream> = seq.iter().map(|p| generate_parser_expr(p)).collect();
                 // If sequence has multiple items, tuple combinator
                 if seq.len() == 1 {
                     quote! { #(#seq_parsers)* }
