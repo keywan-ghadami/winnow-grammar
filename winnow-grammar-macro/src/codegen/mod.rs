@@ -116,7 +116,7 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
         }
 
         // Handle Groups (e.g. (a b | c))
-        ModelPattern::Group(alternatives, _) => {
+        ModelPattern::Group(alternatives, binding) => {
             // alternatives is Vec<Vec<ModelPattern>>
             // Outer vec is alt, inner vec is sequence
             let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<ModelPattern>| {
@@ -126,16 +126,32 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
                 }
             }).collect();
             
-            quote! {
-                let _ = alt(( #(#alts),* )).parse_next(input)?;
+            let parser = quote! {
+                alt(( #(#alts),* ))
+            };
+
+            match binding {
+                Some(name) => quote! {
+                    let #name = #parser.parse_next(input)?;
+                },
+                None => quote! {
+                    let _ = #parser.parse_next(input)?;
+                }
             }
         }
 
         // Handle Optional (e.g. term?)
-        ModelPattern::Optional(inner, _) => {
+        ModelPattern::Optional(inner, binding) => {
             let p = generate_parser_expr(inner);
-            quote! {
-                let _ = opt(#p).parse_next(input)?;
+            let parser = quote! { opt(#p) };
+            
+            match binding {
+                Some(name) => quote! {
+                    let #name = #parser.parse_next(input)?;
+                },
+                None => quote! {
+                    let _ = #parser.parse_next(input)?;
+                }
             }
         }
         
@@ -143,22 +159,29 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
         // ModelPattern::Repeat(inner, op)
         ModelPattern::Repeat(inner, _op) => {
              let p = generate_parser_expr(inner);
-             // op is a Span, so we can't determine if it's * or + from it.
-             // Assuming Repeat corresponds to * (0 or more).
-             quote! { let _ = repeat(0.., #p).parse_next(input)?; }
-        }
-
-        // Handle Bind (e.g. label:pattern)
-        ModelPattern::Bind { binding, pattern } => {
-            let p = generate_parser_expr(pattern);
-            quote! {
-                let #binding = #p.parse_next(input)?;
-            }
+             // Check if inner has a binding that we should use for the list
+             let binding = get_inner_binding(inner);
+             
+             match binding {
+                 Some(name) => quote! { let #name = repeat(0.., #p).parse_next(input)?; },
+                 None => quote! { let _ = repeat(0.., #p).parse_next(input)?; }
+             }
         }
 
         _ => quote! {
             compile_error!("Unsupported pattern type in generate_step");
         }
+    }
+}
+
+// Helper to extract binding from a pattern if it exists.
+// Used for Repeat to lift the binding from inner element to the list.
+fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
+    match pattern {
+        ModelPattern::RuleCall { binding, .. } => binding.as_ref(),
+        ModelPattern::Group(_, binding) => binding.as_ref(),
+        ModelPattern::Optional(_, binding) => binding.as_ref(),
+        _ => None,
     }
 }
 
@@ -214,9 +237,6 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
             let p = generate_parser_expr(inner);
             // Assuming Repeat is *
             quote! { repeat(0.., #p) }
-        }
-        ModelPattern::Bind { pattern, .. } => {
-            generate_parser_expr(pattern)
         }
         _ => quote! {
             compile_error!("Unsupported pattern type in generate_parser_expr")
