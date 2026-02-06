@@ -1,7 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn_grammar_model::model::{GrammarDefinition, Rule};
-use syn_grammar_model::parser::Pattern;
+use syn_grammar_model::model::{GrammarDefinition, Rule, Pattern};
 
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let grammar_name = &grammar.name;
@@ -105,12 +104,8 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         }
         
         // Handle Literals (e.g. "fn", "+")
-        Pattern::Lit(lit) => {
-            let s = match lit {
-                syn::Lit::Str(s) => s.value(),
-                syn::Lit::Char(c) => c.value().to_string(),
-                _ => panic!("Unsupported literal type"),
-            };
+        Pattern::Lit(lit_str) => {
+            let s = lit_str.value();
             quote! {
                 let _ = (ws, literal(#s)).map(|(_, s)| s).parse_next(input)?;
             }
@@ -185,12 +180,8 @@ fn generate_parser_expr(pattern: &Pattern) -> TokenStream {
                 }
             }
         }
-        Pattern::Lit(lit) => {
-            let s = match lit {
-                syn::Lit::Str(s) => s.value(),
-                syn::Lit::Char(c) => c.value().to_string(),
-                _ => panic!("Unsupported literal type"),
-            };
+        Pattern::Lit(lit_str) => {
+            let s = lit_str.value();
             quote! {
                 (ws, literal(#s)).map(|(_, s)| s)
             }
