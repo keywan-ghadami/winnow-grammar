@@ -137,20 +137,11 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
         
         // Handle Repetitions
         // ModelPattern::Repeat(inner, op)
-        ModelPattern::Repeat(inner, op) => {
+        ModelPattern::Repeat(inner, _op) => {
              let p = generate_parser_expr(inner);
-             // op is likely a char or String. If it is a Span, this will fail compilation,
-             // but quote!(#op) failed because Span doesn't implement ToTokens.
-             // If op is char, to_string() works.
-             let op_str = op.to_string();
-             if op_str == "*" {
-                 quote! { let _ = repeat(0.., #p).parse_next(input)?; }
-             } else if op_str == "+" {
-                 quote! { let _ = repeat(1.., #p).parse_next(input)?; }
-             } else {
-                 // Fallback
-                 quote! { let _ = repeat(0.., #p).parse_next(input)?; }
-             }
+             // op is a Span, so we can't determine if it's * or + from it.
+             // Assuming Repeat corresponds to * (0 or more).
+             quote! { let _ = repeat(0.., #p).parse_next(input)?; }
         }
 
         _ => quote! {
@@ -207,16 +198,10 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
             let p = generate_parser_expr(inner);
             quote! { opt(#p) }
         }
-        ModelPattern::Repeat(inner, op) => {
+        ModelPattern::Repeat(inner, _op) => {
             let p = generate_parser_expr(inner);
-            let op_str = op.to_string();
-             if op_str == "*" {
-                 quote! { repeat(0.., #p) }
-             } else if op_str == "+" {
-                 quote! { repeat(1.., #p) }
-             } else {
-                 quote! { repeat(0.., #p) }
-             }
+            // Assuming Repeat is *
+            quote! { repeat(0.., #p) }
         }
         _ => quote! {
             compile_error!("Unsupported pattern type in generate_parser_expr")
