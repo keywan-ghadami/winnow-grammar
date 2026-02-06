@@ -1,6 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn_grammar_model::model::{GrammarDefinition, Rule, Variant, Binding, Pattern, RepeatOp};
+use syn_grammar_model::model::{GrammarDefinition, Rule};
+use syn_grammar_model::parser::{Variant, Binding, Pattern, RepeatOp};
 
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let grammar_name = &grammar.name;
@@ -63,7 +64,7 @@ fn generate_variant(variant: &Variant, ret_type: &syn::Type) -> TokenStream {
 }
 
 fn generate_variant_body(variant: &Variant) -> TokenStream {
-    let steps = variant.bindings.iter().map(generate_binding);
+    let steps: Vec<_> = variant.bindings.iter().map(generate_binding).collect();
     let action = &variant.action;
     
     quote! {
