@@ -17,7 +17,7 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
             // Whitespace handling (similar to syn)
             #[allow(dead_code)]
             fn ws(input: &mut &str) -> PResult<()> {
-                winnow::ascii::multispace0.void().parse_next(input)
+                winnow::ascii::multispace0.parse_next(input).map(|_| ())
             }
 
             // Re-export testing framework if needed or define specific test helpers
