@@ -20,7 +20,7 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
             
             // Whitespace handling (similar to syn)
             #[allow(dead_code)]
-            fn ws(input: &mut &str) -> PResult<()> {
+            fn ws(input: &mut &str) -> ModalResult<()> {
                 winnow::ascii::multispace0.parse_next(input).map(|_| ())
             }
 
@@ -42,7 +42,7 @@ fn generate_rule(rule: &Rule) -> TokenStream {
         let action = &v.action;
         
         quote! {
-            |input: &mut &str| -> PResult<#ret_type> {
+            |input: &mut &str| -> ModalResult<#ret_type> {
                 #(#steps)*
                 Ok(#action)
             }
@@ -67,7 +67,7 @@ fn generate_rule(rule: &Rule) -> TokenStream {
     };
 
     quote! {
-        pub fn #fn_name(input: &mut &str) -> PResult<#ret_type> {
+        pub fn #fn_name(input: &mut &str) -> ModalResult<#ret_type> {
             #body
         }
     }
@@ -85,10 +85,13 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 "integer" => quote! {
-                    (ws, winnow::ascii::dec_int).map(|(_, i)| i)
+                    (ws, winnow::combinator::recognize((
+                        winnow::combinator::opt(winnow::token::one_of(['+', '-'])),
+                        winnow::ascii::digit1
+                    ))).try_map(|(_, s): (_, &str)| s.parse())
                 },
                 "string" => quote! {
-                     (ws, delimited('"', winnow::ascii::escaped(winnow::token::none_of(("\\", "\"")), '\\', winnow::token::one_of(("\\", "\""))), '"'))
+                     (ws, delimited('"', winnow::ascii::escaped(winnow::token::none_of("\\\""), '\\', winnow::token::one_of("\\\"")), '"'))
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 _ => {
@@ -168,8 +171,8 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
              let binding = get_inner_binding(inner);
              
              match binding {
-                 Some(name) => quote! { let #name = repeat(0.., #p).parse_next(input)?; },
-                 None => quote! { let _ = repeat(0.., #p).parse_next(input)?; }
+                 Some(name) => quote! { let #name: Vec<_> = repeat(0.., #p).parse_next(input)?; },
+                 None => quote! { let _: Vec<_> = repeat(0.., #p).parse_next(input)?; }
              }
         }
 
@@ -179,8 +182,8 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
              let binding = get_inner_binding(inner);
              
              match binding {
-                 Some(name) => quote! { let #name = repeat(1.., #p).parse_next(input)?; },
-                 None => quote! { let _ = repeat(1.., #p).parse_next(input)?; }
+                 Some(name) => quote! { let #name: Vec<_> = repeat(1.., #p).parse_next(input)?; },
+                 None => quote! { let _: Vec<_> = repeat(1.., #p).parse_next(input)?; }
              }
         }
 
@@ -245,10 +248,13 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 "integer" => quote! {
-                    (ws, winnow::ascii::dec_int).map(|(_, i)| i)
+                    (ws, winnow::combinator::recognize((
+                        winnow::combinator::opt(winnow::token::one_of(['+', '-'])),
+                        winnow::ascii::digit1
+                    ))).try_map(|(_, s): (_, &str)| s.parse())
                 },
                 "string" => quote! {
-                     (ws, delimited('"', winnow::ascii::escaped(winnow::token::none_of(("\\", "\"")), '\\', winnow::token::one_of(("\\", "\""))), '"'))
+                     (ws, delimited('"', winnow::ascii::escaped(winnow::token::none_of("\\\""), '\\', winnow::token::one_of("\\\"")), '"'))
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 _ => {

@@ -45,8 +45,8 @@ pub enum GroupEnum {
 grammar! {
     grammar TestGroup {
         rule main -> GroupEnum =
-            "a" ( n:integer -> { GroupEnum::A(n) } )
-          | "b" ( n:integer -> { GroupEnum::B(n) } )
+            "a" n:integer -> { GroupEnum::A(n) }
+          | "b" n:integer -> { GroupEnum::B(n) }
     }
 }
 
