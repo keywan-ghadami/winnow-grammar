@@ -27,7 +27,7 @@ pub fn grammar(input: TokenStream) -> TokenStream {
 }
 
 fn inject_builtins(input: TokenStream) -> TokenStream {
-    let mut tokens = input.into_iter();
+    let tokens = input.into_iter();
     let mut out_tokens = Vec::new();
     
     for token in tokens {

@@ -97,10 +97,10 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 "integer" => quote_spanned! {span=>
-                    (ws, ::winnow::ascii::dec_int).map(|(_, i)| i)
+                    (ws, ::winnow::ascii::dec_int::<_, i32, _>).map(|(_, i)| i)
                 },
                 "uint" => quote_spanned! {span=>
-                    (ws, ::winnow::ascii::dec_uint).map(|(_, i)| i)
+                    (ws, ::winnow::ascii::dec_uint::<_, u32, _>).map(|(_, i)| i)
                 },
                 "string" => quote_spanned! {span=>
                      (ws, delimited(
@@ -270,10 +270,10 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
                         .map(|(_, s): (_, &str)| s.to_string())
                 },
                 "integer" => quote_spanned! {span=>
-                    (ws, ::winnow::ascii::dec_int).map(|(_, i)| i)
+                    (ws, ::winnow::ascii::dec_int::<_, i32, _>).map(|(_, i)| i)
                 },
                 "uint" => quote_spanned! {span=>
-                    (ws, ::winnow::ascii::dec_uint).map(|(_, i)| i)
+                    (ws, ::winnow::ascii::dec_uint::<_, u32, _>).map(|(_, i)| i)
                 },
                 "string" => quote_spanned! {span=>
                      (ws, delimited(
