@@ -1,12 +1,15 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn_grammar_model::model::{GrammarDefinition, Rule};
-use syn_grammar_model::parser::Pattern;
+use syn_grammar_model::model::GrammarDefinition;
+// Attempt to use Rule from parser to match Pattern type, assuming they are compatible or the same
+use syn_grammar_model::parser::{Pattern, Rule};
 
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let grammar_name = &grammar.name;
     
     // Generate rules
+    // grammar.rules is Vec<model::Rule>. We hope model::Rule is compatible with parser::Rule
+    // or that we can use parser::Rule here.
     let rules = grammar.rules.iter().map(generate_rule);
 
     Ok(quote! {
@@ -35,7 +38,6 @@ fn generate_rule(rule: &Rule) -> TokenStream {
 
     let variants = rule.variants.iter().map(|v| {
         // RuleVariant has 'pattern' (Vec<Pattern>) and 'action' (Expr)
-        // We need to handle the sequence of patterns in 'pattern'
         let steps: Vec<_> = v.pattern.iter().map(generate_step).collect();
         let action = &v.action;
         
@@ -106,7 +108,7 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         }
         
         // Handle Literals (e.g. "fn", "+")
-        // Pattern::Lit holds a LitStr directly based on error message
+        // Pattern::Lit holds a LitStr directly
         Pattern::Lit(lit_str) => {
             let s = lit_str.value();
             quote! {
@@ -139,27 +141,16 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         }
         
         // Handle Repetitions
-        // Assuming Pattern::Repeat exists since Star/Question failed
-        // If RepeatOp is not available, we might need to match on the token type or structure
-        // For now, let's try to match Pattern::Repeat and see if we can infer the op
-        // If Pattern::Repeat(inner, op_token)
+        // Pattern::Repeat(inner, op)
         Pattern::Repeat(inner, op) => {
              let p = generate_parser_expr(inner);
-             // We can't easily check the op type without importing it, but we can try to print it or assume *
-             // Actually, if op is a token, we can check if it's Star, Plus, Question
-             // But wait, Question is Optional.
-             // Let's assume Repeat covers * and +
-             // Since I can't see the definition, I'll try to match against the token types if possible, 
-             // or just default to * for now to get it compiling, or use a catch-all.
-             // However, to be correct, I should check.
-             // Let's try to use `quote!(#op).to_string()` to check the token.
              let op_str = quote!(#op).to_string();
              if op_str == "*" {
                  quote! { let _ = repeat(0.., #p).parse_next(input)?; }
              } else if op_str == "+" {
                  quote! { let _ = repeat(1.., #p).parse_next(input)?; }
              } else {
-                 // Fallback or error
+                 // Fallback
                  quote! { let _ = repeat(0.., #p).parse_next(input)?; }
              }
         }
