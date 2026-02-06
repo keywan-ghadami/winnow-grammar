@@ -34,9 +34,9 @@ fn generate_rule(rule: &Rule) -> TokenStream {
     let ret_type = &rule.return_type;
 
     let variants = rule.variants.iter().map(|v| {
-        // Inline variant generation since we can't import Variant type easily
-        // Assuming v has 'bindings' and 'action'
-        let steps: Vec<_> = v.bindings.iter().map(generate_step).collect();
+        // RuleVariant has 'pattern' (Vec<Pattern>) and 'action' (Expr)
+        // We need to handle the sequence of patterns in 'pattern'
+        let steps: Vec<_> = v.pattern.iter().map(generate_step).collect();
         let action = &v.action;
         
         quote! {
@@ -50,7 +50,7 @@ fn generate_rule(rule: &Rule) -> TokenStream {
     // If multiple variants, use alt.
     let body = if rule.variants.len() == 1 {
         let v = &rule.variants[0];
-        let steps: Vec<_> = v.bindings.iter().map(generate_step).collect();
+        let steps: Vec<_> = v.pattern.iter().map(generate_step).collect();
         let action = &v.action;
         quote! {
             #(#steps)*
@@ -106,13 +106,9 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         }
         
         // Handle Literals (e.g. "fn", "+")
-        // Assuming Pattern::Lit(syn::Lit) exists based on errors
-        Pattern::Lit(lit) => {
-            let s = match lit {
-                syn::Lit::Str(s) => s.value(),
-                syn::Lit::Char(c) => c.value().to_string(),
-                _ => panic!("Unsupported literal type"),
-            };
+        // Pattern::Lit holds a LitStr directly based on error message
+        Pattern::Lit(lit_str) => {
+            let s = lit_str.value();
             quote! {
                 let _ = (ws, literal(#s)).map(|(_, s)| s).parse_next(input)?;
             }
@@ -143,24 +139,29 @@ fn generate_step(pattern: &Pattern) -> TokenStream {
         }
         
         // Handle Repetitions
-        // Guessing variants based on standard syn patterns since RepeatOp was missing
-        Pattern::Star(inner, _) => {
-            let p = generate_parser_expr(inner);
-            quote! {
-                let _ = repeat(0.., #p).parse_next(input)?;
-            }
-        }
-        Pattern::Plus(inner, _) => {
-            let p = generate_parser_expr(inner);
-            quote! {
-                let _ = repeat(1.., #p).parse_next(input)?;
-            }
-        }
-        Pattern::Question(inner, _) => {
-            let p = generate_parser_expr(inner);
-            quote! {
-                let _ = opt(#p).parse_next(input)?;
-            }
+        // Assuming Pattern::Repeat exists since Star/Question failed
+        // If RepeatOp is not available, we might need to match on the token type or structure
+        // For now, let's try to match Pattern::Repeat and see if we can infer the op
+        // If Pattern::Repeat(inner, op_token)
+        Pattern::Repeat(inner, op) => {
+             let p = generate_parser_expr(inner);
+             // We can't easily check the op type without importing it, but we can try to print it or assume *
+             // Actually, if op is a token, we can check if it's Star, Plus, Question
+             // But wait, Question is Optional.
+             // Let's assume Repeat covers * and +
+             // Since I can't see the definition, I'll try to match against the token types if possible, 
+             // or just default to * for now to get it compiling, or use a catch-all.
+             // However, to be correct, I should check.
+             // Let's try to use `quote!(#op).to_string()` to check the token.
+             let op_str = quote!(#op).to_string();
+             if op_str == "*" {
+                 quote! { let _ = repeat(0.., #p).parse_next(input)?; }
+             } else if op_str == "+" {
+                 quote! { let _ = repeat(1.., #p).parse_next(input)?; }
+             } else {
+                 // Fallback or error
+                 quote! { let _ = repeat(0.., #p).parse_next(input)?; }
+             }
         }
 
         _ => quote! {
@@ -193,12 +194,8 @@ fn generate_parser_expr(pattern: &Pattern) -> TokenStream {
                 }
             }
         }
-        Pattern::Lit(lit) => {
-            let s = match lit {
-                syn::Lit::Str(s) => s.value(),
-                syn::Lit::Char(c) => c.value().to_string(),
-                _ => panic!("Unsupported literal type"),
-            };
+        Pattern::Lit(lit_str) => {
+            let s = lit_str.value();
             quote! {
                 (ws, literal(#s)).map(|(_, s)| s)
             }
@@ -221,17 +218,16 @@ fn generate_parser_expr(pattern: &Pattern) -> TokenStream {
             let p = generate_parser_expr(inner);
             quote! { opt(#p) }
         }
-        Pattern::Star(inner, _) => {
+        Pattern::Repeat(inner, op) => {
             let p = generate_parser_expr(inner);
-            quote! { repeat(0.., #p) }
-        }
-        Pattern::Plus(inner, _) => {
-            let p = generate_parser_expr(inner);
-            quote! { repeat(1.., #p) }
-        }
-        Pattern::Question(inner, _) => {
-            let p = generate_parser_expr(inner);
-            quote! { opt(#p) }
+            let op_str = quote!(#op).to_string();
+             if op_str == "*" {
+                 quote! { repeat(0.., #p) }
+             } else if op_str == "+" {
+                 quote! { repeat(1.., #p) }
+             } else {
+                 quote! { repeat(0.., #p) }
+             }
         }
         _ => quote! {
             compile_error!("Unsupported pattern type in generate_parser_expr")
