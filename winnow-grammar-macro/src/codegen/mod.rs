@@ -1,5 +1,5 @@
 use proc_macro2::{TokenStream, Span};
-use quote::{format_ident, quote, quote_spanned};
+use quote::{format_ident, quote_spanned};
 use syn_grammar_model::model::{GrammarDefinition, Rule, ModelPattern};
 
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
@@ -90,6 +90,9 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
                 },
                 "integer" => quote_spanned! {span=>
                     (ws, ::winnow::ascii::dec_int).map(|(_, i)| i)
+                },
+                "uint" => quote_spanned! {span=>
+                    (ws, ::winnow::ascii::dec_uint).map(|(_, i)| i)
                 },
                 "string" => quote_spanned! {span=>
                      (ws, delimited(
@@ -260,6 +263,9 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
                 },
                 "integer" => quote_spanned! {span=>
                     (ws, ::winnow::ascii::dec_int).map(|(_, i)| i)
+                },
+                "uint" => quote_spanned! {span=>
+                    (ws, ::winnow::ascii::dec_uint).map(|(_, i)| i)
                 },
                 "string" => quote_spanned! {span=>
                      (ws, delimited(

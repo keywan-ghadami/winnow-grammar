@@ -65,7 +65,7 @@ winnow_grammar::grammar! {
             }
 
         rule slash_int -> u32 =
-            "/" n:integer -> { n }
+            "/" n:uint -> { n }
 
         // 3. Ranges: "1-5" 
         rule range_expr -> Field =
@@ -88,7 +88,7 @@ winnow_grammar::grammar! {
         // 4. Atome
         rule atom -> Field =
             "*"       -> { Field::Any }
-          | n:integer -> { Field::Number(n) }
+          | n:uint -> { Field::Number(n) }
     }
 }
 
