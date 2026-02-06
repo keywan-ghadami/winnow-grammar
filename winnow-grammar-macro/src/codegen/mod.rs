@@ -10,6 +10,7 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
 
     Ok(quote! {
         pub mod #grammar_name {
+            #![allow(unused_imports)]
             use winnow::prelude::*;
             use winnow::token::literal;
             use winnow::combinator::{alt, repeat, opt, delimited};
