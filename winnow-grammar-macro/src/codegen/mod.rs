@@ -38,7 +38,7 @@ fn generate_rule(rule: &Rule) -> TokenStream {
 
     let variants = rule.variants.iter().map(|v| {
         // RuleVariant has 'pattern' (Vec<ModelPattern>) and 'action' (Expr)
-        let steps: Vec<TokenStream> = v.pattern.iter().map(|p| generate_step(p)).collect();
+        let steps: Vec<TokenStream> = v.pattern.iter().map(generate_step).collect();
         let action = &v.action;
         
         quote! {
@@ -52,7 +52,7 @@ fn generate_rule(rule: &Rule) -> TokenStream {
     // If multiple variants, use alt.
     let body = if rule.variants.len() == 1 {
         let v = &rule.variants[0];
-        let steps: Vec<TokenStream> = v.pattern.iter().map(|p| generate_step(p)).collect();
+        let steps: Vec<TokenStream> = v.pattern.iter().map(generate_step).collect();
         let action = &v.action;
         quote! {
             #(#steps)*
@@ -120,7 +120,7 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
             // alternatives is Vec<Vec<ModelPattern>>
             // Outer vec is alt, inner vec is sequence
             let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<ModelPattern>| {
-                let seq_parsers: Vec<TokenStream> = seq.iter().map(|p| generate_parser_expr(p)).collect();
+                let seq_parsers: Vec<TokenStream> = seq.iter().map(generate_parser_expr).collect();
                 quote! {
                     ( #(#seq_parsers),* )
                 }
@@ -196,7 +196,7 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
 }
 
 fn generate_delimited_step(inner: &[ModelPattern], open: &str, close: &str) -> TokenStream {
-    let steps: Vec<TokenStream> = inner.iter().map(|p| generate_step(p)).collect();
+    let steps: Vec<TokenStream> = inner.iter().map(generate_step).collect();
     quote! {
         let _ = (ws, literal(#open)).parse_next(input)?;
         #(#steps)*
@@ -265,7 +265,7 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
         }
         ModelPattern::Group(alternatives, _) => {
             let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<ModelPattern>| {
-                let seq_parsers: Vec<TokenStream> = seq.iter().map(|p| generate_parser_expr(p)).collect();
+                let seq_parsers: Vec<TokenStream> = seq.iter().map(generate_parser_expr).collect();
                 // If sequence has multiple items, tuple combinator
                 if seq.len() == 1 {
                     quote! { #(#seq_parsers)* }
@@ -300,7 +300,7 @@ fn generate_parser_expr(pattern: &ModelPattern) -> TokenStream {
 }
 
 fn generate_delimited_expr(inner: &[ModelPattern], open: &str, close: &str) -> TokenStream {
-    let seq_parsers: Vec<TokenStream> = inner.iter().map(|p| generate_parser_expr(p)).collect();
+    let seq_parsers: Vec<TokenStream> = inner.iter().map(generate_parser_expr).collect();
     let inner_parser = if seq_parsers.len() == 1 {
         quote! { #(#seq_parsers)* }
     } else {
