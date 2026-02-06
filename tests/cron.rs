@@ -1,5 +1,4 @@
 use winnow::prelude::*;
-use winnow_grammar::grammar;
 
 // -----------------------------------------------------------------------------
 // 1. AST (Datenstruktur)
@@ -28,7 +27,7 @@ pub struct CronSchedule {
 // 2. Grammatik (Clean Version - Auto Whitespace)
 // -----------------------------------------------------------------------------
 
-grammar! {
+winnow_grammar::grammar! {
     grammar Cron {
         // HIER DER UNTERSCHIED: Keine `_` Regeln mehr nötig.
         // Das Makro kümmert sich um "0 * * ..."
