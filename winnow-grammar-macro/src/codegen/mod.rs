@@ -9,6 +9,9 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let grammar_name = &grammar.name;
     let span = Span::mixed_site();
     
+    // Check if user defined 'ws'
+    let has_user_ws = grammar.rules.iter().any(|r| r.name.to_string() == "ws");
+
     // Generate rules, filtering out builtins we injected
     let rules = grammar.rules.iter()
         .filter(|r| !is_builtin(&r.name.to_string()))
@@ -16,6 +19,21 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
 
     // Ensure `use super::*;` uses call_site span so it sees the parent module correctly
     let use_super = quote_spanned! {Span::call_site()=> use super::*; };
+
+    let ws_parser = if has_user_ws {
+        quote_spanned! {span=>
+            #[allow(unused_imports)]
+            use parse_ws as ws;
+        }
+    } else {
+        quote_spanned! {span=>
+            // Whitespace handling (similar to syn)
+            #[allow(dead_code)]
+            fn ws(input: &mut &str) -> ModalResult<()> {
+                ::winnow::ascii::multispace0.parse_next(input).map(|_| ())
+            }
+        }
+    };
 
     Ok(quote_spanned! {span=>
         #[allow(non_snake_case)]
@@ -30,11 +48,7 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
             use ::winnow::token::literal;
             use ::winnow::combinator::{alt, repeat, opt, delimited};
             
-            // Whitespace handling (similar to syn)
-            #[allow(dead_code)]
-            fn ws(input: &mut &str) -> ModalResult<()> {
-                ::winnow::ascii::multispace0.parse_next(input).map(|_| ())
-            }
+            #ws_parser
 
             // Re-export testing framework if needed or define specific test helpers
             
