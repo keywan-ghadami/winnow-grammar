@@ -10,4 +10,4 @@ edition = "2021"
 [dependencies]
 winnow = "0.6"
 winnow-grammar-macro = { path = "winnow-grammar-macro" }
-syn-grammar = { version = "0.4.0", path = "../syn-grammar" }
+syn-grammar = "0.4.0"
