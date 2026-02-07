@@ -119,20 +119,37 @@ grammar! {
 #### Sequences and Bindings
 Match a sequence of patterns. Use `name:pattern` to bind the result to a variable available in the action block.
 
-```rust,ignore
-rule assignment -> Stmt = 
-    name:ident "=" val:expr -> { 
-        Stmt::Assign(name, val) 
+```rust
+use winnow_grammar::grammar;
+
+#[derive(Debug, PartialEq)]
+pub enum Stmt {
+    Assign(String, i32),
+}
+
+grammar! {
+    grammar Assignment {
+        rule assignment -> Stmt = 
+            name:ident "=" val:integer -> { 
+                Stmt::Assign(name, val) 
+            }
     }
+}
 ```
 
 #### Alternatives (`|`)
 Match one of several alternatives. The first one that matches wins.
 
-```rust,ignore
-rule boolean -> bool = 
-    "true"  -> { true }
-  | "false" -> { false }
+```rust
+use winnow_grammar::grammar;
+
+grammar! {
+    grammar Boolean {
+        rule boolean -> bool = 
+            "true"  -> { true }
+          | "false" -> { false }
+    }
+}
 ```
 
 #### Repetitions (`*`, `+`, `?`)
@@ -140,9 +157,16 @@ rule boolean -> bool =
 - `pattern+`: Match one or more times. Returns a `Vec`.
 - `pattern?`: Match zero or one time. Returns an `Option` (or `()` if unbound).
 
-```rust,ignore
-rule list -> Vec<i32> = 
-    [ elements:integer* ] -> { elements }
+```rust
+use winnow_grammar::grammar;
+
+grammar! {
+    grammar List {
+        // Matches "[ 1 2 3 ]"
+        rule list -> Vec<i32> = 
+            "[" elements:integer* "]" -> { elements }
+    }
+}
 ```
 
 #### Delimiters
@@ -152,9 +176,15 @@ Match content inside delimiters.
 - `[ pattern ]`: Matches `[ pattern ]`.
 - `{ pattern }`: Matches `{ pattern }`.
 
-```rust,ignore
-rule tuple -> (i32, i32) = 
-    paren(a:integer "," b:integer) -> { (a, b) }
+```rust
+use winnow_grammar::grammar;
+
+grammar! {
+    grammar Tuple {
+        rule tuple -> (i32, i32) = 
+            paren(a:integer "," b:integer) -> { (a, b) }
+    }
+}
 ```
 
 ### Whitespace Handling
@@ -162,8 +192,14 @@ rule tuple -> (i32, i32) =
 `winnow-grammar` automatically handles whitespace for you. It inserts a `multispace0` parser before every literal and built-in token (like `ident`, `integer`, etc.). This means you don't need to manually handle spaces, tabs, or newlines in your grammar.
 
 Example:
-```rust,ignore
-rule list -> Vec<i32> = "[" i:integer* "]" -> { i }
+```rust
+use winnow_grammar::grammar;
+
+grammar! {
+    grammar List {
+        rule list -> Vec<i32> = "[" i:integer* "]" -> { i }
+    }
+}
 ```
 
 This will successfully parse `[ 1 2 3 ]`, `[1 2 3]`, or even:
