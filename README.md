@@ -136,7 +136,8 @@ grammar! {
     }
 }
 
-fn main() {}
+# // Required to keep `Stmt` in module scope. Without this, rustdoc wraps the code in a function, making `Stmt` invisible to the macro-generated module.
+# fn main() {}
 ```
 
 #### Alternatives (`|`)
