@@ -135,6 +135,8 @@ grammar! {
             }
     }
 }
+
+fn main() {}
 ```
 
 #### Alternatives (`|`)
