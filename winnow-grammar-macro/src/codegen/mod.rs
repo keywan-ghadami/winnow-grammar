@@ -238,28 +238,37 @@ fn generate_step(pattern: &ModelPattern) -> TokenStream {
 
         // Handle Groups (e.g. (a b | c))
         ModelPattern::Group(alternatives, _span) => {
-            // alternatives is Vec<Vec<ModelPattern>>
-            // Outer vec is alt, inner vec is sequence
-            let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<ModelPattern>| {
-                let seq_parsers: Vec<TokenStream> = seq.iter().map(generate_parser_expr).collect();
+            // Optimization: If it's a single sequence (e.g. (a b)), flatten it so bindings work.
+            if alternatives.len() == 1 {
+                let seq = &alternatives[0];
+                let steps: Vec<TokenStream> = seq.iter().map(generate_step).collect();
                 quote_spanned! {span=>
-                    ( #(#seq_parsers),* )
+                    #(#steps)*
                 }
-            }).collect();
-            
-            let parser = quote_spanned! {span=>
-                alt(( #(#alts),* ))
-            };
+            } else {
+                // alternatives is Vec<Vec<ModelPattern>>
+                // Outer vec is alt, inner vec is sequence
+                let alts: Vec<TokenStream> = alternatives.iter().map(|seq: &Vec<ModelPattern>| {
+                    let seq_parsers: Vec<TokenStream> = seq.iter().map(generate_parser_expr).collect();
+                    quote_spanned! {span=>
+                        ( #(#seq_parsers),* )
+                    }
+                }).collect();
+                
+                let parser = quote_spanned! {span=>
+                    alt(( #(#alts),* ))
+                };
 
-            // Try to find a binding on the inner element if possible
-            let binding = get_inner_binding(pattern);
+                // Try to find a binding on the inner element if possible
+                let binding = get_inner_binding(pattern);
 
-            match binding {
-                Some(name) => quote_spanned! {span=>
-                    let #name = #parser.parse_next(input)?;
-                },
-                None => quote_spanned! {span=>
-                    let _ = #parser.parse_next(input)?;
+                match binding {
+                    Some(name) => quote_spanned! {span=>
+                        let #name = #parser.parse_next(input)?;
+                    },
+                    None => quote_spanned! {span=>
+                        let _ = #parser.parse_next(input)?;
+                    }
                 }
             }
         }
