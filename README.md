@@ -157,6 +157,24 @@ rule tuple -> (i32, i32) =
     paren(a:integer "," b:integer) -> { (a, b) }
 ```
 
+### Whitespace Handling
+
+`winnow-grammar` automatically handles whitespace for you. It inserts a `multispace0` parser before every literal and built-in token (like `ident`, `integer`, etc.). This means you don't need to manually handle spaces, tabs, or newlines in your grammar.
+
+Example:
+```rust,ignore
+rule list -> Vec<i32> = "[" i:integer* "]" -> { i }
+```
+
+This will successfully parse `[ 1 2 3 ]`, `[1 2 3]`, or even:
+```text
+[
+  1
+  2
+  3
+]
+```
+
 ## License
 
 Licensed under either of Apache License, Version 2.0 or MIT license at your option.
