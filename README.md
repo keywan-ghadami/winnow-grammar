@@ -86,9 +86,24 @@ rule name -> ReturnType = pattern -> { action_code }
 #### Literals
 Match specific strings.
 
-```rust,ignore
-rule kw -> () = "fn" -> { () }
+```rust
+use winnow_grammar::grammar;
+
+grammar! {
+    grammar example {
+        rule kw -> () = "fn" -> { () }
+        //   ^     ^    ^       ^
+        //  Name  Type Pattern Action (Return Value)
+    }
+}
 ```
+
+##### Explanation
+* **rule kw**: The name of the defined rule is `kw`.
+* **-> ()**: The rule returns `()` (Unit) as its result type.
+* **= "fn"**: The rule matches only if the input corresponds exactly to the string "fn".
+* **-> { () }**: This is the action code block executed upon a successful match.
+
 
 #### Built-in Parsers
 `winnow-grammar` provides built-in parsers for common patterns:
