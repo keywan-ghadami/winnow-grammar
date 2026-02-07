@@ -49,6 +49,7 @@ fn is_builtin(name: &str) -> bool {
 
 fn generate_rule(rule: &Rule) -> TokenStream {
     let rule_name = &rule.name;
+    let rule_name_str = rule_name.to_string();
     let span = Span::mixed_site();
     let fn_name = format_ident!("parse_{}", rule_name, span = span);
     let ret_type = &rule.return_type;
@@ -91,7 +92,14 @@ fn generate_rule(rule: &Rule) -> TokenStream {
 
     quote_spanned! {span=>
         pub fn #fn_name(input: &mut &str) -> ModalResult<#ret_type> {
-            #body
+            use ::winnow::Parser;
+            use ::winnow::error::ContextError;
+
+            (|input: &mut &str| -> ModalResult<#ret_type> {
+                #body
+            })
+            .context(::winnow::error::StrContext::Label(#rule_name_str))
+            .parse_next(input)
         }
     }
 }
