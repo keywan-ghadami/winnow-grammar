@@ -14,6 +14,9 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
         .filter(|r| !is_builtin(&r.name.to_string()))
         .map(generate_rule);
 
+    // Ensure `use super::*;` uses call_site span so it sees the parent module correctly
+    let use_super = quote_spanned! {Span::call_site()=> use super::*; };
+
     Ok(quote_spanned! {span=>
         #[allow(non_snake_case)]
         pub mod #grammar_name {
@@ -21,7 +24,7 @@ pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
             #![allow(dead_code)]
             
             // Import types from parent module (e.g. AST structs)
-            use super::*;
+            #use_super
             
             use ::winnow::prelude::*;
             use ::winnow::token::literal;
