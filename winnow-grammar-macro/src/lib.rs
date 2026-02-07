@@ -3,7 +3,6 @@
 extern crate proc_macro;
 
 use proc_macro::{TokenStream, TokenTree, Group, Delimiter};
-use syn::{parse_macro_input, LitStr};
 use syn_grammar_model::parse_grammar;
 use std::iter::FromIterator;
 
@@ -29,27 +28,6 @@ fn grammar_impl(input: TokenStream) -> TokenStream {
         Ok(stream) => stream.into(),
         Err(e) => e.to_compile_error().into(),
     }
-}
-
-#[proc_macro]
-pub fn include_grammar(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as LitStr);
-    let path_str = input.value();
-    
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
-    let path = std::path::Path::new(&manifest_dir).join(path_str);
-    
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => return syn::Error::new(input.span(), format!("Failed to read grammar file '{}': {}", path.display(), e)).to_compile_error().into(),
-    };
-    
-    let ts: TokenStream = match content.parse() {
-        Ok(t) => t,
-        Err(e) => return syn::Error::new(input.span(), format!("Failed to tokenize grammar file: {}", e)).to_compile_error().into(),
-    };
-    
-    grammar_impl(ts)
 }
 
 fn inject_builtins(input: TokenStream) -> TokenStream {
