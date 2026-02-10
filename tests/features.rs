@@ -21,7 +21,12 @@ grammar! {
 fn test_plus_repetition() {
     let mut input = "1 2 3";
     let result = TestPlus::parse_list.parse(&mut input).unwrap();
-    assert_eq!(result, PlusList { items: vec![1, 2, 3] });
+    assert_eq!(
+        result,
+        PlusList {
+            items: vec![1, 2, 3]
+        }
+    );
 
     let mut input = "1";
     let result = TestPlus::parse_list.parse(&mut input).unwrap();
@@ -83,9 +88,30 @@ grammar! {
 fn test_builtins() {
     let mut input = r#" "hello" 123 world"#;
     let result = TestBuiltins::parse_main.parse(&mut input).unwrap();
-    assert_eq!(result, Builtins {
-        s: "hello".to_string(),
-        i: 123,
-        id: "world".to_string(),
-    });
+    assert_eq!(
+        result,
+        Builtins {
+            s: "hello".to_string(),
+            i: 123,
+            id: "world".to_string(),
+        }
+    );
+}
+
+// -----------------------------------------------------------------------------
+// 4. Test `use` statements inside grammar
+// -----------------------------------------------------------------------------
+
+grammar! {
+    grammar TestUse {
+        use winnow::token::any;
+        rule main -> char = any
+    }
+}
+
+#[test]
+fn test_use() {
+    let mut input = "a";
+    let result = TestUse::parse_main.parse(&mut input).unwrap();
+    assert_eq!(result, 'a');
 }

@@ -33,9 +33,9 @@ winnow_grammar::grammar! {
         // HIER DER UNTERSCHIED: Keine `_` Regeln mehr nötig.
         // Das Makro kümmert sich um "0 * * ..."
         pub rule schedule -> CronSchedule =
-            s:field m:field h:field dom:field mon:field dow:field 
-            -> { 
-                CronSchedule { sec: s, min: m, hour: h, dom: dom, month: mon, dow: dow } 
+            s:field m:field h:field dom:field mon:field dow:field
+            -> {
+                CronSchedule { sec: s, min: m, hour: h, dom: dom, month: mon, dow: dow }
             }
 
         // --- Precedence Layering ---
@@ -51,7 +51,7 @@ winnow_grammar::grammar! {
                     Field::List(list)
                 }
             }
-        
+
         rule comma_step -> Field =
             "," s:step_expr -> { s }
 
@@ -67,7 +67,7 @@ winnow_grammar::grammar! {
         rule slash_int -> u32 =
             "/" n:uint -> { n }
 
-        // 3. Ranges: "1-5" 
+        // 3. Ranges: "1-5"
         rule range_expr -> Field =
             start:atom end:dash_atom? -> {
                 match end {
@@ -75,14 +75,14 @@ winnow_grammar::grammar! {
                         // Simpler Check im Action Block
                         match (start, e) {
                             (Field::Number(s), Field::Number(e)) => Field::Range(s, e),
-                            _ => panic!("Range syntax requires numbers"), 
+                            _ => panic!("Range syntax requires numbers"),
                         }
                     },
                     None => start,
                 }
             }
 
-        rule dash_atom -> Field = 
+        rule dash_atom -> Field =
             "-" a:atom -> { a }
 
         // 4. Atome
@@ -110,11 +110,13 @@ fn test_messy_whitespace() {
     // DAS ist der Beweis, dass dein Auto-Whitespace funktioniert.
     // Wir nutzen Leerzeichen an Stellen, wo Standard-Cron strikt wäre,
     // aber Token-Parser oft lax sind (was gut für UX ist).
-    
+
     // "0" Space "1 , 2" Space "*/ 15" ...
     let mut input = "0   1 , 2   */ 15   * * *";
-    
-    let result = Cron::parse_schedule.parse(&mut input).expect("Should handle messy whitespace");
+
+    let result = Cron::parse_schedule
+        .parse(&mut input)
+        .expect("Should handle messy whitespace");
 
     // Check List parsing mit spaces "1 , 2"
     if let Field::List(items) = result.min {
@@ -138,8 +140,5 @@ fn test_complex_precedence() {
     let mut input = "0 10-20/2 * * * *";
     let result = Cron::parse_schedule.parse(&mut input).unwrap();
 
-    assert_eq!(
-        result.min, 
-        Field::Step(Box::new(Field::Range(10, 20)), 2)
-    );
+    assert_eq!(result.min, Field::Step(Box::new(Field::Range(10, 20)), 2));
 }

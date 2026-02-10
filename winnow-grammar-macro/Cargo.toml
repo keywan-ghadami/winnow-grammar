@@ -3,8 +3,6 @@ name = "winnow-grammar-macro"
 version = "0.1.0"
 edition = "2021"
 
-
-
 [lib]
 proc-macro = true
 
@@ -12,4 +10,5 @@ proc-macro = true
 proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "extra-traits"] }
-syn-grammar-model = { version = "0.4.0", path = "../../syn-grammar/syn-grammar-model" }
+syn-grammar-model = { git = "https://github.com/keywan-ghadami/syn-grammar", branch = "main" }
+grammar-kit = { git = "https://github.com/keywan-ghadami/syn-grammar", branch = "main" }

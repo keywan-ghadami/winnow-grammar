@@ -4,9 +4,8 @@ version = 4
 
 [[package]]
 name = "grammar-kit"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ef1e6461df461521b4331cd2e265d54fc023b83cd6a29e70a98d81a1b9862b0"
+version = "0.7.0"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#dbcbd53b17032965d5def20926c897966f3f929d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -50,44 +49,32 @@ dependencies = [
 
 [[package]]
 name = "syn-grammar"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f98bf1d8cc7972c57da3222c746865925eb5cec5da1d36e08d0dd9bc60c5e13d"
+version = "0.7.0"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#dbcbd53b17032965d5def20926c897966f3f929d"
 dependencies = [
  "grammar-kit",
  "proc-macro2",
  "quote",
  "syn",
  "syn-grammar-macros",
- "syn-grammar-model 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syn-grammar-model",
 ]
 
 [[package]]
 name = "syn-grammar-macros"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aad9b3f934efbd5bb7c11959972a3b4ede5a6b3b00181f0a75512565aafe9413"
+version = "0.7.0"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#dbcbd53b17032965d5def20926c897966f3f929d"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn",
- "syn-grammar-model 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syn-grammar-model",
 ]
 
 [[package]]
 name = "syn-grammar-model"
-version = "0.4.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "syn-grammar-model"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a923581a5ac331e67fa8d2cd227e463ad98af794c9a9e529a3f0382f3ad04b30"
+version = "0.7.0"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#dbcbd53b17032965d5def20926c897966f3f929d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -122,8 +109,9 @@ dependencies = [
 name = "winnow-grammar-macro"
 version = "0.1.0"
 dependencies = [
+ "grammar-kit",
  "proc-macro2",
  "quote",
  "syn",
- "syn-grammar-model 0.4.0",
+ "syn-grammar-model",
 ]
