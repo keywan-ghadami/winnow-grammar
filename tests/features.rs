@@ -1,5 +1,6 @@
 use winnow::prelude::*;
 use winnow_grammar::grammar;
+use winnow::stream::LocatingSlice;
 
 // -----------------------------------------------------------------------------
 // 1. Test Plus (+) Repetition
@@ -19,7 +20,7 @@ grammar! {
 
 #[test]
 fn test_plus_repetition() {
-    let input = "1 2 3";
+    let input = LocatingSlice::new("1 2 3");
     let result = TestPlus::parse_list.parse(input).unwrap();
     assert_eq!(
         result,
@@ -28,11 +29,11 @@ fn test_plus_repetition() {
         }
     );
 
-    let input = "1";
+    let input = LocatingSlice::new("1");
     let result = TestPlus::parse_list.parse(input).unwrap();
     assert_eq!(result, PlusList { items: vec![1] });
 
-    let input = "";
+    let input = LocatingSlice::new("");
     let result = TestPlus::parse_list.parse(input);
     assert!(result.is_err());
 }
@@ -57,11 +58,11 @@ grammar! {
 
 #[test]
 fn test_grouping() {
-    let input = "a 10";
+    let input = LocatingSlice::new("a 10");
     let result = TestGroup::parse_main.parse(input).unwrap();
     assert_eq!(result, GroupEnum::A(10));
 
-    let input = "b 20";
+    let input = LocatingSlice::new("b 20");
     let result = TestGroup::parse_main.parse(input).unwrap();
     assert_eq!(result, GroupEnum::B(20));
 }
@@ -86,7 +87,7 @@ grammar! {
 
 #[test]
 fn test_builtins() {
-    let input = r#" "hello" 123 world"#;
+    let input = LocatingSlice::new(r#" "hello" 123 world"#);
     let result = TestBuiltins::parse_main.parse(input).unwrap();
     assert_eq!(
         result,
@@ -105,13 +106,14 @@ fn test_builtins() {
 grammar! {
     grammar TestUse {
         use winnow::token::any;
-        rule main -> char = c:any -> { c }
+        use winnow::stream::AsChar;
+        rule main -> char = c:any -> { c.as_char() }
     }
 }
 
 #[test]
 fn test_use() {
-    let input = "a";
+    let input = LocatingSlice::new("a");
     let result = TestUse::parse_main.parse(input).unwrap();
     assert_eq!(result, 'a');
 }
