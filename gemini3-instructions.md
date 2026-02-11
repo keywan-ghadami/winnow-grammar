@@ -2,7 +2,7 @@
 
 ## Mandatory Checks
 
-Before submitting any changes, you must run the following commands to ensure code quality and correctness:
+As final step, you must run the following commands to ensure code quality and correctness:
 
 1.  **Format Code:**
     ```bash
@@ -26,19 +26,29 @@ Before submitting any changes, you must run the following commands to ensure cod
 If your changes involve:
 
 *   **User Interface Changes:** You must update the `README.md` to reflect the new usage or behavior.
-*   **Functional Changes:** You must update the `CHANGELOG.md` (or equivalent) to document the changes, bug fixes, or new features.
+*   **Functional Changes:** You must update the `CHANGELOG.md` to document the changes, bug fixes, or new features.
+
+## Version Control
+
+1.  **Commit Frequency:**
+    *   Execute `git commit` for **every single file change** with a descriptive commit message.
+    *   Do not bunch multiple file changes into a single commit unless they are strictly atomic and dependent.
+
+2.  **Dirty State Handling:**
+    *   Before starting any new task, check for a dirty git state (uncommitted changes).
+    *   If dirty state exists, analyze the changes to determine the intent and execute a `git commit` with an appropriate message *before* proceeding with new changes.
 
 ## Type of Changes
 
 This file documents the types of changes made to the project to comply with `cargo clippy` and fix build errors.
 
-### Fixes Applied
+### Lessons Learned
 
 *   **`winnow-grammar-macro/src/codegen/mod.rs`:**
-    *   Collapsed nested `if-else` blocks to comply with `clippy::collapsible_else_if`.
-    *   Removed unused import `syn::spanned::Spanned`.
+    *   Collapse nested `if-else` blocks to comply with `clippy::collapsible_else_if`.
+    *   Remove unused import `syn::spanned::Spanned`.
 *   **`tests/cron.rs`:**
-    *   Simplified struct initialization to avoid `clippy::redundant_field_names` (e.g., `dom: dom` -> `dom`).
-    *   Removed unnecessary `mut` references in `parse()` calls where `winnow` handles it, fixing `clippy::unnecessary_mut_passed` and `clippy::needless_borrow`.
+    *   Simplify struct initialization to avoid `clippy::redundant_field_names` (e.g., `dom: dom` -> `dom`).
+    *   Remove unnecessary `mut` references in `parse()` calls where `winnow` handles it, fixing `clippy::unnecessary_mut_passed` and `clippy::needless_borrow`.
 *   **`tests/features.rs`:**
-    *   Fixed a syntax error in the `TestUse` grammar where the `rule main` was missing an action block `-> { c }`. This resolved the `unexpected end of input` and `undeclared type TestUse` errors.
+    *   Ensure grammar rules (e.g., `rule main`) have an action block `-> { c }` to prevent syntax errors and `undeclared type` errors.
