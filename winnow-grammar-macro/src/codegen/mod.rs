@@ -47,8 +47,7 @@ impl<'a> Codegen<'a> {
                 #[allow(dead_code)]
                 fn ws<I>(input: &mut I) -> ModalResult<()>
                 where 
-                    I: ::winnow::stream::Stream + ::winnow::stream::StreamIsPartial + for<'a> ::winnow::stream::Compare<&'a str>,
-                    <I as ::winnow::stream::Stream>::Token: ::winnow::stream::AsChar + Clone,
+                    I: ::winnow::stream::Stream<Token = char> + ::winnow::stream::StreamIsPartial + for<'a> ::winnow::stream::Compare<&'a str>,
                     <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr,
                 {
                     ::winnow::ascii::multispace0.parse_next(input).map(|_| ())
@@ -120,9 +119,12 @@ impl<'a> Codegen<'a> {
         quote_spanned! {span=>
             pub fn #fn_name<I>(input: &mut I, #(#params),*) -> ModalResult<#ret_type>
             where
-                I: ::winnow::stream::Stream + ::winnow::stream::StreamIsPartial + ::winnow::stream::Location + for<'a> ::winnow::stream::Compare<&'a str>,
-                <I as ::winnow::stream::Stream>::Token: ::winnow::stream::AsChar + Clone,
-                <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr,
+                I: ::winnow::stream::Stream<Token = char> 
+                   + ::winnow::stream::StreamIsPartial 
+                   + ::winnow::stream::Location 
+                   + ::winnow::stream::Compare<char>
+                   + for<'a> ::winnow::stream::Compare<&'a str>,
+                <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr + AsRef<str> + std::fmt::Display,
             {
                 use ::winnow::Parser;
                 use ::winnow::error::ContextError;
@@ -333,8 +335,8 @@ impl<'a> Codegen<'a> {
         // Otherwise, check for built-ins
         match name_str.as_str() {
             "ident" => quote_spanned! {span=> 
-                (ws, ::winnow::token::take_while(1.., |c: char| c.is_alphanumeric() || c == '_'))
-                    .map(|(_, s): (_, &str)| s.to_string())
+                (ws, ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_'))
+                    .map(|(_, s)| s.as_ref().to_string())
             },
             "integer" => quote_spanned! {span=>
                 (ws, ::winnow::ascii::dec_int::<_, i32, _>).map(|(_, i)| i)
@@ -352,7 +354,7 @@ impl<'a> Codegen<'a> {
                     ), 
                     '"'
                 ))
-                .map(|(_, s): (_, &str)| s.to_string())
+                .map(|(_, s)| s.as_ref().to_string())
             },
             _ => {
                 // Unknown rule or external (unprefixed) function.
