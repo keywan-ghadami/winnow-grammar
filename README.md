@@ -12,6 +12,7 @@ This crate is built on top of `syn-grammar-model` but targets the `winnow` parse
 - **Winnow Integration**: Generates efficient `winnow` parsers (`PResult<T>`).
 - **Automatic Left Recursion**: Write natural expression grammars (e.g., `expr = expr + term`) without worrying about infinite recursion.
 - **Rule Arguments**: Pass context or parameters between rules.
+- **Span Tracking**: Support for `LocatingSlice` to track source positions (e.g., `rule @ span`).
 
 ## Installation
 
@@ -30,6 +31,7 @@ Here is a complete example of a calculator grammar that parses mathematical expr
 ```rust
 use winnow_grammar::grammar;
 use winnow::prelude::*;
+use winnow::stream::LocatingSlice;
 
 grammar! {
     grammar Calc {
@@ -53,8 +55,9 @@ grammar! {
 fn main() {
     // The macro generates a module `Calc` containing a function `parse_expression`
     // corresponding to the `expression` rule.
-    let mut input = "10 - 2 * 3";
-    let result = Calc::parse_expression.parse(&mut input);
+    let input = "10 - 2 * 3";
+    let input = LocatingSlice::new(input);
+    let result = Calc::parse_expression.parse(input);
     assert_eq!(result.unwrap(), 4);
 }
 ```
@@ -63,8 +66,8 @@ fn main() {
 
 The `grammar!` macro expands into a Rust module (named `Calc` in the example) containing:
 - A function `parse_<rule_name>` for each rule (e.g., `parse_expression`).
-- These functions take `&mut &str` (input) and return `winnow::PResult<T>`.
-- All necessary imports and helper functions to make the parser work.
+- These functions are generic over the input type `I`, requiring it to implement `Stream`, `Location`, and text-related traits.
+- Typically, you pass `LocatingSlice<&str>` (or similar) to these functions.
 
 ## Detailed Syntax Guide
 
@@ -188,6 +191,14 @@ grammar! {
             paren(a:integer "," b:integer) -> { (a, b) }
     }
 }
+```
+
+#### Spans (`@`)
+Capture the source span (range) of a parsed element.
+
+```rust,ignore
+rule spanned_term -> (Expr, std::ops::Range<usize>) =
+    t:term @ s -> { (t, s) }
 ```
 
 ### Whitespace Handling
