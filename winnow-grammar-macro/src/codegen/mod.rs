@@ -45,7 +45,10 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 // Whitespace handling (similar to syn)
                 #[allow(dead_code)]
-                fn ws(input: &mut &str) -> ModalResult<()> {
+                fn ws<I>(input: &mut I) -> ModalResult<()>
+                where 
+                    I: ::winnow::stream::Stream + ::winnow::stream::StreamIsPartial + for<'a> ::winnow::stream::Compare<&'a str>
+                {
                     ::winnow::ascii::multispace0.parse_next(input).map(|_| ())
                 }
             }
@@ -113,11 +116,14 @@ impl<'a> Codegen<'a> {
         };
 
         quote_spanned! {span=>
-            pub fn #fn_name(input: &mut &str, #(#params),*) -> ModalResult<#ret_type> {
+            pub fn #fn_name<I>(input: &mut I, #(#params),*) -> ModalResult<#ret_type>
+            where
+                I: ::winnow::stream::Stream + ::winnow::stream::StreamIsPartial + ::winnow::stream::Location + for<'a> ::winnow::stream::Compare<&'a str>
+            {
                 use ::winnow::Parser;
                 use ::winnow::error::ContextError;
 
-                (|input: &mut &str| -> ModalResult<#ret_type> {
+                (|input: &mut I| -> ModalResult<#ret_type> {
                     #body
                 })
                 .context(::winnow::error::StrContext::Label(#rule_name_str))
@@ -132,7 +138,7 @@ impl<'a> Codegen<'a> {
             let steps: Vec<TokenStream> = v.pattern.iter().map(|p| self.generate_step(p)).collect();
             let action = &v.action;
             quote_spanned! {span=>
-                |input: &mut &str| -> ModalResult<#ret_type> {
+                |input: &mut I| -> ModalResult<#ret_type> {
                     #(#steps)*
                     Ok(#action)
                 }
