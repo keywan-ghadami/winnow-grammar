@@ -47,7 +47,9 @@ impl<'a> Codegen<'a> {
                 #[allow(dead_code)]
                 fn ws<I>(input: &mut I) -> ModalResult<()>
                 where 
-                    I: ::winnow::stream::Stream + ::winnow::stream::StreamIsPartial + for<'a> ::winnow::stream::Compare<&'a str>
+                    I: ::winnow::stream::Stream + ::winnow::stream::StreamIsPartial + for<'a> ::winnow::stream::Compare<&'a str>,
+                    <I as ::winnow::stream::Stream>::Token: ::winnow::stream::AsChar + Clone,
+                    <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr,
                 {
                     ::winnow::ascii::multispace0.parse_next(input).map(|_| ())
                 }
@@ -118,7 +120,9 @@ impl<'a> Codegen<'a> {
         quote_spanned! {span=>
             pub fn #fn_name<I>(input: &mut I, #(#params),*) -> ModalResult<#ret_type>
             where
-                I: ::winnow::stream::Stream + ::winnow::stream::StreamIsPartial + ::winnow::stream::Location + for<'a> ::winnow::stream::Compare<&'a str>
+                I: ::winnow::stream::Stream + ::winnow::stream::StreamIsPartial + ::winnow::stream::Location + for<'a> ::winnow::stream::Compare<&'a str>,
+                <I as ::winnow::stream::Stream>::Token: ::winnow::stream::AsChar + Clone,
+                <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr,
             {
                 use ::winnow::Parser;
                 use ::winnow::error::ContextError;
