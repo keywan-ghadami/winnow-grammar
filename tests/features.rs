@@ -19,8 +19,8 @@ grammar! {
 
 #[test]
 fn test_plus_repetition() {
-    let mut input = "1 2 3";
-    let result = TestPlus::parse_list.parse(&mut input).unwrap();
+    let input = "1 2 3";
+    let result = TestPlus::parse_list.parse(input).unwrap();
     assert_eq!(
         result,
         PlusList {
@@ -28,12 +28,12 @@ fn test_plus_repetition() {
         }
     );
 
-    let mut input = "1";
-    let result = TestPlus::parse_list.parse(&mut input).unwrap();
+    let input = "1";
+    let result = TestPlus::parse_list.parse(input).unwrap();
     assert_eq!(result, PlusList { items: vec![1] });
 
-    let mut input = "";
-    let result = TestPlus::parse_list.parse(&mut input);
+    let input = "";
+    let result = TestPlus::parse_list.parse(input);
     assert!(result.is_err());
 }
 
@@ -57,12 +57,12 @@ grammar! {
 
 #[test]
 fn test_grouping() {
-    let mut input = "a 10";
-    let result = TestGroup::parse_main.parse(&mut input).unwrap();
+    let input = "a 10";
+    let result = TestGroup::parse_main.parse(input).unwrap();
     assert_eq!(result, GroupEnum::A(10));
 
-    let mut input = "b 20";
-    let result = TestGroup::parse_main.parse(&mut input).unwrap();
+    let input = "b 20";
+    let result = TestGroup::parse_main.parse(input).unwrap();
     assert_eq!(result, GroupEnum::B(20));
 }
 
@@ -86,8 +86,8 @@ grammar! {
 
 #[test]
 fn test_builtins() {
-    let mut input = r#" "hello" 123 world"#;
-    let result = TestBuiltins::parse_main.parse(&mut input).unwrap();
+    let input = r#" "hello" 123 world"#;
+    let result = TestBuiltins::parse_main.parse(input).unwrap();
     assert_eq!(
         result,
         Builtins {
@@ -105,13 +105,13 @@ fn test_builtins() {
 grammar! {
     grammar TestUse {
         use winnow::token::any;
-        rule main -> char = any
+        rule main -> char = c:any -> { c }
     }
 }
 
 #[test]
 fn test_use() {
-    let mut input = "a";
-    let result = TestUse::parse_main.parse(&mut input).unwrap();
+    let input = "a";
+    let result = TestUse::parse_main.parse(input).unwrap();
     assert_eq!(result, 'a');
 }
