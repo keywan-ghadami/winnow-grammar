@@ -1,6 +1,6 @@
 use winnow::prelude::*;
-use winnow_grammar::grammar;
 use winnow::stream::LocatingSlice;
+use winnow_grammar::grammar;
 
 #[derive(Debug, PartialEq)]
 pub enum Stmt {
@@ -56,9 +56,10 @@ fn test_expr_stmt() {
     let result = MiniLang::parse_stmt.parse(input).unwrap();
     assert_eq!(
         result,
-        Stmt::Expr(
-            Expr::Add(Box::new(Expr::Num(10)), Box::new(Expr::Var("x".to_string())))
-        )
+        Stmt::Expr(Expr::Add(
+            Box::new(Expr::Num(10)),
+            Box::new(Expr::Var("x".to_string()))
+        ))
     );
 }
 
@@ -69,27 +70,17 @@ fn test_parens() {
     let result = MiniLang::parse_stmt.parse(input).unwrap();
     assert_eq!(
         result,
-        Stmt::Expr(
-            Expr::Add(Box::new(Expr::Num(1)), Box::new(Expr::Num(2)))
-        )
+        Stmt::Expr(Expr::Add(Box::new(Expr::Num(1)), Box::new(Expr::Num(2))))
     );
 }
 
 #[test]
 fn test_span() {
-    let input = " 123 ";
+    let input = " 123";
     let input = LocatingSlice::new(input);
     let result = MiniLang::parse_spanned_term.parse(input).unwrap();
     assert_eq!(result.0, Expr::Num(123));
     // The built-in `term` calls `uint`.
-    // " 123 " -> the leading space is consumed by `ws` inside `uint`.
-    // The `term` matches "123".
-    // Wait, does `ws` included in the span?
-    // `uint` is generated as: `(ws, dec_uint).map(|(_, i)| i)`
-    // So `parse_next` consumes `ws` then `dec_uint`.
-    // The `with_span()` wraps `term`.
-    // `term` calls `uint`.
-    // So `with_span` covers everything `term` consumed.
-    // If `term` consumed " 123", then span is 0..4.
+    // " 123" -> length 4.
     assert_eq!(result.1, 0..4);
 }

@@ -1,6 +1,6 @@
 use winnow::prelude::*;
-use winnow_grammar::grammar;
 use winnow::stream::LocatingSlice;
+use winnow_grammar::grammar;
 
 // -----------------------------------------------------------------------------
 // 1. Test Plus (+) Repetition

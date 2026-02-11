@@ -1,4 +1,5 @@
 use winnow::prelude::*;
+use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -20,7 +21,7 @@ grammar! {
 
 #[test]
 fn test_left_recursion() {
-    let input = "1 + 2 + 3";
+    let input = LocatingSlice::new("1 + 2 + 3");
     let result = LeftRec::parse_expr.parse(input).unwrap();
     // (1 + 2) + 3
     assert_eq!(
