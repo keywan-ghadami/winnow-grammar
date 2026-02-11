@@ -336,7 +336,7 @@ impl<'a> Codegen<'a> {
         match name_str.as_str() {
             "ident" => quote_spanned! {span=> 
                 (ws, ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_'))
-                    .map(|(_, s)| s.as_ref().to_string())
+                    .map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
             "integer" => quote_spanned! {span=>
                 (ws, ::winnow::ascii::dec_int::<_, i32, _>).map(|(_, i)| i)
@@ -354,7 +354,7 @@ impl<'a> Codegen<'a> {
                     ), 
                     '"'
                 ))
-                .map(|(_, s)| s.as_ref().to_string())
+                .map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
             _ => {
                 // Unknown rule or external (unprefixed) function.
