@@ -159,12 +159,17 @@ grammar! {
 You can use any function that matches the `winnow` parser signature `Fn(&mut I) -> ModalResult<T>` as a rule. You just need to import it or define it in your crate.
 
 ```rust
-use winnow::ascii::alpha1;
 use winnow_grammar::grammar;
+
+// We define or import the parser outside. 
+// Note: In doctests, 'super' refers to the function scope, which can be tricky.
+// We use fully qualified paths here for clarity.
+use winnow::ascii::alpha1;
 
 grammar! {
     grammar MyGrammar {
-        use super::alpha1; // Import standard winnow parser
+        // You can import standard winnow parsers
+        use winnow::ascii::alpha1; 
 
         rule word -> String = 
             w:alpha1 -> { w.to_string() }
@@ -192,12 +197,12 @@ grammar! {
 You can capture the `Span` (range) of a parsed rule using the syntax `name:rule @ span_var`. This requires your input type to implement `winnow::stream::Location` (e.g., `LocatingSlice`).
 
 ```rust
-use winnow::stream::Range;
 use winnow_grammar::grammar;
 
 grammar! {
     grammar Spanned {
-        rule main -> (String, Range) = 
+        // We use std::ops::Range<usize> as the return type for spans.
+        rule main -> (String, std::ops::Range<usize>) = 
             // Binds the identifier to `id` and its span to `s`
             id:ident @ s -> { (id, s) }
     }

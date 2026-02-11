@@ -370,7 +370,7 @@ impl<'a> Codegen<'a> {
             if args.is_empty() {
                 return quote_spanned! {span=> #fn_name };
             } else {
-                return quote_spanned! {span=> |i: &mut _| #fn_name(i, #(#args),*) };
+                return quote_spanned! {span=> (|i: &mut _| #fn_name(i, #(#args),*)) };
             }
         }
 
@@ -403,7 +403,7 @@ impl<'a> Codegen<'a> {
                 if args.is_empty() {
                     quote_spanned! {span=> #rule_name }
                 } else {
-                    quote_spanned! {span=> |i: &mut _| #rule_name(i, #(#args),*) }
+                    quote_spanned! {span=> (|i: &mut _| #rule_name(i, #(#args),*)) }
                 }
             }
         }
