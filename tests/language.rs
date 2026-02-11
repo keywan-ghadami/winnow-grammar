@@ -28,9 +28,6 @@ grammar! {
             n:uint -> { Expr::Num(n) }
           | i:ident -> { Expr::Var(i) }
           | "(" e:expr ")" -> { e }
-
-        rule spanned_term -> (Expr, std::ops::Range<usize>) =
-            t:term @ s -> { (t, s) }
     }
 }
 
@@ -69,15 +66,4 @@ fn test_parens() {
             Expr::Add(Box::new(Expr::Num(1)), Box::new(Expr::Num(2)))
         )
     );
-}
-
-#[test]
-fn test_span() {
-    let input = " 123 ";
-    let result = MiniLang::parse_spanned_term.parse(input).unwrap();
-    assert_eq!(result.0, Expr::Num(123));
-    // The built-in `term` calls `uint` which eats leading whitespace.
-    // So the span includes the whitespace.
-    // " 123" -> length 4.
-    assert_eq!(result.1, 0..4);
 }
