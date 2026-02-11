@@ -1,4 +1,5 @@
 use winnow::prelude::*;
+use winnow::stream::LocatingSlice;
 // use winnow_grammar::grammar;
 
 // -----------------------------------------------------------------------------
@@ -35,7 +36,7 @@ winnow_grammar::grammar! {
         pub rule schedule -> CronSchedule =
             s:field m:field h:field dom:field mon:field dow:field
             -> {
-                CronSchedule { sec: s, min: m, hour: h, dom: dom, month: mon, dow: dow }
+                CronSchedule { sec: s, min: m, hour: h, dom, month: mon, dow }
             }
 
         // --- Precedence Layering ---
@@ -98,8 +99,9 @@ winnow_grammar::grammar! {
 
 #[test]
 fn test_standard_cron() {
-    let mut input = "0 30 9 * * *"; // Standard Unix Style
-    let result = Cron::parse_schedule.parse(&mut input).unwrap();
+    let input = "0 30 9 * * *"; // Standard Unix Style
+    let input = LocatingSlice::new(input);
+    let result = Cron::parse_schedule.parse(input).unwrap();
 
     assert_eq!(result.min, Field::Number(30));
     assert_eq!(result.hour, Field::Number(9));
@@ -112,10 +114,11 @@ fn test_messy_whitespace() {
     // aber Token-Parser oft lax sind (was gut für UX ist).
 
     // "0" Space "1 , 2" Space "*/ 15" ...
-    let mut input = "0   1 , 2   */ 15   * * *";
+    let input = "0   1 , 2   */ 15   * * *";
+    let input = LocatingSlice::new(input);
 
     let result = Cron::parse_schedule
-        .parse(&mut input)
+        .parse(input)
         .expect("Should handle messy whitespace");
 
     // Check List parsing mit spaces "1 , 2"
@@ -137,8 +140,9 @@ fn test_messy_whitespace() {
 #[test]
 fn test_complex_precedence() {
     // 10-20/2 -> Step bindet schwächer als Range
-    let mut input = "0 10-20/2 * * * *";
-    let result = Cron::parse_schedule.parse(&mut input).unwrap();
+    let input = "0 10-20/2 * * * *";
+    let input = LocatingSlice::new(input);
+    let result = Cron::parse_schedule.parse(input).unwrap();
 
     assert_eq!(result.min, Field::Step(Box::new(Field::Range(10, 20)), 2));
 }
