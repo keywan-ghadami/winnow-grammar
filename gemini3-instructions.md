@@ -37,6 +37,7 @@ If your changes involve:
 2.  **Dirty State Handling:**
     *   Before starting any new task, check for a dirty git state (uncommitted changes).
     *   If dirty state exists, analyze the changes to determine the intent and execute a `git commit` with an appropriate message *before* proceeding with new changes.
+    *   **Note Explanation:** When making code changes, explain the reasoning and what is being done in the commit message or as comments, not just at the end.
 
 ## Type of Changes
 
