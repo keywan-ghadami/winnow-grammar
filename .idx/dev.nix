@@ -1,12 +1,12 @@
 { pkgs, ... }: {
-  # Nutze stable oder unstable (unstable hat oft aktuelleres Rust)
-  channel = "unstable";
+  channel = "stable-24.05";
 
   packages = [
     pkgs.rustup
-    # KRITISCH: gcc liefert den Linker (cc), ohne den Proc Macros fehlschlagen
     pkgs.gcc
   ];
+
+  env = {};
 
   idx = {
     extensions = [
@@ -15,9 +15,11 @@
     ];
 
     workspace = {
-      onCreate = {
-        rust-install = "rustup toolchain install stable --profile minimal --component clippy,rustfmt,rust-src,rust-analyzer && rustup default stable";
-      };
+      # Setup was removed to ensure fast startup. 
+      # Please run the following command manually in the terminal:
+      # rustup default stable
+      onCreate = {};
+      onStart = {};
     };
   };
 }
