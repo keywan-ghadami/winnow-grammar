@@ -4,18 +4,13 @@
 
 As final step, you must run the following commands to ensure code quality and correctness:
 
-1.  **Format Code:**
-    ```bash
-    cargo fmt
-    ```
-
-2.  **Lint Code:**
+1.  **Lint Code:**
     ```bash
     cargo clippy --all-targets --all-features
     ```
     Ensure there are no warnings or errors.
 
-3.  **Run Tests:**
+2.  **Run Tests:**
     ```bash
     cargo test
     ```
