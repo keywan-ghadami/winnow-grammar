@@ -45,11 +45,20 @@ This file documents the types of changes made to the project to comply with `car
 
 ### Lessons Learned
 
+*   **Git Usage:**
+    *   **Always** run `git add <file>` before `git commit`. The IDE environment does not automatically stage changes.
+    *   Use `git status` to verify the state of the repository before and after operations.
+    *   Commit messages should be descriptive and follow conventional commits (e.g., `feat:`, `fix:`, `docs:`).
+
 *   **`winnow-grammar-macro/src/codegen/mod.rs`:**
     *   Collapse nested `if-else` blocks to comply with `clippy::collapsible_else_if`.
     *   Remove unused import `syn::spanned::Spanned`.
+    *   **Cut Operator (`=>`):** Implemented by tracking `in_cut` state in sequence generation and wrapping parsers in `winnow::combinator::cut_err`.
+
 *   **`tests/cron.rs`:**
-    *   Simplify struct initialization to avoid `clippy::redundant_field_names` (e.g., `dom: dom` -> `dom`).
-    *   Remove unnecessary `mut` references in `parse()` calls where `winnow` handles it, fixing `clippy::unnecessary_mut_passed` and `clippy::needless_borrow`.
+    *   Simplify struct initialization to avoid `clippy::redundant_field_names`.
+    *   Remove unnecessary `mut` references.
+    *   **Type Inference:** Ensure explicit type annotations are used when necessary inside action blocks (e.g., `let tail: Vec<Field> = tail;`), as the macro expansion can sometimes confuse the compiler's type inference engine.
+
 *   **`tests/features.rs`:**
-    *   Ensure grammar rules (e.g., `rule main`) have an action block `-> { c }` to prevent syntax errors and `undeclared type` errors.
+    *   Ensure grammar rules have an action block `-> { c }` to prevent syntax errors.
