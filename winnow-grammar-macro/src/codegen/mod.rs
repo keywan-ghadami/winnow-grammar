@@ -280,6 +280,11 @@ impl<'a> Codegen<'a> {
             ModelPattern::Braced(inner, _) => {
                 return self.generate_delimited_step(inner, "{", "}", in_cut)
             }
+            ModelPattern::Recover { .. } => {
+                return quote_spanned! {span=>
+                    compile_error!("Recover not yet supported in winnow-grammar");
+                };
+            }
             _ => {}
         }
 
@@ -449,8 +454,8 @@ impl<'a> Codegen<'a> {
             ModelPattern::Bracketed(inner, _) => self.generate_delimited_expr(inner, "[", "]"),
             ModelPattern::Braced(inner, _) => self.generate_delimited_expr(inner, "{", "}"),
             ModelPattern::Cut(_) => quote_spanned! {span=> ::winnow::combinator::empty }, // Should be handled by sequence logic, but fallback to empty
-            _ => quote_spanned! {span=>
-                compile_error!("Unsupported pattern type in generate_parser_expr")
+            ModelPattern::Recover { .. } => quote_spanned! {span=>
+                compile_error!("Recover not yet supported in winnow-grammar");
             },
         }
     }
