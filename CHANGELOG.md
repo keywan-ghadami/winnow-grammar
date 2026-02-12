@@ -12,3 +12,4 @@
 - **Span Tracking**: Support for capturing spans with `@` syntax (using `LocatingSlice`).
 - **Built-in Parsers**: `ident`, `integer`, `uint`, `string`.
 - **External Rules**: Support for calling custom or external `winnow` parsers.
+- **Cut Operator**: Support for the cut operator `=>` to control backtracking.

@@ -19,6 +19,7 @@ This crate is built on top of `syn-grammar-model` but targets the `winnow` parse
 - **Rule Arguments**: Pass context or parameters between rules.
 - **Span Tracking**: Support for `LocatingSlice` to track source positions (e.g., `rule @ span`).
 - **Seamless Integration**: Easily mix generated rules with handwritten `winnow` parsers.
+- **Cut Operator**: Control backtracking explicitly for better error messages and performance.
 
 ## Installation
 
@@ -256,6 +257,33 @@ grammar! {
             paren(a:integer "," b:integer) -> { (a, b) }
     }
 }
+```
+
+### The Cut Operator (`=>`)
+
+The cut operator `=>` allows you to commit to a specific alternative. If the pattern *before* the `=>` matches, the parser will **not** backtrack to try other alternatives, even if the pattern *after* the `=>` fails. This produces better error messages.
+
+```rust
+use winnow_grammar::grammar;
+
+pub enum Stmt {
+    Let(String, i32),
+    Expr(i32),
+}
+
+grammar! {
+    grammar Cut {
+        rule stmt -> Stmt =
+            // If we see "let", we commit to this rule. 
+            // If "mut" or the identifier is missing, we error immediately 
+            // instead of trying the next alternative.
+            "let" => "mut"? name:ident "=" e:expr -> { Stmt::Let(name, e) }
+          | e:expr -> { Stmt::Expr(e) }
+          
+        rule expr -> i32 = i:integer -> { i }
+    }
+}
+# fn main() {}
 ```
 
 ## Advanced Topics
