@@ -151,11 +151,11 @@ impl<'a> Codegen<'a> {
     ) -> TokenStream {
         let span = Span::mixed_site();
         let variant_parsers = variants.iter().map(|v| {
-            let steps: Vec<TokenStream> = v.pattern.iter().map(|p| self.generate_step(p)).collect();
+            let steps = self.generate_sequence_steps(&v.pattern, false);
             let action = &v.action;
             quote_spanned! {span=>
                 |input: &mut I| -> ModalResult<#ret_type> {
-                    #(#steps)*
+                    #steps
                     Ok(#action)
                 }
             }
@@ -163,11 +163,11 @@ impl<'a> Codegen<'a> {
 
         if variants.len() == 1 {
             let v = &variants[0];
-            let steps: Vec<TokenStream> = v.pattern.iter().map(|p| self.generate_step(p)).collect();
+            let steps = self.generate_sequence_steps(&v.pattern, false);
             let action = &v.action;
             quote_spanned! {span=>
                 {
-                    #(#steps)*
+                    #steps
                     Ok(#action)
                 }
             }
@@ -202,19 +202,20 @@ impl<'a> Codegen<'a> {
                 quote! {}
             };
 
-            let tail_steps: Vec<TokenStream> = v
-                .pattern
-                .iter()
-                .skip(1)
-                .map(|p| self.generate_step(p))
-                .collect();
+            // Recursion always consumes the first pattern (the recursive call).
+            // We check if that first pattern was 'cut'. If so, the rest is cut.
+            // But ModelPattern::RuleCall cannot be a Cut itself.
+            // However, if the pattern list is `[Recurse, Cut, ...]`, then `patterns` below starts with `Cut`.
+
+            let patterns = &v.pattern[1..];
+            let steps = self.generate_sequence_steps(patterns, false);
             let action = &v.action;
 
             quote_spanned! {span=>
                 {
                     let checkpoint = ::winnow::stream::Stream::checkpoint(input);
                     let attempt = (|| -> ModalResult<#ret_type> {
-                        #(#tail_steps)*
+                        #steps
                         #bind_lhs
                         Ok(#action)
                     })();
@@ -225,7 +226,14 @@ impl<'a> Codegen<'a> {
                             continue;
                         },
                         Err(e) => {
-                            ::winnow::stream::Stream::reset(input, &checkpoint);
+                            match e {
+                                // If it's a backtrack error, we reset and try next variant.
+                                ::winnow::error::ErrMode::Backtrack(_) => {
+                                    ::winnow::stream::Stream::reset(input, &checkpoint);
+                                }
+                                // If it's Cut or Incomplete, we propagate.
+                                _ => return Err(e),
+                            }
                         }
                     }
                 }
@@ -237,110 +245,78 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    fn generate_step(&self, pattern: &ModelPattern) -> TokenStream {
+    fn generate_sequence_steps(&self, patterns: &[ModelPattern], mut in_cut: bool) -> TokenStream {
+        let mut steps = Vec::new();
+        for p in patterns {
+            if let ModelPattern::Cut(_) = p {
+                in_cut = true;
+                continue;
+            }
+            steps.push(self.generate_step(p, in_cut));
+        }
+        quote! { #(#steps)* }
+    }
+
+    fn generate_step(&self, pattern: &ModelPattern, in_cut: bool) -> TokenStream {
         let span = Span::mixed_site();
+
+        // Special case: Unwrap groups to allow bindings to escape to the current scope.
+        // But only if they are simple sequences. If they are alts, generate_parser_expr handles them (returning a value).
+        if let ModelPattern::Group(alts, _) = pattern {
+            if alts.len() == 1 {
+                return self.generate_sequence_steps(&alts[0], in_cut);
+            }
+        }
+
+        // Special case: Parenthesized/Bracketed/Braced need to emit statements (open, inner, close)
+        // to preserve bindings from inner.
         match pattern {
-            ModelPattern::SpanBinding(inner, span_var, _span) => {
-                let parser = self.generate_parser_expr(inner);
-                let binding = get_inner_binding(inner);
+            ModelPattern::Parenthesized(inner, _) => {
+                return self.generate_delimited_step(inner, "(", ")", in_cut)
+            }
+            ModelPattern::Bracketed(inner, _) => {
+                return self.generate_delimited_step(inner, "[", "]", in_cut)
+            }
+            ModelPattern::Braced(inner, _) => {
+                return self.generate_delimited_step(inner, "{", "}", in_cut)
+            }
+            _ => {}
+        }
 
-                match binding {
-                    Some(name) => quote_spanned! {span=>
-                        let (#name, #span_var) = #parser.with_span().parse_next(input)?;
-                    },
-                    None => quote_spanned! {span=>
-                        let (_, #span_var) = #parser.with_span().parse_next(input)?;
-                    },
-                }
-            }
-            ModelPattern::RuleCall {
-                binding,
-                rule_name,
-                args,
-            } => {
-                let parser = self.generate_rule_call_parser(rule_name, args);
+        // Default: Generate a parser expression and run it.
+        let parser_expr = self.generate_parser_expr(pattern);
 
-                match binding {
-                    Some(name) => quote_spanned! {span=>
-                        let #name = #parser.parse_next(input)?;
-                    },
-                    None => quote_spanned! {span=>
-                        let _ = #parser.parse_next(input)?;
-                    },
-                }
-            }
-            ModelPattern::Lit(lit_str) => {
-                let s = lit_str.value();
-                quote_spanned! {span=>
-                    let _ = (ws, literal(#s)).map(|(_, s)| s).parse_next(input)?;
-                }
-            }
-            ModelPattern::Group(alternatives, _span) => {
-                if alternatives.len() == 1 {
-                    let seq = &alternatives[0];
-                    let steps: Vec<TokenStream> =
-                        seq.iter().map(|p| self.generate_step(p)).collect();
-                    quote_spanned! {span=>
-                        #(#steps)*
-                    }
-                } else {
-                    let parser = self.generate_parser_expr(pattern);
-                    let binding = get_inner_binding(pattern);
-                    match binding {
-                        Some(name) => quote_spanned! {span=>
-                            let #name = #parser.parse_next(input)?;
-                        },
-                        None => quote_spanned! {span=>
-                            let _ = #parser.parse_next(input)?;
-                        },
-                    }
-                }
-            }
-            ModelPattern::Optional(inner, _span) => {
-                let p = self.generate_parser_expr(inner);
-                let parser = quote_spanned! {span=> opt(#p) };
-                let binding = get_inner_binding(inner);
-                match binding {
-                    Some(name) => quote_spanned! {span=>
-                        let #name = #parser.parse_next(input)?;
-                    },
-                    None => quote_spanned! {span=>
-                        let _ = #parser.parse_next(input)?;
-                    },
-                }
-            }
-            ModelPattern::Repeat(inner, _span) => {
-                let p = self.generate_parser_expr(inner);
-                let binding = get_inner_binding(inner);
-                match binding {
-                    Some(name) => {
-                        quote_spanned! {span=> let #name: Vec<_> = repeat(0.., #p).parse_next(input)?; }
-                    }
-                    None => {
-                        quote_spanned! {span=> let _: Vec<_> = repeat(0.., #p).parse_next(input)?; }
-                    }
-                }
-            }
-            ModelPattern::Plus(inner, _span) => {
-                let p = self.generate_parser_expr(inner);
-                let binding = get_inner_binding(inner);
-                match binding {
-                    Some(name) => {
-                        quote_spanned! {span=> let #name: Vec<_> = repeat(1.., #p).parse_next(input)?; }
-                    }
-                    None => {
-                        quote_spanned! {span=> let _: Vec<_> = repeat(1.., #p).parse_next(input)?; }
-                    }
-                }
-            }
-            ModelPattern::Parenthesized(inner, _span) => {
-                self.generate_delimited_step(inner, "(", ")")
-            }
-            ModelPattern::Bracketed(inner, _span) => self.generate_delimited_step(inner, "[", "]"),
-            ModelPattern::Braced(inner, _span) => self.generate_delimited_step(inner, "{", "}"),
-            ModelPattern::Cut(_) => quote_spanned! {span=> },
-            ModelPattern::Recover { .. } => quote_spanned! {span=>
-                compile_error!("Recover not yet supported in winnow-grammar");
+        // If we are in cut mode, wrap the parser.
+        let parser_expr = if in_cut {
+            quote_spanned! {span=> ::winnow::combinator::cut_err(#parser_expr) }
+        } else {
+            parser_expr
+        };
+
+        // Bind result if needed
+        let binding = get_inner_binding(pattern);
+        match binding {
+            Some(name) => match pattern {
+                ModelPattern::SpanBinding(_, span_var, _) => quote_spanned! {span=>
+                    let (#name, #span_var) = #parser_expr.with_span().parse_next(input)?;
+                },
+                ModelPattern::Repeat(_, _) | ModelPattern::Plus(_, _) => quote_spanned! {span=>
+                    let #name: Vec<_> = #parser_expr.parse_next(input)?;
+                },
+                _ => quote_spanned! {span=>
+                    let #name = #parser_expr.parse_next(input)?;
+                },
+            },
+            None => match pattern {
+                ModelPattern::SpanBinding(_, span_var, _) => quote_spanned! {span=>
+                    let (_, #span_var) = #parser_expr.with_span().parse_next(input)?;
+                },
+                ModelPattern::Repeat(_, _) | ModelPattern::Plus(_, _) => quote_spanned! {span=>
+                    let _: Vec<_> = #parser_expr.parse_next(input)?;
+                },
+                _ => quote_spanned! {span=>
+                    let _ = #parser_expr.parse_next(input)?;
+                },
             },
         }
     }
@@ -350,13 +326,39 @@ impl<'a> Codegen<'a> {
         inner: &[ModelPattern],
         open: &str,
         close: &str,
+        in_cut: bool,
     ) -> TokenStream {
         let span = Span::mixed_site();
-        let steps: Vec<TokenStream> = inner.iter().map(|p| self.generate_step(p)).collect();
+
+        // Open delimiter
+        let open_parser = quote_spanned! {span=> (ws, literal(#open)) };
+        let open_stmt = if in_cut {
+            quote_spanned! {span=> let _ = ::winnow::combinator::cut_err(#open_parser).parse_next(input)?; }
+        } else {
+            quote_spanned! {span=> let _ = #open_parser.parse_next(input)?; }
+        };
+
+        // Inner steps
+        // Note: inner sequence might trigger cut mode itself!
+        // We need to know if the inner sequence ends in cut mode to decide for the closing delimiter.
+        let inner_steps = self.generate_sequence_steps(inner, in_cut);
+
+        // Check if inner triggers cut
+        let inner_triggers_cut = inner.iter().any(|p| matches!(p, ModelPattern::Cut(_)));
+        let final_cut = in_cut || inner_triggers_cut;
+
+        // Close delimiter
+        let close_parser = quote_spanned! {span=> (ws, literal(#close)) };
+        let close_stmt = if final_cut {
+            quote_spanned! {span=> let _ = ::winnow::combinator::cut_err(#close_parser).parse_next(input)?; }
+        } else {
+            quote_spanned! {span=> let _ = #close_parser.parse_next(input)?; }
+        };
+
         quote_spanned! {span=>
-            let _ = (ws, literal(#open)).parse_next(input)?;
-            #(#steps)*
-            let _ = (ws, literal(#close)).parse_next(input)?;
+            #open_stmt
+            #inner_steps
+            #close_stmt
         }
     }
 
@@ -364,7 +366,6 @@ impl<'a> Codegen<'a> {
         let span = Span::mixed_site();
         let name_str = rule_name.to_string();
 
-        // If it's a user-defined rule, always use the user's rule.
         if self.user_rules.contains(&name_str) {
             let fn_name = format_ident!("parse_{}", rule_name, span = span);
             if args.is_empty() {
@@ -374,7 +375,6 @@ impl<'a> Codegen<'a> {
             }
         }
 
-        // Otherwise, check for built-ins
         match name_str.as_str() {
             "ident" => quote_spanned! {span=>
                 (ws, ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_'))
@@ -399,7 +399,6 @@ impl<'a> Codegen<'a> {
                 .map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
             _ => {
-                // Unknown rule or external (unprefixed) function.
                 if args.is_empty() {
                     quote_spanned! {span=> #rule_name }
                 } else {
@@ -428,15 +427,7 @@ impl<'a> Codegen<'a> {
             ModelPattern::Group(alternatives, _) => {
                 let alts: Vec<TokenStream> = alternatives
                     .iter()
-                    .map(|seq: &Vec<ModelPattern>| {
-                        let seq_parsers: Vec<TokenStream> =
-                            seq.iter().map(|p| self.generate_parser_expr(p)).collect();
-                        if seq.len() == 1 {
-                            quote_spanned! {span=> #(#seq_parsers)* }
-                        } else {
-                            quote_spanned! {span=> ( #(#seq_parsers),* ) }
-                        }
-                    })
+                    .map(|seq| self.generate_sequence_parser(seq))
                     .collect();
                 quote_spanned! {span=>
                     alt(( #(#alts),* ))
@@ -457,10 +448,36 @@ impl<'a> Codegen<'a> {
             ModelPattern::Parenthesized(inner, _) => self.generate_delimited_expr(inner, "(", ")"),
             ModelPattern::Bracketed(inner, _) => self.generate_delimited_expr(inner, "[", "]"),
             ModelPattern::Braced(inner, _) => self.generate_delimited_expr(inner, "{", "}"),
-            ModelPattern::Cut(_) => quote_spanned! {span=> ::winnow::combinator::empty },
+            ModelPattern::Cut(_) => quote_spanned! {span=> ::winnow::combinator::empty }, // Should be handled by sequence logic, but fallback to empty
             _ => quote_spanned! {span=>
                 compile_error!("Unsupported pattern type in generate_parser_expr")
             },
+        }
+    }
+
+    fn generate_sequence_parser(&self, seq: &[ModelPattern]) -> TokenStream {
+        let span = Span::mixed_site();
+        let mut parsers = Vec::new();
+        let mut in_cut = false;
+
+        for p in seq {
+            if let ModelPattern::Cut(_) = p {
+                in_cut = true;
+                continue;
+            }
+
+            let p_expr = self.generate_parser_expr(p);
+            if in_cut {
+                parsers.push(quote_spanned! {span=> ::winnow::combinator::cut_err(#p_expr) });
+            } else {
+                parsers.push(p_expr);
+            }
+        }
+
+        if parsers.len() == 1 {
+            quote_spanned! {span=> #(#parsers)* }
+        } else {
+            quote_spanned! {span=> ( #(#parsers),* ) }
         }
     }
 
@@ -471,13 +488,7 @@ impl<'a> Codegen<'a> {
         close: &str,
     ) -> TokenStream {
         let span = Span::mixed_site();
-        let seq_parsers: Vec<TokenStream> =
-            inner.iter().map(|p| self.generate_parser_expr(p)).collect();
-        let inner_parser = if seq_parsers.len() == 1 {
-            quote_spanned! {span=> #(#seq_parsers)* }
-        } else {
-            quote_spanned! {span=> ( #(#seq_parsers),* ) }
-        };
+        let inner_parser = self.generate_sequence_parser(inner);
 
         quote_spanned! {span=>
             delimited((ws, literal(#open)), #inner_parser, (ws, literal(#close)))
@@ -485,7 +496,6 @@ impl<'a> Codegen<'a> {
     }
 }
 
-// Helper (outside struct since it doesn't need context)
 fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
     match pattern {
         ModelPattern::RuleCall { binding, .. } => binding.as_ref(),
