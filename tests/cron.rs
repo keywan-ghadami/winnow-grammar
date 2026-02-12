@@ -48,6 +48,8 @@ winnow_grammar::grammar! {
                     head
                 } else {
                     let mut list = vec![head];
+                    // tail is Vec<Field> because comma_step returns Field
+                    // and comma_step* returns Vec<Field>
                     list.extend(tail);
                     Field::List(list)
                 }
