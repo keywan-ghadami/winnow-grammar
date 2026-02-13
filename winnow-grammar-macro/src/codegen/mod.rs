@@ -431,6 +431,12 @@ impl<'a> Codegen<'a> {
             "hex_digit1" => quote_spanned! {span=>
                 (ws, ::winnow::ascii::hex_digit1).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
+            "oct_digit0" => quote_spanned! {span=>
+                (ws, ::winnow::ascii::oct_digit0).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+            },
+            "oct_digit1" => quote_spanned! {span=>
+                (ws, ::winnow::ascii::oct_digit1).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+            },
             _ => {
                 if args.is_empty() {
                     quote_spanned! {span=> #rule_name }

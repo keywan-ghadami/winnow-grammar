@@ -19,6 +19,8 @@ const WINNOW_BUILTINS: &[&str] = &[
     "digit1",
     "hex_digit0",
     "hex_digit1",
+    "oct_digit0",
+    "oct_digit1",
     "multispace0",
     "multispace1",
 ];
