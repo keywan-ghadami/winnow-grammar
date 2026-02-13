@@ -17,6 +17,8 @@ const WINNOW_BUILTINS: &[&str] = &[
     // We might need to add more winnow primitives here as they are encountered
     "alpha1",
     "digit1",
+    "hex_digit0",
+    "hex_digit1",
     "multispace0",
     "multispace1",
 ];

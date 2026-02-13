@@ -10,6 +10,6 @@
 - **Left Recursion**: Automatic compilation of direct left-recursive rules into loops.
 - **Rule Arguments**: Support for passing arguments to rules.
 - **Span Tracking**: Support for capturing spans with `@` syntax (using `LocatingSlice`).
-- **Built-in Parsers**: `ident`, `integer`, `uint`, `string`, `char`.
+- **Built-in Parsers**: `ident`, `integer`, `uint`, `string`, `char`, `hex_digit0`, `hex_digit1`.
 - **External Rules**: Support for calling custom or external `winnow` parsers.
 - **Cut Operator**: Support for the cut operator `=>` to control backtracking.

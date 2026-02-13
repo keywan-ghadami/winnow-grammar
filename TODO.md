@@ -37,7 +37,7 @@
 35. Support regex-like repetition ranges.
 36. Add built-in `float` number parser.
 37. [DONE] Add built-in `char` literal parser.
-38. Add built-in `hex_digit` parser.
+38. [DONE] Add built-in `hex_digit` parser.
 39. Add built-in `oct_digit` parser.
 40. Add built-in `binary_digit` parser.
 41. Support `Partial` input streams explicitly.
