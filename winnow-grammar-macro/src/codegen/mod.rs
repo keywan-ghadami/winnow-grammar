@@ -437,6 +437,14 @@ impl<'a> Codegen<'a> {
             "oct_digit1" => quote_spanned! {span=>
                 (ws, ::winnow::ascii::oct_digit1).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
+            "binary_digit0" => quote_spanned! {span=>
+                (ws, ::winnow::token::take_while(0.., |c| c == '0' || c == '1'))
+                    .map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+            },
+            "binary_digit1" => quote_spanned! {span=>
+                (ws, ::winnow::token::take_while(1.., |c| c == '0' || c == '1'))
+                    .map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+            },
             _ => {
                 if args.is_empty() {
                     quote_spanned! {span=> #rule_name }

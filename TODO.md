@@ -39,7 +39,7 @@
 37. [DONE] Add built-in `char` literal parser.
 38. [DONE] Add built-in `hex_digit` parser.
 39. [DONE] Add built-in `oct_digit` parser.
-40. Add built-in `binary_digit` parser.
+40. [DONE] Add built-in `binary_digit` parser.
 41. Support `Partial` input streams explicitly.
 42. Support `Stateful` input streams in macros.
 43. Map `winnow::stream::Location` to spans.
