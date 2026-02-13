@@ -132,7 +132,10 @@ impl<'a> Codegen<'a> {
                    + for<'a> ::winnow::stream::Compare<&'a str>
                    // Extra bounds required by some built-in parsers (like float)
                    + ::winnow::stream::Compare<::winnow::ascii::Caseless<&'static str>>
-                   + ::winnow::stream::AsBStr,
+                   + ::winnow::stream::AsBStr
+                   // Required for recover which uses find_slice
+                   + ::winnow::stream::FindSlice<char>
+                   + ::winnow::stream::FindSlice<&'static str>,
                 <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr + AsRef<str> + std::fmt::Display + ::winnow::stream::ParseSlice<f64>,
                 <I as ::winnow::stream::Stream>::IterOffsets: Clone,
             {
@@ -285,9 +288,7 @@ impl<'a> Codegen<'a> {
                 return self.generate_delimited_step(inner, "{", "}", in_cut)
             }
             ModelPattern::Recover { .. } => {
-                return quote_spanned! {span=>
-                    compile_error!("Recover not yet supported in winnow-grammar");
-                };
+                // Recover is now supported below
             }
             _ => {}
         }
@@ -311,6 +312,9 @@ impl<'a> Codegen<'a> {
                 },
                 ModelPattern::Repeat(_, _) | ModelPattern::Plus(_, _) => quote_spanned! {span=>
                     let #name: Vec<_> = #parser_expr.parse_next(input)?;
+                },
+                ModelPattern::Recover { .. } => quote_spanned! {span=>
+                    let #name = #parser_expr.parse_next(input)?;
                 },
                 _ => quote_spanned! {span=>
                     let #name = #parser_expr.parse_next(input)?;
@@ -461,6 +465,9 @@ impl<'a> Codegen<'a> {
             "line_ending" => quote_spanned! {span=>
                 (ws, ::winnow::ascii::line_ending).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
+            "empty" => quote_spanned! {span=>
+                ::winnow::combinator::empty
+            },
             _ => {
                 if args.is_empty() {
                     quote_spanned! {span=> #rule_name }
@@ -512,9 +519,43 @@ impl<'a> Codegen<'a> {
             ModelPattern::Bracketed(inner, _) => self.generate_delimited_expr(inner, "[", "]"),
             ModelPattern::Braced(inner, _) => self.generate_delimited_expr(inner, "{", "}"),
             ModelPattern::Cut(_) => quote_spanned! {span=> ::winnow::combinator::empty }, // Should be handled by sequence logic, but fallback to empty
-            ModelPattern::Recover { .. } => quote_spanned! {span=>
-                compile_error!("Recover not yet supported in winnow-grammar");
-            },
+            ModelPattern::Recover { body, sync, .. } => {
+                let body_parser = self.generate_parser_expr(body);
+                let sync_parser = self.generate_parser_expr(sync);
+                // recover(rule, sync_token) logic:
+                // 1. Try `rule`
+                // 2. If it fails, eat tokens until `sync_token` matches (peek).
+                // 3. If synced, return None (or default for Option).
+                //
+                // Note: The syn-grammar recover pattern assumes the return type is Option<T>
+                // or that we are wrapping it in Option.
+                // However, `winnow` doesn't have a direct `recover` combinator that behaves exactly like syn-grammar's spec (skip until).
+                // We can simulate it with `alt` + `repeat_until`.
+
+                // Logic:
+                // alt((
+                //   body_parser.map(Some),
+                //   (
+                //      repeat(0.., (not(sync_parser), any)).map(|()| ()), // Skip until sync
+                //      // We assume the sync token is NOT consumed by recover itself, but checked?
+                //      // "Note that recover does not consume the sync token." - from README
+                //      ::winnow::combinator::peek(sync_parser)
+                //   ).map(|_| None)
+                // ))
+
+                quote_spanned! {span=>
+                    alt((
+                        #body_parser.map(Some),
+                        (
+                            ::winnow::combinator::repeat(0.., (
+                                ::winnow::combinator::not(::winnow::combinator::peek(#sync_parser)),
+                                ::winnow::token::any
+                            )).map(|()| ()),
+                            ::winnow::combinator::peek(#sync_parser)
+                        ).map(|_| None)
+                    ))
+                }
+            }
         }
     }
 
@@ -573,6 +614,7 @@ fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
         ModelPattern::Repeat(inner, _) => get_inner_binding(inner),
         ModelPattern::Plus(inner, _) => get_inner_binding(inner),
         ModelPattern::SpanBinding(inner, _, _) => get_inner_binding(inner),
+        ModelPattern::Recover { binding, .. } => binding.as_ref(),
         ModelPattern::Parenthesized(inner, _)
         | ModelPattern::Bracketed(inner, _)
         | ModelPattern::Braced(inner, _) => {
