@@ -36,7 +36,7 @@
 34. Add `@` binding for arbitrary expressions.
 35. Support regex-like repetition ranges.
 36. Add built-in `float` number parser.
-37. Add built-in `char` literal parser.
+37. [DONE] Add built-in `char` literal parser.
 38. Add built-in `hex_digit` parser.
 39. Add built-in `oct_digit` parser.
 40. Add built-in `binary_digit` parser.
