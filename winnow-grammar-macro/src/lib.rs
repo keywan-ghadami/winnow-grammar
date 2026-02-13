@@ -12,6 +12,7 @@ const WINNOW_BUILTINS: &[&str] = &[
     "integer",
     "uint",
     "string",
+    "char",
     "any", // Added any to support tests/features.rs
     // We might need to add more winnow primitives here as they are encountered
     "alpha1",
