@@ -25,6 +25,11 @@ const WINNOW_BUILTINS: &[&str] = &[
     "binary_digit1",
     "multispace0",
     "multispace1",
+    "float",
+    "space0",
+    "space1",
+    "line_ending",
+    "empty", // Needed for empty rule
 ];
 
 #[proc_macro]

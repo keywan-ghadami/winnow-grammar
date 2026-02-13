@@ -129,8 +129,12 @@ impl<'a> Codegen<'a> {
                    + ::winnow::stream::StreamIsPartial
                    + ::winnow::stream::Location
                    + ::winnow::stream::Compare<char>
-                   + for<'a> ::winnow::stream::Compare<&'a str>,
-                <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr + AsRef<str> + std::fmt::Display,
+                   + for<'a> ::winnow::stream::Compare<&'a str>
+                   // Extra bounds required by some built-in parsers (like float)
+                   + ::winnow::stream::Compare<::winnow::ascii::Caseless<&'static str>>
+                   + ::winnow::stream::AsBStr,
+                <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr + AsRef<str> + std::fmt::Display + ::winnow::stream::ParseSlice<f64>,
+                <I as ::winnow::stream::Stream>::IterOffsets: Clone,
             {
                 use ::winnow::Parser;
                 use ::winnow::error::ContextError;
@@ -444,6 +448,18 @@ impl<'a> Codegen<'a> {
             "binary_digit1" => quote_spanned! {span=>
                 (ws, ::winnow::token::take_while(1.., |c| c == '0' || c == '1'))
                     .map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+            },
+            "float" => quote_spanned! {span=>
+                (ws, ::winnow::ascii::float::<_, f64, _>).map(|(_, f)| f)
+            },
+            "space0" => quote_spanned! {span=>
+                (ws, ::winnow::ascii::space0).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+            },
+            "space1" => quote_spanned! {span=>
+                (ws, ::winnow::ascii::space1).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+            },
+            "line_ending" => quote_spanned! {span=>
+                (ws, ::winnow::ascii::line_ending).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
             _ => {
                 if args.is_empty() {
