@@ -1,0 +1,2 @@
+[alias]
+ctest = "!cargo clippy --all-targets --all-features && cargo test"

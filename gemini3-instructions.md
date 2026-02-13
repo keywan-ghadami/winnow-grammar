@@ -2,19 +2,13 @@
 
 ## Mandatory Checks
 
-As final step, you must run the following commands to ensure code quality and correctness:
+As final step, you must run the following command to ensure code quality and correctness:
 
-1.  **Lint Code:**
+1.  **Lint and Test:**
     ```bash
-    cargo clippy --all-targets --all-features
+    cargo ctest
     ```
-    Ensure there are no warnings or errors.
-
-2.  **Run Tests:**
-    ```bash
-    cargo test
-    ```
-    All tests must pass.
+    Ensure there are no warnings, errors, and all tests pass.
 
 ## Documentation Updates
 
