@@ -403,6 +403,37 @@ impl<'a> Codegen<'a> {
                 ))
                 .map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
+            "char" => quote_spanned! {span=>
+                (ws, delimited(
+                    '\'',
+                    ::winnow::ascii::take_escaped(
+                        ::winnow::token::none_of(['\\', '\'']),
+                        '\\',
+                        ::winnow::token::one_of(['\\', '\''])
+                    ),
+                    '\''
+                ))
+                .map(|(_, s)| {
+                    let s: &str = AsRef::<str>::as_ref(&s);
+                    // Minimal char parsing logic; production use might need robust unescape
+                    if s.len() == 1 {
+                        s.chars().next().unwrap()
+                    } else if s.starts_with('\\') {
+                         match s {
+                            "\\n" => '\n',
+                            "\\r" => '\r',
+                            "\\t" => '\t',
+                            "\\\\" => '\\',
+                            "\\'" => '\'',
+                            "\\\"" => '"',
+                            "\\0" => '\0',
+                            _ => s.chars().next().unwrap_or(' ') // Fallback
+                         }
+                    } else {
+                        s.chars().next().unwrap_or(' ')
+                    }
+                })
+            },
             _ => {
                 if args.is_empty() {
                     quote_spanned! {span=> #rule_name }
