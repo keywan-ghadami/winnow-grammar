@@ -35,7 +35,7 @@
 33. Support `impl` blocks for grammar state.
 34. Add `@` binding for arbitrary expressions.
 35. Support regex-like repetition ranges.
-36. Add built-in `float` number parser.
+36. [DONE] Add built-in `float` number parser.
 37. [DONE] Add built-in `char` literal parser.
 38. [DONE] Add built-in `hex_digit` parser.
 39. [DONE] Add built-in `oct_digit` parser.
@@ -48,8 +48,8 @@
 46. Support `checkpoint` and `reset` manually.
 47. Bind to `winnow::token::any` combinator.
 48. Support `winnow::token::eof` for end check.
-49. Bind to `winnow::ascii::space0` parser.
-50. Bind to `winnow::ascii::line_ending` parser.
+49. [DONE] Bind to `winnow::ascii::space0` parser.
+50. [DONE] Bind to `winnow::ascii::line_ending` parser.
 51. Improve hygiene of generated rust code.
 52. Support custom whitespace parsers per rule.
 53. Generate `Visitor` trait for AST nodes.
