@@ -4,7 +4,7 @@ use winnow_grammar::grammar;
 
 grammar! {
     grammar Args {
-        rule main -> i32 =
+        pub rule main -> i32 =
             "start" v:value(10) -> { v }
 
         rule value(offset: i32) -> i32 =

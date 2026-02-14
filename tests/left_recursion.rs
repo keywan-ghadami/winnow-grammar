@@ -10,7 +10,7 @@ pub enum Expr {
 
 grammar! {
     grammar LeftRec {
-        rule expr -> Expr =
+        pub rule expr -> Expr =
             l:expr "+" r:term -> { Expr::Add(Box::new(l), Box::new(r)) }
           | t:term -> { t }
 

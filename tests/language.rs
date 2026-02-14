@@ -17,7 +17,7 @@ pub enum Expr {
 
 grammar! {
     grammar MiniLang {
-        rule stmt -> Stmt =
+        pub rule stmt -> Stmt =
             "let" name:ident "=" e:expr ";" -> { Stmt::Let(name, e) }
           | e:expr ";" -> { Stmt::Expr(e) }
 
@@ -30,7 +30,7 @@ grammar! {
           | i:ident -> { Expr::Var(i) }
           | "(" e:expr ")" -> { e }
 
-        rule spanned_term -> (Expr, std::ops::Range<usize>) =
+        pub rule spanned_term -> (Expr, std::ops::Range<usize>) =
             t:term @ s -> { (t, s) }
     }
 }
