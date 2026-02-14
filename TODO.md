@@ -2,14 +2,14 @@
 
 ## High Priority (Core Features & Correctness)
 
-1. Integrate `winnow::error::ContextError` for better reporting.
+1. [DONE] Integrate `winnow::error::ContextError` for better reporting.
 2. Optimize usages of the cut operator.
 3. Add `expect` combinator for clearer errors.
 4. Implement synchronization points for recovery (refine `recover`).
 5. Support user-defined error mapping functions.
 6. Support `not` negative lookahead pattern.
 7. Allow `where` clauses on grammar rules (for generics).
-8. Support rule visibility attributes like `pub`.
+8. [DONE] Support rule visibility attributes like `pub`.
 9. Map `winnow::stream::Location` to spans.
 10. Detect infinite recursion loops during compilation.
 11. Add diagnostics for grammar conflicts.
