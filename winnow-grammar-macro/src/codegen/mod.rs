@@ -315,7 +315,12 @@ impl<'a> Codegen<'a> {
         match binding {
             Some(name) => match pattern {
                 ModelPattern::SpanBinding(_, span_var, _) => quote_spanned! {span=>
+                    // with_span returns (Output, Range)
                     let (#name, #span_var) = #parser_expr.with_span().parse_next(input)?;
+                    // We need to convert Range to Span if possible, but LocatingSlice gives Range.
+                    // This is where "Map winnow::stream::Location to spans" task comes in.
+                    // For now, we assume user can handle Range, or we cast it if using LocatingSlice on &str.
+                    // winnow-grammar currently just returns the Range as the "span".
                 },
                 ModelPattern::Repeat(_, _) | ModelPattern::Plus(_, _) => quote_spanned! {span=>
                     let #name: Vec<_> = #parser_expr.parse_next(input)?;
