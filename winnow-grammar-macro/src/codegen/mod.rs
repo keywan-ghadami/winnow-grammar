@@ -122,8 +122,15 @@ impl<'a> Codegen<'a> {
             }
         };
 
+        // Check rule visibility
+        let vis = if rule.is_pub {
+            quote! { pub }
+        } else {
+            quote! {}
+        };
+
         quote_spanned! {span=>
-            pub fn #fn_name<I>(input: &mut I, #(#params),*) -> ::winnow::PResult<#ret_type, ::winnow::error::ContextError>
+            #vis fn #fn_name<I>(input: &mut I, #(#params),*) -> ::winnow::PResult<#ret_type, ::winnow::error::ContextError>
             where
                 I: ::winnow::stream::Stream<Token = char>
                    + ::winnow::stream::StreamIsPartial
