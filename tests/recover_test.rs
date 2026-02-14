@@ -7,7 +7,7 @@ pub struct Stmt;
 
 grammar! {
     grammar RecoveryTest {
-        rule stmt -> Option<Stmt> =
+        pub rule stmt -> Option<Stmt> =
             // If `parse_stmt` fails, skip until `;`
             // `s` will be `Option<Stmt>` (Some if success, None if recovered)
             s:recover(parse_stmt, ";") ";" -> { s }

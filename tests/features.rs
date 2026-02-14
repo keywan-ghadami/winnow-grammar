@@ -13,7 +13,7 @@ pub struct PlusList {
 
 grammar! {
     grammar TestPlus {
-        rule list -> PlusList =
+        pub rule list -> PlusList =
             items:uint+ -> { PlusList { items } }
     }
 }
@@ -50,7 +50,7 @@ pub enum GroupEnum {
 
 grammar! {
     grammar TestGroup {
-        rule main -> GroupEnum =
+        pub rule main -> GroupEnum =
             "a" n:uint -> { GroupEnum::A(n) }
           | "b" n:uint -> { GroupEnum::B(n) }
     }
@@ -80,7 +80,7 @@ pub struct Builtins {
 
 grammar! {
     grammar TestBuiltins {
-        rule main -> Builtins =
+        pub rule main -> Builtins =
             s:string i:uint id:ident -> { Builtins { s, i, id } }
     }
 }
@@ -107,7 +107,7 @@ grammar! {
     grammar TestUse {
         use winnow::token::any;
         use winnow::stream::AsChar;
-        rule main -> char = c:any -> { c.as_char() }
+        pub rule main -> char = c:any -> { c.as_char() }
     }
 }
 

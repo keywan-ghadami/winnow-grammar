@@ -4,7 +4,7 @@ use winnow_grammar::grammar;
 
 grammar! {
     grammar OctParser {
-        rule test_oct -> String =
+        pub rule test_oct -> String =
             o:oct_digit1 -> { o }
     }
 }
