@@ -4,7 +4,7 @@ use winnow_grammar::grammar;
 
 grammar! {
     grammar FloatParser {
-        rule test_float -> f64 =
+        pub rule test_float -> f64 =
             f:float -> { f }
     }
 }

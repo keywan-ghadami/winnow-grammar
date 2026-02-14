@@ -45,7 +45,7 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 // Whitespace handling (similar to syn)
                 #[allow(dead_code)]
-                fn ws<I>(input: &mut I) -> ::winnow::PResult<(), ::winnow::error::ContextError>
+                fn ws<I>(input: &mut I) -> ::winnow::ModalResult<()>
                 where
                     I: ::winnow::stream::Stream<Token = char> + ::winnow::stream::StreamIsPartial + for<'a> ::winnow::stream::Compare<&'a str>,
                     <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr,
@@ -130,7 +130,7 @@ impl<'a> Codegen<'a> {
         };
 
         quote_spanned! {span=>
-            #vis fn #fn_name<I>(input: &mut I, #(#params),*) -> ::winnow::PResult<#ret_type, ::winnow::error::ContextError>
+            #vis fn #fn_name<I>(input: &mut I, #(#params),*) -> ::winnow::ModalResult<#ret_type>
             where
                 I: ::winnow::stream::Stream<Token = char>
                    + ::winnow::stream::StreamIsPartial
@@ -149,7 +149,7 @@ impl<'a> Codegen<'a> {
                 use ::winnow::Parser;
                 use ::winnow::error::ContextError;
 
-                (|input: &mut I| -> ::winnow::PResult<#ret_type, ::winnow::error::ContextError> {
+                (|input: &mut I| -> ::winnow::ModalResult<#ret_type> {
                     #body
                 })
                 .context(::winnow::error::StrContext::Label(#rule_name_str))
@@ -168,7 +168,7 @@ impl<'a> Codegen<'a> {
             let steps = self.generate_sequence_steps(&v.pattern, false);
             let action = &v.action;
             quote_spanned! {span=>
-                |input: &mut I| -> ::winnow::PResult<#ret_type, ::winnow::error::ContextError> {
+                |input: &mut I| -> ::winnow::ModalResult<#ret_type> {
                     #steps
                     Ok(#action)
                 }
@@ -228,7 +228,7 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 {
                     let checkpoint = ::winnow::stream::Stream::checkpoint(input);
-                    let attempt = (|| -> ::winnow::PResult<#ret_type, ::winnow::error::ContextError> {
+                    let attempt = (|| -> ::winnow::ModalResult<#ret_type> {
                         #steps
                         #bind_lhs
                         Ok(#action)

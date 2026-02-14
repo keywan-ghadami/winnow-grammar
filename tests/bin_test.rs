@@ -4,7 +4,7 @@ use winnow_grammar::grammar;
 
 grammar! {
     grammar BinParser {
-        rule test_bin -> String =
+        pub rule test_bin -> String =
             b:binary_digit1 -> { b }
     }
 }

@@ -4,11 +4,12 @@ use winnow_grammar::grammar;
 
 grammar! {
     grammar LineEndingParser {
-        use winnow::combinator::empty;
-        // Override ws to do nothing using `empty` combinator to avoid recursion loop
-        // (literals like "" would implicitly call ws)
+        // We override ws to do nothing so we can test whitespace sensitive parsers
+        // Using "custom_ws" to avoid conflict if any, but rule ws -> () is the standard override.
+        // We need to make sure we don't recurse infinitely if ws calls ws.
+        // Empty string literal is a parser that consumes nothing and succeeds.
         rule ws -> () = empty -> { () }
-        rule test_line_ending -> String =
+        pub rule test_line_ending -> String =
             s:line_ending -> { s }
     }
 }

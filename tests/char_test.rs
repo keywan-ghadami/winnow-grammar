@@ -4,7 +4,7 @@ use winnow_grammar::grammar;
 
 grammar! {
     grammar CharParser {
-        rule test_char -> char =
+        pub rule test_char -> char =
             c:char -> { c }
     }
 }

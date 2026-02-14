@@ -8,9 +8,9 @@ grammar! {
         use winnow::combinator::empty;
         rule ws -> () = empty -> { () }
 
-        rule test_space0 -> String =
+        pub rule test_space0 -> String =
             s:space0 -> { s }
-        rule test_space1 -> String =
+        pub rule test_space1 -> String =
             s:space1 -> { s }
     }
 }

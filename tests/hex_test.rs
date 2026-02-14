@@ -4,7 +4,7 @@ use winnow_grammar::grammar;
 
 grammar! {
     grammar HexParser {
-        rule test_hex -> String =
+        pub rule test_hex -> String =
             h:hex_digit1 -> { h }
     }
 }
