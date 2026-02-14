@@ -8,3 +8,6 @@ FILES=$(git diff --name-only --cached | grep '\.rs$')
 if [ -n "$FILES" ]; then
     echo "$FILES" | xargs git add
 fi
+
+# Ensure no clippy warnings are present
+cargo clippy -- -D warnings
