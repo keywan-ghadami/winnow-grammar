@@ -2,8 +2,8 @@
 
 ## High Priority (Core Features & Correctness)
 
-1. Add support for user-defined custom error types.
-2. Integrate `winnow::error::ContextError` for better reporting.
+1. [BLOCKED: syn-grammar support needed] Add support for user-defined custom error types.
+2. [DONE] Integrate `winnow::error::ContextError` for better reporting.
 3. Optimize usages of the cut operator.
 4. Add `expect` combinator for clearer errors.
 5. Implement synchronization points for recovery (refine `recover`).
