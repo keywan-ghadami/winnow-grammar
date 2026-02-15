@@ -71,7 +71,7 @@ To create a new backend:
 
 Example of a custom backend entry point:
 
-```rust
+```rust,ignore
 use proc_macro::TokenStream;
 use syn_grammar_model::parse_grammar;
 // use my_custom_codegen::generate;

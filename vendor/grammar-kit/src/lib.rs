@@ -4,8 +4,6 @@
 use proc_macro2::Span;
 use std::collections::HashSet;
 #[cfg(feature = "syn")]
-use syn::ext::IdentExt;
-#[cfg(feature = "syn")]
 use syn::parse::discouraged::Speculative;
 #[cfg(feature = "syn")]
 use syn::parse::ParseStream;
@@ -75,6 +73,8 @@ pub struct ParseContext {
     best_error: Option<ErrorState>,
     pub scopes: ScopeStack,
     rule_stack: Vec<String>,
+    #[cfg(feature = "syn")]
+    pub last_span: Option<Span>,
 }
 
 #[cfg(feature = "rt")]
@@ -86,6 +86,8 @@ impl ParseContext {
             best_error: None,
             scopes: ScopeStack::new(),
             rule_stack: Vec::new(),
+            #[cfg(feature = "syn")]
+            last_span: None,
         }
     }
 
@@ -137,6 +139,24 @@ impl ParseContext {
         self.best_error.take().map(|s| s.err)
     }
 
+    // --- Span Tracking ---
+
+    #[cfg(feature = "syn")]
+    pub fn record_span(&mut self, span: Span) {
+        self.last_span = Some(span);
+    }
+
+    #[cfg(feature = "syn")]
+    pub fn check_whitespace(&self, next_span: Span) -> bool {
+        if let Some(last) = self.last_span {
+            // Check if they are NOT adjacent (end != start)
+            last.end() != next_span.start()
+        } else {
+            // No previous token? Treat as valid (start of file)
+            true
+        }
+    }
+
     // --- Symbol Table Methods ---
 
     pub fn enter_scope(&mut self) {
@@ -184,9 +204,10 @@ where
     let was_fatal = ctx.check_fatal();
     ctx.set_fatal(false);
 
-    // Snapshot symbol table and rule stack
+    // Snapshot symbol table, rule stack, and last_span
     let scopes_snapshot = ctx.scopes.clone();
     let rule_stack_snapshot = ctx.rule_stack.clone();
+    let last_span_snapshot = ctx.last_span;
 
     let start_span = input.span();
     let fork = input.fork();
@@ -200,6 +221,7 @@ where
         Ok(val) => {
             input.advance_to(&fork);
             ctx.set_fatal(was_fatal);
+            // We KEEP the last_span updated by the successful attempt
             Ok(Some(val))
         }
         Err(e) => {
@@ -207,6 +229,7 @@ where
                 // Restore state
                 ctx.scopes = scopes_snapshot;
                 ctx.rule_stack = rule_stack_snapshot;
+                ctx.last_span = last_span_snapshot;
 
                 ctx.set_fatal(true);
                 Err(e)
@@ -218,10 +241,73 @@ where
                 // Restore state
                 ctx.scopes = scopes_snapshot;
                 ctx.rule_stack = rule_stack_snapshot;
+                ctx.last_span = last_span_snapshot;
 
                 Ok(None)
             }
         }
+    }
+}
+
+/// Executes a parser on a fork, returning the result but NEVER advancing the input.
+/// Restores ParseContext state (scopes, last_span) to what it was before.
+#[cfg(all(feature = "rt", feature = "syn"))]
+#[inline]
+pub fn peek<T, F>(input: ParseStream, ctx: &mut ParseContext, parser: F) -> Result<T>
+where
+    F: FnOnce(ParseStream, &mut ParseContext) -> Result<T>,
+{
+    let fork = input.fork();
+
+    // Snapshot state
+    let scopes_snapshot = ctx.scopes.clone();
+    let rule_stack_snapshot = ctx.rule_stack.clone();
+    let last_span_snapshot = ctx.last_span;
+
+    let res = parser(&fork, ctx);
+
+    // Always restore state because we are peeking (state side effects should not persist)
+    ctx.scopes = scopes_snapshot;
+    ctx.rule_stack = rule_stack_snapshot;
+    ctx.last_span = last_span_snapshot;
+
+    res
+}
+
+/// Executes a parser on a fork.
+/// If it SUCCEEDS, returns Err("unexpected match").
+/// If it FAILS, returns Ok(()).
+/// Never advances input. Restores state.
+#[cfg(all(feature = "rt", feature = "syn"))]
+#[inline]
+pub fn not_check<T, F>(input: ParseStream, ctx: &mut ParseContext, parser: F) -> Result<()>
+where
+    F: FnOnce(ParseStream, &mut ParseContext) -> Result<T>,
+{
+    let fork = input.fork();
+
+    // Snapshot state
+    let scopes_snapshot = ctx.scopes.clone();
+    let rule_stack_snapshot = ctx.rule_stack.clone();
+    let last_span_snapshot = ctx.last_span;
+
+    // Disable fatal errors for the check to allow backtracking/failure
+    let was_fatal = ctx.check_fatal();
+    ctx.set_fatal(false);
+
+    let res = parser(&fork, ctx);
+
+    // Restore fatal flag
+    ctx.set_fatal(was_fatal);
+
+    // Restore state
+    ctx.scopes = scopes_snapshot;
+    ctx.rule_stack = rule_stack_snapshot;
+    ctx.last_span = last_span_snapshot;
+
+    match res {
+        Ok(_) => Err(syn::Error::new(input.span(), "unexpected match")),
+        Err(_) => Ok(()),
     }
 }
 
@@ -242,6 +328,7 @@ where
     // Snapshot symbol table and rule stack
     let scopes_snapshot = ctx.scopes.clone();
     let rule_stack_snapshot = ctx.rule_stack.clone();
+    let last_span_snapshot = ctx.last_span;
 
     let start_span = input.span();
     let fork = input.fork();
@@ -254,6 +341,7 @@ where
     match res {
         Ok(val) => {
             input.advance_to(&fork);
+            // Keep last_span
             Ok(Some(val))
         }
         Err(e) => {
@@ -263,6 +351,7 @@ where
             // Restore state
             ctx.scopes = scopes_snapshot;
             ctx.rule_stack = rule_stack_snapshot;
+            ctx.last_span = last_span_snapshot;
 
             Ok(None)
         }
@@ -274,7 +363,7 @@ where
 #[cfg(all(feature = "rt", feature = "syn"))]
 #[inline]
 pub fn parse_ident(input: ParseStream) -> Result<syn::Ident> {
-    input.call(syn::Ident::parse_any)
+    input.parse()
 }
 
 #[cfg(all(feature = "rt", feature = "syn"))]

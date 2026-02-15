@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "grammar-kit"
 version = "0.7.0"
-source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#dbcbd53b17032965d5def20926c897966f3f929d"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#49058cf94d10b050b651c8369def628061038a12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -38,9 +38,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.114"
+version = "2.0.115"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4d107df263a3013ef9b1879b0df87d706ff80f65a86ea879bd9c31f9b307c2a"
+checksum = "6e614ed320ac28113fa64972c4262d5dbc89deacdfd00c34a3e4cea073243c12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -50,7 +50,7 @@ dependencies = [
 [[package]]
 name = "syn-grammar"
 version = "0.7.0"
-source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#dbcbd53b17032965d5def20926c897966f3f929d"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#49058cf94d10b050b651c8369def628061038a12"
 dependencies = [
  "grammar-kit",
  "proc-macro2",
@@ -63,7 +63,7 @@ dependencies = [
 [[package]]
 name = "syn-grammar-macros"
 version = "0.7.0"
-source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#dbcbd53b17032965d5def20926c897966f3f929d"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#49058cf94d10b050b651c8369def628061038a12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -74,7 +74,7 @@ dependencies = [
 [[package]]
 name = "syn-grammar-model"
 version = "0.7.0"
-source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#dbcbd53b17032965d5def20926c897966f3f929d"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#49058cf94d10b050b651c8369def628061038a12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -100,7 +100,11 @@ dependencies = [
 name = "winnow-grammar"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
  "syn-grammar",
+ "syn-grammar-model",
  "winnow",
  "winnow-grammar-macro",
 ]

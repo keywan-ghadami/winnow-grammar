@@ -297,6 +297,13 @@ impl<'a> Codegen<'a> {
             ModelPattern::Recover { .. } => {
                 // Recover is now supported below
             }
+            ModelPattern::Peek(_, _) => {
+                // Peek should not produce bindings that are used later, but if it does, they are local.
+                // We just run it as a parser expression.
+            }
+            ModelPattern::Not(_, _) => {
+                // Not should not produce bindings.
+            }
             _ => {}
         }
 
@@ -338,6 +345,9 @@ impl<'a> Codegen<'a> {
                 },
                 ModelPattern::Repeat(_, _) | ModelPattern::Plus(_, _) => quote_spanned! {span=>
                     let _: Vec<_> = #parser_expr.parse_next(input)?;
+                },
+                ModelPattern::Peek(_, _) | ModelPattern::Not(_, _) => quote_spanned! {span=>
+                    let _ = #parser_expr.parse_next(input)?;
                 },
                 _ => quote_spanned! {span=>
                     let _ = #parser_expr.parse_next(input)?;
@@ -444,6 +454,15 @@ impl<'a> Codegen<'a> {
                     '\''
                 ))
                 .map(|(_, c)| c)
+            },
+            "any" => quote_spanned! {span=>
+                (ws, ::winnow::token::any).map(|(_, c)| c)
+            },
+            "alpha1" => quote_spanned! {span=>
+                (ws, ::winnow::ascii::alpha1).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+            },
+            "digit1" => quote_spanned! {span=>
+                (ws, ::winnow::ascii::digit1).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
             "hex_digit0" => quote_spanned! {span=>
                 (ws, ::winnow::ascii::hex_digit0).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
@@ -567,6 +586,14 @@ impl<'a> Codegen<'a> {
                         ).map(|_| None)
                     ))
                 }
+            }
+            ModelPattern::Peek(inner, _) => {
+                let p = self.generate_parser_expr(inner);
+                quote_spanned! {span=> ::winnow::combinator::peek(#p) }
+            }
+            ModelPattern::Not(inner, _) => {
+                let p = self.generate_parser_expr(inner);
+                quote_spanned! {span=> ::winnow::combinator::not(#p) }
             }
         }
     }

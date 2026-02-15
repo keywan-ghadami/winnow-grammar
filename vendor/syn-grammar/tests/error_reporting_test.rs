@@ -52,22 +52,16 @@ fn test_deepest_error_wins() {
     // 'short' matches "a", fails at "b" (Expected "d").
     // 'long' went further. We expect "expected `c`".
 
-    let err = distinct::parse_main
+    distinct::parse_main
         .parse_str("a b x")
         .test()
-        .assert_failure();
+        .assert_failure_contains("expected `c`");
 
-    let msg = err.to_string();
-    assert!(
-        msg.contains("expected `c`"),
-        "Error should mention expected 'c', but got: '{}'",
-        msg
-    );
-    assert!(
-        !msg.contains("expected `d`"),
-        "Error should NOT mention expected 'd', but got: '{}'",
-        msg
-    );
+    // Also ensure it does not contain expected `d`
+    distinct::parse_main
+        .parse_str("a b x")
+        .test()
+        .assert_failure_not_contains("expected `d`");
 }
 
 #[test]
@@ -91,17 +85,10 @@ fn test_deep_vs_shallow() {
     // shallow: fails at "x" (Expected "z"). (Shallow error)
     // We expect "Expected `y`".
 
-    let err = priority::parse_main
+    priority::parse_main
         .parse_str("x a")
         .test()
-        .assert_failure();
-
-    let msg = err.to_string();
-    assert!(
-        msg.contains("y"),
-        "Should report deep error (expected y), got: '{}'",
-        msg
-    );
+        .assert_failure_contains("y");
 }
 
 #[test]
@@ -125,18 +112,11 @@ fn test_rule_name_in_error_message() {
     // 3. inner returns Err.
     // 4. main attempts inner: fails. Records "Error in rule 'main': ...".
     //
-    // The errors from (1) and (2) are deeper (at "wrong") than the error from (4) (at "start").
+    // The errors from (1) and (2) are deeper at "wrong" than the error from (4) at "start".
     // So the final error should be one of the inner ones, containing "Error in rule 'inner'".
 
-    let err = rule_context::parse_main
+    rule_context::parse_main
         .parse_str("start wrong")
         .test()
-        .assert_failure();
-
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Error in rule 'inner'"),
-        "Expected rule name 'inner' in error, got: {}",
-        msg
-    );
+        .assert_failure_contains("Error in rule 'inner'");
 }

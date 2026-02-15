@@ -19,42 +19,15 @@ pub mod model;
 pub mod parser;
 pub mod validator;
 
-pub const SYN_BUILTINS: &[&str] = &[
-    "ident",
-    "integer",
-    "string",
-    "rust_type",
-    "rust_block",
-    "lit_str",
-    "lit_int",
-    "lit_char",
-    "lit_bool",
-    "lit_float",
-    "spanned_int_lit",
-    "spanned_string_lit",
-    "spanned_float_lit",
-    "spanned_bool_lit",
-    "spanned_char_lit",
-    "outer_attrs",
-];
+pub use model::{Backend, BuiltIn};
+pub use proc_macro2::Span;
 
 /// Reusable pipeline: Parses, transforms, and validates the grammar.
 ///
 /// This encapsulates the standard 3-step process used by all backends.
 ///
-/// This function uses the default built-ins for `syn-grammar`.
-/// If you are building a custom backend (e.g. `winnow-grammar`), use `parse_grammar_with_builtins` instead.
-pub fn parse_grammar(input: TokenStream) -> Result<model::GrammarDefinition> {
-    parse_grammar_with_builtins(input, SYN_BUILTINS)
-}
-
-/// Reusable pipeline with custom built-ins.
-///
-/// Use this if your backend supports a different set of built-in rules.
-pub fn parse_grammar_with_builtins(
-    input: TokenStream,
-    valid_builtins: &[&str],
-) -> Result<model::GrammarDefinition> {
+/// This function uses the provided `Backend` to validate built-ins.
+pub fn parse_grammar<B: Backend>(input: TokenStream) -> Result<model::GrammarDefinition> {
     // 1. Parsing: From TokenStream to syntactic AST
     let p_ast: parser::GrammarDefinition = syn::parse2(input)?;
 
@@ -62,7 +35,7 @@ pub fn parse_grammar_with_builtins(
     let m_ast: model::GrammarDefinition = p_ast.into();
 
     // 3. Validation: Check for semantic errors
-    validator::validate(&m_ast, valid_builtins)?;
+    validator::validate::<B>(&m_ast)?;
 
     Ok(m_ast)
 }

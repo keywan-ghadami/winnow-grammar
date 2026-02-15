@@ -77,7 +77,7 @@ pub fn generate_rule(rule: &Rule, custom_keywords: &HashSet<String>) -> Result<T
 
         quote! {
             let mut lhs = {
-                let base_parser = |input: ParseStream, ctx: &mut rt::ParseContext| -> Result<#ret_type> {
+                let base_parser = |mut input: ParseStream, ctx: &mut rt::ParseContext| -> Result<#ret_type> {
                     #base_logic
                 };
                 base_parser(input, ctx)?
@@ -109,7 +109,7 @@ pub fn generate_rule(rule: &Rule, custom_keywords: &HashSet<String>) -> Result<T
 
         #[doc(hidden)]
         #(#impl_attrs)*
-        pub fn #impl_name(input: ParseStream, ctx: &mut rt::ParseContext #(#params)*) -> Result<#ret_type> {
+        pub fn #impl_name(mut input: ParseStream, ctx: &mut rt::ParseContext #(#params)*) -> Result<#ret_type> {
             ctx.enter_rule(stringify!(#name));
             let res = (|| -> syn::Result<#ret_type> {
                 #body
@@ -149,7 +149,7 @@ fn generate_recursive_loop_body(
                     if input.peek(#token_code) {
                         let _start_cursor = input.cursor();
                         // Pass ctx to attempt
-                        if let Some(new_val) = rt::attempt(input, ctx, |input, ctx| {
+                        if let Some(new_val) = rt::attempt(input, ctx, |mut input, ctx| {
                             #bind_stmt
                             #logic
                         })? {
@@ -166,7 +166,7 @@ fn generate_recursive_loop_body(
                 Ok(quote! {
                     let _start_cursor = input.cursor();
                     // Pass ctx to attempt
-                    if let Some(new_val) = rt::attempt(input, ctx, |input, ctx| {
+                    if let Some(new_val) = rt::attempt(input, ctx, |mut input, ctx| {
                         #bind_stmt
                         #logic
                     })? {
@@ -264,7 +264,7 @@ pub fn generate_variants_internal(
                 } else {
                     quote! {
                         // Pass ctx to attempt
-                        let pre_result = rt::attempt(input, ctx, |input, ctx| {
+                        let pre_result = rt::attempt(input, ctx, |mut input, ctx| {
                             #pre_logic
                             Ok(( #(#pre_bindings),* ))
                         })?;
@@ -321,7 +321,7 @@ pub fn generate_variants_internal(
                     Ok(quote! {
                         if input.peek(#token_code) {
                             // Pass ctx to attempt
-                            if let Some(res) = rt::attempt(input, ctx, |input, ctx| { #logic })? {
+                            if let Some(res) = rt::attempt(input, ctx, |mut input, ctx| { #logic })? {
                                 return Ok(res);
                             }
                         }
@@ -329,7 +329,7 @@ pub fn generate_variants_internal(
                 } else {
                     Ok(quote! {
                         // Pass ctx to attempt
-                        if let Some(res) = rt::attempt(input, ctx, |input, ctx| { #logic })? {
+                        if let Some(res) = rt::attempt(input, ctx, |mut input, ctx| { #logic })? {
                             return Ok(res);
                         }
                     })

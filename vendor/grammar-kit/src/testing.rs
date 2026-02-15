@@ -44,11 +44,33 @@ impl<T: Debug, E: Display + Debug + 'static> TestResult<T, E> {
         format_error_impl(err, self.source.as_deref())
     }
 
+    /// Prints the result to stdout for debugging purposes.
+    /// Useful when running tests with `-- --nocapture`.
+    pub fn inspect(self) -> Self {
+        let ctx = self.format_context();
+        match &self.inner {
+            Ok(val) => {
+                println!("\n🔎 INSPECT SUCCESS: {}\nValue: {:?}\n", ctx, val);
+            }
+            Err(e) => {
+                let msg = self.format_err(e);
+                println!(
+                    "\n🔎 INSPECT FAILURE: {}\nMessage: {}\nDebug:   {:?}\n",
+                    ctx, msg, e
+                );
+            }
+        }
+        self
+    }
+
     // 1. Asserts success and returns the value.
     pub fn assert_success(self) -> T {
         let ctx = self.format_context();
         match self.inner {
-            Ok(val) => val,
+            Ok(val) => {
+                println!("ℹ️  Asserting success.\n   Actual:   {:?}", val);
+                val
+            }
             Err(ref e) => {
                 let msg = self.format_err(e);
                 panic!(
@@ -67,7 +89,11 @@ impl<T: Debug, E: Display + Debug + 'static> TestResult<T, E> {
         Exp: Debug,
     {
         let ctx = self.format_context();
+        // This will print "Asserting success. Actual: ..."
         let val = self.assert_success();
+
+        println!("ℹ️  Checking equality.\n   Expected: {:?}", expected);
+
         if val != expected {
             panic!(
                 "\n🔴 TEST FAILED (Value Mismatch):{}\nExpected: {:?}\nGot:      {:?}\n",
@@ -83,7 +109,9 @@ impl<T: Debug, E: Display + Debug + 'static> TestResult<T, E> {
     where
         F: FnOnce(&T),
     {
+        // This will print "Asserting success. Actual: ..."
         let val = self.assert_success();
+        println!("ℹ️  Asserting success with closure.");
         f(&val);
         val
     }
@@ -92,8 +120,15 @@ impl<T: Debug, E: Display + Debug + 'static> TestResult<T, E> {
     // Useful for syn types where PartialEq is often missing or complicated by Spans.
     pub fn assert_success_debug(self, expected_debug: &str) -> T {
         let ctx = self.format_context();
+        // This will print "Asserting success. Actual: ..."
         let val = self.assert_success();
         let actual_debug = format!("{:?}", val);
+
+        println!(
+            "ℹ️  Checking debug representation.\n   Expected: {:?}",
+            expected_debug
+        );
+
         if actual_debug != expected_debug {
             panic!(
                 "\n🔴 TEST FAILED (Debug Mismatch):{}\nExpected: {:?}\nGot:      {:?}\n",
@@ -113,7 +148,10 @@ impl<T: Debug, E: Display + Debug + 'static> TestResult<T, E> {
                     ctx, val
                 );
             }
-            Err(e) => e,
+            Err(e) => {
+                println!("ℹ️  Asserting failure.\n   Error:    {:?}", e);
+                e
+            }
         }
     }
 
@@ -121,12 +159,20 @@ impl<T: Debug, E: Display + Debug + 'static> TestResult<T, E> {
     pub fn assert_failure_contains(self, expected_msg_part: &str) {
         let ctx = self.format_context();
         let source = self.source.clone();
+
+        // This will print "Asserting failure. Error: ..."
         let err = self.assert_failure();
         let actual_msg = err.to_string();
+
+        println!(
+            "ℹ️  Checking error message contains {:?}.\n   Actual message: {:?}",
+            expected_msg_part, actual_msg
+        );
+
         if !actual_msg.contains(expected_msg_part) {
             let formatted = format_error_impl(&err, source.as_deref());
             panic!(
-                "\n🔴 TEST FAILED (Error Message Mismatch):{}\nExpected part: {:?}\nActual msg:    {:?}\nError Debug:   {:?}\nFormatted:\n{}\n", 
+                "\n🔴 TEST FAILED (Error Message Mismatch):{}\nExpected part: {:?}\nActual msg:    {:?}\nError Debug:   {:?}\nFormatted:   \n{}\n", 
                 ctx, expected_msg_part, actual_msg, err, formatted
             );
         }
@@ -138,8 +184,15 @@ impl<T: Debug, E: Display + Debug + 'static> TestResult<T, E> {
         T: Display,
     {
         let ctx = self.format_context();
+        // This will print "Asserting success. Actual: ..."
         let val = self.assert_success();
         let val_str = val.to_string();
+
+        println!(
+            "ℹ️  Checking success string contains {:?}.\n   Actual string: {:?}",
+            expected_part, val_str
+        );
+
         if !val_str.contains(expected_part) {
             panic!(
                 "\n🔴 TEST FAILED (Content Mismatch):{}\nExpected to contain: {:?}\nGot:                 {:?}\n",
@@ -147,6 +200,29 @@ impl<T: Debug, E: Display + Debug + 'static> TestResult<T, E> {
             );
         }
         val
+    }
+
+    // 8. Asserts failure AND checks if the message DOES NOT contain a specific text.
+    pub fn assert_failure_not_contains(self, unexpected_part: &str) {
+        let ctx = self.format_context();
+        let source = self.source.clone();
+
+        // This will print "Asserting failure. Error: ..."
+        let err = self.assert_failure();
+        let actual_msg = err.to_string();
+
+        println!(
+            "ℹ️  Checking error message NOT contains {:?}.\n   Actual message: {:?}",
+            unexpected_part, actual_msg
+        );
+
+        if actual_msg.contains(unexpected_part) {
+            let formatted = format_error_impl(&err, source.as_deref());
+            panic!(
+                "\n🔴 TEST FAILED (Unexpected Error Message Content):{}\nUnexpected part: {:?}\nActual msg:      {:?}\nError Debug:     {:?}\nFormatted:\n{}\n", 
+                ctx, unexpected_part, actual_msg, err, formatted
+            );
+        }
     }
 }
 

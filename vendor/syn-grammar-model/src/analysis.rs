@@ -88,6 +88,9 @@ fn collect_from_patterns(patterns: &[ModelPattern], kws: &mut HashSet<String>) {
                 collect_from_patterns(std::slice::from_ref(body), kws);
                 collect_from_patterns(std::slice::from_ref(sync), kws);
             }
+            ModelPattern::Peek(i, _) | ModelPattern::Not(i, _) => {
+                collect_from_patterns(std::slice::from_ref(i), kws)
+            }
             _ => {}
         }
     }
@@ -100,7 +103,9 @@ pub fn collect_bindings(patterns: &[ModelPattern]) -> Vec<Ident> {
             ModelPattern::RuleCall {
                 binding: Some(b), ..
             } => bindings.push(b.clone()),
-            ModelPattern::Repeat(inner, _) | ModelPattern::Plus(inner, _) => {
+            ModelPattern::Repeat(inner, _)
+            | ModelPattern::Plus(inner, _)
+            | ModelPattern::Optional(inner, _) => {
                 bindings.extend(collect_bindings(std::slice::from_ref(inner)));
             }
             ModelPattern::Parenthesized(s, _)
@@ -118,6 +123,17 @@ pub fn collect_bindings(patterns: &[ModelPattern]) -> Vec<Ident> {
                 } else {
                     bindings.extend(collect_bindings(std::slice::from_ref(body)));
                 }
+            }
+            ModelPattern::Peek(inner, _) => {
+                bindings.extend(collect_bindings(std::slice::from_ref(inner)));
+            }
+            ModelPattern::Group(alts, _) => {
+                for alt in alts {
+                    bindings.extend(collect_bindings(alt));
+                }
+            }
+            ModelPattern::Not(_, _) => {
+                // Not(...) bindings are ignored/dropped because it only succeeds if inner fails.
             }
             _ => {}
         }
@@ -262,6 +278,8 @@ pub fn get_simple_peek(
                 Ok(None)
             }
         }
+        ModelPattern::Peek(inner, _) => get_simple_peek(inner, kws),
+        ModelPattern::Not(_, _) => Ok(None),
         _ => Ok(None),
     }
 }
@@ -291,6 +309,8 @@ pub fn get_peek_token_string(patterns: &[ModelPattern]) -> Option<String> {
                 None
             }
         }
+        Some(ModelPattern::Peek(inner, _)) => get_peek_token_string(std::slice::from_ref(&**inner)),
+        Some(ModelPattern::Not(_, _)) => None,
         _ => None,
     }
 }
@@ -313,6 +333,8 @@ pub fn is_nullable(pattern: &ModelPattern) -> bool {
         ModelPattern::Plus(inner, _) => is_nullable(inner),
         ModelPattern::SpanBinding(inner, _, _) => is_nullable(inner),
         ModelPattern::Recover { .. } => true,
+        ModelPattern::Peek(_, _) => true,
+        ModelPattern::Not(_, _) => true,
     }
 }
 

@@ -2,99 +2,104 @@ use syn::parse::Parser;
 use syn_grammar::grammar;
 use syn_grammar::testing::Testable;
 
+#[derive(Debug, PartialEq)]
+pub struct Stmt;
+
 #[test]
 fn test_failure_recovery() {
     grammar! {
-        grammar recovery {
-            // We parse a list of statements.
-            // If a statement fails, we recover at the semicolon.
-            rule main -> Vec<Option<String>> =
-                stmts:stmt_wrapper* -> { stmts }
+        grammar recovery_simple {
+            use super::Stmt;
 
-            // recover() skips until ";", but does not consume it.
-            // We must consume ";" explicitly.
-            rule stmt_wrapper -> Option<String> =
-                s:recover(stmt, ";") ";" -> { s }
+            // If `parse_stmt` fails, skip until `;`.
+            // Returns Option<Stmt>
+            pub rule block -> Vec<Option<Stmt>> =
+                { stmts:stmt_recovered* } -> { stmts }
 
-            rule stmt -> String =
-                "let" name:ident -> { format!("let {}", name) }
+            rule stmt_recovered -> Option<Stmt> =
+                s:recover(parse_stmt, ";") ";" -> { s }
+
+            rule parse_stmt -> Stmt =
+                "let" "x" -> { Stmt }
         }
     }
 
-    // Input:
-    // 1. "let a;" -> Valid
-    // 2. "let 123;" -> Invalid (123 is not ident), should recover at ;
-    // 3. "let b;" -> Valid
-    let input = "let a; let 123; let b;";
-
-    let res = recovery::parse_main
-        .parse_str(input)
+    // "let x;" -> Success
+    recovery_simple::parse_block
+        .parse_str("{ let x; }")
         .test()
-        .assert_success();
+        .assert_success_is(vec![Some(Stmt)]);
 
-    assert_eq!(res.len(), 3);
-    assert_eq!(res[0], Some("let a".to_string()));
-    assert_eq!(res[1], None); // Recovered!
-    assert_eq!(res[2], Some("let b".to_string()));
+    // "let y;" -> Fail inside stmt, recover at ;
+    recovery_simple::parse_block
+        .parse_str("{ let y; }")
+        .test()
+        .assert_success_is(vec![None]);
+
+    // "garbage;" -> Fail inside stmt, recover at ;
+    recovery_simple::parse_block
+        .parse_str("{ garbage; }")
+        .test()
+        .assert_success_is(vec![None]);
+
+    // "let x; garbage; let x;" -> Success, Fail, Success
+    recovery_simple::parse_block
+        .parse_str("{ let x; garbage; let x; }")
+        .test()
+        .assert_success_is(vec![Some(Stmt), None, Some(Stmt)]);
 }
 
 #[test]
 fn test_recovery_complex_sync() {
     grammar! {
         grammar recovery_complex {
-            rule main -> Vec<Option<i32>> =
+            pub rule main -> Vec<Option<i32>> =
                 items:item* -> { items }
 
-            // Recover until we see "end"
-            // Note: The sync pattern "end" is NOT consumed by recover logic.
-            // We must consume it explicitly.
             rule item -> Option<i32> =
-                "group" i:recover(inner, "end") "end" -> { i }
+                // Recover until "next" keyword
+                v:recover(val, "next") "next" -> { v }
 
-            rule inner -> i32 =
-                "val" i:integer -> { i }
+            rule val -> i32 =
+                "val" i:i32 -> { i }
         }
     }
 
-    // 1. group val 10 end -> OK
-    // 2. group val x end  -> Error (x is not int), skip to 'end', return None
-    // 3. group val 20 end -> OK
-    let input = "group val 10 end group val x end group val 20 end";
-
-    let res = recovery_complex::parse_main
-        .parse_str(input)
+    // "val 42 next" -> OK
+    // "val broken next" -> Fail val, skip to next, return None
+    recovery_complex::parse_main
+        .parse_str("val 42 next val broken next")
         .test()
-        .assert_success();
-
-    assert_eq!(res, vec![Some(10), None, Some(20)]);
+        .assert_success_is(vec![Some(42), None]);
 }
 
 #[test]
 fn test_attempt_recover_behavior() {
+    // This tests that `recover` uses `attempt_recover` which does NOT backtrack on success,
+    // but DOES backtrack on failure to allow re-synchronization.
     grammar! {
         grammar recover_check {
-            // recover(inner, "end") tries inner.
-            // If inner fails, it returns None and the generated code skips until "end".
-            // We must then consume "end" explicitly.
-            rule main -> String =
-                res:recover(inner, "end") "end" -> {
-                    res.unwrap_or_else(|| "recovered".to_string())
+            pub rule main -> String =
+                // If this fails, we want to consume tokens until "end"
+                s:recover(start_rule, "end") "end" -> {
+                    s.unwrap_or_else(|| "recovered".to_string())
                 }
 
-            rule inner -> String =
-                "start" i:integer -> { i.to_string() }
+            rule start_rule -> String =
+                "start" i:i32 -> { i.to_string() }
         }
     }
 
-    // 1. Success path
-    let res = recover_check::parse_main.parse_str("start 42 end");
-    assert_eq!(res.unwrap(), "42");
+    // Success case
+    recover_check::parse_main
+        .parse_str("start 123 end")
+        .test()
+        .assert_success_is("123".to_string());
 
-    // 2. Failure path (Recovery)
-    // "start" matches, "broken" fails integer parse.
-    // recover catches error, skips "broken".
-    // stops at "end".
-    // main consumes "end".
-    let res = recover_check::parse_main.parse_str("start broken end");
-    assert_eq!(res.unwrap(), "recovered");
+    // Failure case: "start" matches, "broken" fails integer parse.
+    // recover should catch the error and skip until "end"
+    recover_check::parse_main
+        .parse_str("start broken end")
+        .test()
+        .assert_success_is("recovered".to_string());
 }

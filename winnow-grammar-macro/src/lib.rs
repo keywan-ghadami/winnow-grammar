@@ -3,34 +3,104 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use syn_grammar_model::parse_grammar_with_builtins;
+use syn_grammar_model::parse_grammar;
+use syn_grammar_model::Backend;
+use syn_grammar_model::BuiltIn;
 
 mod codegen;
 
-const WINNOW_BUILTINS: &[&str] = &[
-    "ident",
-    "integer",
-    "uint",
-    "string",
-    "char",
-    "any", // Added any to support tests/features.rs
-    // We might need to add more winnow primitives here as they are encountered
-    "alpha1",
-    "digit1",
-    "hex_digit0",
-    "hex_digit1",
-    "oct_digit0",
-    "oct_digit1",
-    "binary_digit0",
-    "binary_digit1",
-    "multispace0",
-    "multispace1",
-    "float",
-    "space0",
-    "space1",
-    "line_ending",
-    "empty", // Needed for empty rule
-];
+struct WinnowBackend;
+
+impl Backend for WinnowBackend {
+    fn get_builtins() -> &'static [BuiltIn] {
+        &[
+            BuiltIn {
+                name: "ident",
+                return_type: "syn_grammar::Identifier",
+            },
+            BuiltIn {
+                name: "integer",
+                return_type: "i32",
+            },
+            BuiltIn {
+                name: "uint",
+                return_type: "u32",
+            },
+            BuiltIn {
+                name: "string",
+                return_type: "syn_grammar::StringLiteral",
+            },
+            BuiltIn {
+                name: "char",
+                return_type: "char",
+            },
+            BuiltIn {
+                name: "any",
+                return_type: "char",
+            },
+            BuiltIn {
+                name: "alpha1",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "digit1",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "hex_digit0",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "hex_digit1",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "oct_digit0",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "oct_digit1",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "binary_digit0",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "binary_digit1",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "multispace0",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "multispace1",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "float",
+                return_type: "f64",
+            },
+            BuiltIn {
+                name: "space0",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "space1",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "line_ending",
+                return_type: "String",
+            },
+            BuiltIn {
+                name: "empty",
+                return_type: "()",
+            },
+        ]
+    }
+}
 
 #[proc_macro]
 pub fn grammar(input: TokenStream) -> TokenStream {
@@ -39,7 +109,7 @@ pub fn grammar(input: TokenStream) -> TokenStream {
 
 fn grammar_impl(input: TokenStream) -> TokenStream {
     // 1. Parse & Validate using syn-grammar-model with specific built-ins
-    let m_ast = match parse_grammar_with_builtins(input.into(), WINNOW_BUILTINS) {
+    let m_ast = match parse_grammar::<WinnowBackend>(input.into()) {
         Ok(ast) => ast,
         Err(e) => return e.to_compile_error().into(),
     };
@@ -47,6 +117,6 @@ fn grammar_impl(input: TokenStream) -> TokenStream {
     // 2. Generate Code using local winnow codegen
     match codegen::generate_rust(m_ast) {
         Ok(stream) => stream.into(),
-        Err(e) => e.to_compile_error().into(),
+        Err(e) => return e.to_compile_error().into(),
     }
 }

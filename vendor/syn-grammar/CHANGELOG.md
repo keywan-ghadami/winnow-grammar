@@ -2,20 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.7.0]
+## [0.7.0] - Unreleased
 
 ### Added
-- **Backend-Agnostic Model**: The `syn-grammar-model` crate now exposes `parse_grammar_with_builtins`. This allows backend authors (e.g., for `winnow-grammar`) to validate grammars against their own set of built-in rules, rather than being forced to use the default `syn` built-ins.
+- **Portable Primitives**: Introduced a distinction between `PORTABLE_BUILTINS` (`ident`, `integer`, `alpha`, etc.) and `SYN_SPEC_BUILTINS` (`rust_type`, `lit_str`, etc.). This clarifies the portability contract for authors of alternative backends (e.g., `winnow-grammar`), encouraging a rich, shared vocabulary of common parsing concepts.
+- **Portable Types**: Introduced backend-agnostic wrapper types `Identifier`, `StringLiteral`, and `SpannedValue<T>`. These types implement `ToTokens`, allowing them to be used seamlessly in `quote! { ... }` macros while providing a consistent API across different backends.
+- **Numeric Built-ins**: Added a comprehensive set of portable numeric built-ins:
+    - **Signed Integers**: `i8`, `i16`, `i32`, `i64`, `i128`, `isize` (and `int*` aliases).
+    - **Unsigned Integers**: `u8`, `u16`, `u32`, `u64`, `u128`, `usize` (and `uint*` aliases).
+    - **Floating Point**: `f32`, `f64`.
+    - **Alternative Bases**: `hex_literal`, `oct_literal`, `bin_literal` (parses into `u64`).
+- **Spanned Primitives**: Added `spanned_` variants for all primitives (e.g., `spanned_i32` returns `SpannedValue<i32>`), allowing easy access to source location data.
+- **`whitespace` Primitive**: Added the `whitespace` assertion, which ensures a gap (non-adjacency) between two tokens.
+- **Lookahead Operators**: Added support for positive (`peek(...)`) and negative (`not(...)`) lookahead operators.
+    - `peek(pattern)`: Succeeds if the pattern matches, but does not consume input.
+    - `not(pattern)`: Succeeds if the pattern does *not* match. Does not consume input.
+- **`alpha` Primitive**: Added the `alpha` built-in primitive, which matches an identifier composed entirely of alphabetic characters.
+- **Architecture**: Introduced `Backend` trait and `CommonBuiltins` to decouple the grammar definition from the `syn` implementation, paving the way for other backends.
+- **ADR for Primitives**: Added an Architecture Decision Record (`docs/adr/adr1.md`) to document the design for handling character-level, byte-level, and token-level primitives across different backends.
+- **ADR for Portable Types**: Added an Architecture Decision Record (`docs/adr/adr2.md`) to document the design for portable types and explicit backend contracts.
+- **Restored Tests**: Added back `test_rule_arguments` and `test_multiple_arguments` to ensure rule parameter functionality works as expected.
+
+### Changed
+- **Backend-Agnostic Model**: The `syn-grammar-model` crate now exposes `parse_grammar_with_builtins`. This allows backend authors to validate grammars against their own set of built-in rules.
 - **Backend Author Guide**: `EXTENDING.md` has been rewritten to focus on how to build custom parser generator backends using `syn-grammar` as the frontend DSL.
 
+### Fixed
+- **Repetition Syntax**: Fixed a regression where repetition patterns were incorrectly requiring brackets `[...]` instead of parentheses `(...)`.
+- **Linter Warnings**: Resolved multiple `clippy` warnings (unused variables, collapsible if-blocks, approximate constants).
+- **Float Testing**: Improved float primitive tests to use proper epsilon comparison for accuracy.
+
 ### Breaking Changes
+- **Portable Types for Primitives**: To improve backend portability (see ADR 2), several built-in parsers now return backend-agnostic types instead of `syn`-specific ones.
+    - `ident` now returns `syn_grammar::Identifier` instead of `syn::Ident`.
+    - `string` now returns `syn_grammar::StringLiteral` instead of `String`.
+    - **Impact**: Action blocks that expect the previous `syn` types must be updated to use the new portable types (e.g., use `name.text` instead of `name.to_string()` or rely on `Display` impl).
+- **Renamed `Spanned<T>` to `SpannedValue<T>`**: The `Spanned<T>` struct has been renamed to `SpannedValue<T>` to avoid name collisions with the `syn::spanned::Spanned` trait.
+    - **Impact**: Code that uses `Spanned<T>` (e.g. return types of `spanned_*` built-ins) must be updated to use `SpannedValue<T>`.
 - **Built-in Rule Resolution**: The precedence of built-in rules (like `ident`, `string`) has changed. They are no longer hardcoded keywords but are now provided as default implementations in `syn_grammar::builtins`.
     - **Impact**: If you define a rule named `ident` in your grammar, it will now *shadow* the built-in `ident` parser instead of being ignored. This fixes a long-standing limitation but may change behavior if you accidentally relied on the shadowing being ignored.
-    - **Impact**: If you inherit from a grammar that defines `ident`, and you use `ident`, you might encounter ambiguity between the inherited rule and the built-in. Use explicit imports (e.g., `use super::Parent::ident;`) to resolve this.
-
-### Added
-- **Overridable Built-ins**: You can now replace standard token parsers by defining rules with the same name or importing functions with the same name. This enables backends (like `winnow-grammar`) to inject their own implementations for core types.
-- **`syn_grammar::builtins` Module**: Exposes the default implementations of all built-in rules.
 
 ## [0.6.0]
 

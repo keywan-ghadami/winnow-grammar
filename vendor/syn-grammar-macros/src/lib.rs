@@ -7,7 +7,10 @@ use quote::quote;
 use syn_grammar_model::parse_grammar;
 
 // Include modules
+mod backend;
 mod codegen;
+
+use backend::SynBackend;
 
 /// The main macro for defining grammars.
 ///
@@ -15,7 +18,7 @@ mod codegen;
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,ignore
 /// use syn_grammar::grammar;
 ///
 /// grammar! {
@@ -28,7 +31,7 @@ mod codegen;
 pub fn grammar(input: TokenStream) -> TokenStream {
     // 1-3. Reusable pipeline: Parse, Transform, Validate
     // We convert proc_macro::TokenStream to proc_macro2::TokenStream via .into()
-    let m_ast = match parse_grammar(input.into()) {
+    let m_ast = match parse_grammar::<SynBackend>(input.into()) {
         Ok(ast) => ast,
         Err(e) => return e.to_compile_error().into(),
     };

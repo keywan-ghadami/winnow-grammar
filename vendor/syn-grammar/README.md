@@ -14,10 +14,11 @@ Writing parsers for procedural macros or Domain Specific Languages (DSLs) in Rus
 - **EBNF Syntax**: Familiar syntax with sequences, alternatives (`|`), optionals (`?`), repetitions (`*`, `+`), and grouping `(...)`.
 - **Type-Safe Actions**: Directly map parsing rules to Rust types and AST nodes using action blocks (`-> { ... }`).
 - **Seamless Syn Integration**: First-class support for parsing Rust tokens like identifiers, literals, types, and blocks.
-- **Overridable Built-ins**: Easily customize or replace standard token parsers (e.g., `ident`) with your own logic or external backends.
+- **Portable Primitives**: A core set of built-ins (`ident`, `u32`, `i64`, `alpha`) are conceptually portable, allowing other backends like `winnow-grammar` to provide their own efficient implementations.
 - **Automatic Left Recursion**: Write natural expression grammars (e.g., `expr = expr + term`) without worrying about infinite recursion.
 - **Backtracking & Ambiguity**: Automatically handles ambiguous grammars with speculative parsing.
 - **Cut Operator**: Control backtracking explicitly for better error messages and performance.
+- **Lookahead**: Use `peek(...)` and `not(...)` for positive and negative lookahead assertions.
 - **Rule Arguments**: Pass context or parameters between rules.
 - **Grammar Inheritance**: Reuse rules from other grammars.
 - **Testing Utilities**: Fluent API for testing your parsers with pretty-printed error reporting.
@@ -90,7 +91,7 @@ grammar! {
           | f:factor            -> { f }
 
         rule factor -> i32 =
-            i:integer           -> { i }
+            i:i32               -> { i }
           | paren(e:expression) -> { e }
     }
 }
@@ -151,12 +152,13 @@ Rules can be decorated with standard Rust attributes and documentation comments.
 ```rust
 use syn_grammar::grammar;
 use syn::Ident;
+use syn_grammar::Identifier;
 
 grammar! {
     grammar MyGrammar {
         /// Parses a valid identifier.
         #[cfg(feature = "extra")]
-        rule my_ident -> Ident = i:ident -> { i }
+        rule my_ident -> Identifier = i:ident -> { i }
     }
 }
 
@@ -175,7 +177,7 @@ grammar! {
             "start" v:value(10) -> { v }
 
         rule value(offset: i32) -> i32 =
-            i:integer -> { i + offset }
+            i:i32 -> { i + offset }
     }
 }
 ```
@@ -185,17 +187,13 @@ grammar! {
 You can inherit rules from another grammar module. This is useful for splitting large grammars or reusing common rules.
 
 ```rust
-mod base {
-    use syn_grammar::grammar;
-    grammar! {
-        grammar Base {
-            pub rule num -> i32 = i:integer -> { i }
-        }
+use syn_grammar::grammar;
+
+grammar! {
+    grammar Base {
+        pub rule num -> i32 = i:i32 -> { i }
     }
 }
-
-use syn_grammar::grammar;
-use base::Base;
 
 grammar! {
     grammar Derived : Base {
@@ -240,26 +238,46 @@ grammar! {
 ```
 
 #### Built-in Parsers
-`syn-grammar` provides several built-in parsers for common Rust tokens:
+`syn-grammar` provides a rich set of built-in parsers. They are divided into two categories:
+
+**1. Portable Built-ins**
+
+These represent high-level, conceptually portable primitives that other backends (like `winnow-grammar`) are expected to implement. A grammar using only these should be portable.
+
+**Core Primitives**
 
 | Parser | Description | Returns |
-|--------|-------------|---------|
-| `ident` | A Rust identifier (e.g., `foo`, `_bar`) | `syn::Ident` |
-| `integer` | An integer literal (e.g., `42`) | `i32` |
-| `string` | A string literal (e.g., `\"hello\"`) | `String` |
-| `lit_str` | A string literal object | `syn::LitStr` |
+|---|---|---|
+| `ident` | A Rust identifier | `syn_grammar::Identifier` |
+| `string` | A string literal's content | `syn_grammar::StringLiteral` |
+| `alpha` | An alphabetic identifier | `syn::Ident` |
+| `digit` | A numeric identifier | `syn::Ident` |
+| `whitespace` | Ensures token separation | `()` |
+| `outer_attrs` | Parses `#[...]` attributes | `Vec<syn::Attribute>` |
+
+**Numeric Types (Consistent Naming)**
+
+We implement a comprehensive naming convention for numeric types.
+
+| Category | Grammar Name | Return Type (Rust) | Aliases |
+|---|---|---|---|
+| **Signed** | `i8`, `i16`, `i32`, `i64`, `i128`, `isize` | `i8`, `i16`, `i32`, `i64`, `i128`, `isize` | |
+| **Unsigned** | `u8`, `u16`, `u32`, `u64`, `u128`, `usize` | `u8`, `u16`, `u32`, `u64`, `u128`, `usize` | |
+| **Float** | `f32`, `f64` | `f32`, `f64` | |
+| **Alt Bases** | `hex_literal`, `oct_literal`, `bin_literal` | `u64` | |
+
+*Note: For alternative bases (`hex`, `oct`, `bin`), parsing is done into a maximum-width unsigned container (`u64`) to avoid combinatorial type explosion. Use developer action blocks for explicit downcasting.*
+
+**2. `syn`-Specific Built-ins**
+
+These are tied to the `syn` crate's AST and are not portable.
+
+| Parser | Description | Returns |
+|---|---|---|
 | `rust_type` | A Rust type (e.g., `Vec<i32>`) | `syn::Type` |
 | `rust_block` | A block of code (e.g., `{ stmt; }`) | `syn::Block` |
+| `lit_str` | A string literal object | `syn::LitStr` |
 | `lit_int` | A typed integer literal (e.g. `1u8`) | `syn::LitInt` |
-| `lit_char` | A character literal (e.g. `\'c\'`) | `syn::LitChar` |
-| `lit_bool` | A boolean literal (`true` or `false`) | `syn::LitBool` |
-| `lit_float` | A floating point literal (e.g. `3.14`) | `syn::LitFloat` |
-| `spanned_int_lit` | **Deprecated** Use `lit_int` with `@` | `(i32, Span)` |
-| `spanned_string_lit` | **Deprecated** Use `lit_str` with `@` | `(String, Span)` |
-| `spanned_float_lit` | **Deprecated** Use `lit_float` with `@` | `(f64, Span)` |
-| `spanned_bool_lit` | **Deprecated** Use `lit_bool` with `@` | `(bool, Span)` |
-| `spanned_char_lit` | **Deprecated** Use `lit_char` with `@` | `(char, Span)` |
-| `outer_attrs` | Outer attributes (e.g. `#[...]`) | `Vec<syn::Attribute>` |
 
 ### Overriding Built-ins & Custom Rules
 
@@ -268,12 +286,15 @@ If you need to change how a built-in works or define a reusable rule that isn't 
 #### 1. Local Override
 You can shadow a built-in rule by defining a rule with the same name in your grammar block.
 
-```rust
+```rust,ignore
+use syn_grammar::grammar;
+use syn::Token;
+
 grammar! {
     grammar MyGrammar {
         // Overrides the default 'ident' behavior
-        rule ident -> String = 
-             i:ident -> { i.to_string().to_uppercase() }
+        rule ident -> String =
+            i:ident -> { i.to_string().to_uppercase() }
     }
 }
 ```
@@ -281,10 +302,14 @@ grammar! {
 #### 2. Import Injection
 You can import a function that matches the expected signature (`fn(ParseStream) -> Result<T>`) and use it as a terminal rule.
 
-```rust
+```rust,ignore
+use syn_grammar::grammar;
+
 // In some other module
+pub struct MyType;
 pub fn my_custom_parser(input: syn::parse::ParseStream) -> syn::Result<MyType> {
     // ... custom parsing logic
+    Ok(MyType)
 }
 
 grammar! {
@@ -305,10 +330,11 @@ Match a sequence of patterns. Use `name:pattern` to bind the result to a variabl
 ```rust
 use syn_grammar::grammar;
 use syn::Ident;
+use syn_grammar::Identifier;
 
 // Mock Stmt for the example
 pub enum Stmt {
-    Assign(Ident, i32),
+    Assign(Identifier, i32),
 }
 
 grammar! {
@@ -318,7 +344,7 @@ grammar! {
                 Stmt::Assign(name, val) 
             }
             
-        rule expr -> i32 = i:integer -> { i }
+        rule expr -> i32 = i:i32 -> { i }
     }
 }
 # fn main() {}
@@ -327,18 +353,20 @@ grammar! {
 #### Span Binding (`@`)
 You can capture the `Span` of a parsed rule or built-in using the syntax `name:rule @ span_var`. This is useful for error reporting or constructing spanned AST nodes.
 
-**Note**: The rule being bound must return a type that implements `syn::spanned::Spanned` (e.g., `syn::Ident`, `syn::Type`, `syn::LitStr`). Primitive types like `i32` or `String` do not support this.
+**Note**: The rule being bound must return a type that implements `syn::spanned::Spanned` (e.g., `syn::Ident`, `syn::Type`, `syn::LitStr`, and `syn_grammar::Identifier`). Primitive types like `i32` or `String` do not support this.
 
 ```rust
 use syn_grammar::grammar;
+use syn_grammar::Identifier;
 
 grammar! {
     grammar Spanned {
-        rule main -> (syn::Ident, proc_macro2::Span) = 
+        rule main -> (Identifier, proc_macro2::Span) = 
             // Binds the identifier to `id` and its span to `s`
             id:ident @ s -> { (id, s) }
     }
 }
+# fn main() {}
 ```
 
 #### Alternatives (`|`)
@@ -367,7 +395,7 @@ use syn_grammar::grammar;
 grammar! {
     grammar List {
         rule list -> Vec<i32> = 
-            [ elements:integer* ] -> { elements }
+            [ elements:i32* ] -> { elements }
     }
 }
 ```
@@ -401,7 +429,27 @@ use syn_grammar::grammar;
 grammar! {
     grammar Tuple {
         rule tuple -> (i32, i32) = 
-            paren(a:integer "," b:integer) -> { (a, b) }
+            paren(a:i32 "," b:i32) -> { (a, b) }
+    }
+}
+```
+
+#### Lookahead (`peek`, `not`)
+Lookahead operators allow you to check for a pattern without consuming input.
+
+- `peek(pattern)`: Succeeds if `pattern` matches. Input is not advanced.
+- `not(pattern)`: Succeeds if `pattern` does *not* match. Input is not advanced.
+
+```rust
+use syn_grammar::grammar;
+
+grammar! {
+    grammar Lookahead {
+        // Matches "a" only if followed by "b", but "b" is not consumed
+        rule check -> () = "a" peek("b") -> { () }
+        
+        // Matches "a" only if NOT followed by "c"
+        rule neg -> () = "a" not("c") -> { () }
     }
 }
 ```
@@ -437,9 +485,10 @@ The cut operator `=>` allows you to commit to a specific alternative. If the pat
 ```rust
 use syn_grammar::grammar;
 use syn::Ident;
+use syn_grammar::Identifier;
 
 pub enum Stmt {
-    Let(Ident, i32),
+    Let(Identifier, i32),
     Expr(i32),
 }
 
@@ -452,7 +501,7 @@ grammar! {
             "let" => "mut"? name:ident "=" e:expr -> { Stmt::Let(name, e) }
           | e:expr -> { Stmt::Expr(e) }
           
-        rule expr -> i32 = i:integer -> { i }
+        rule expr -> i32 = i:i32 -> { i }
     }
 }
 # fn main() {}
@@ -472,7 +521,7 @@ grammar! {
             l:expression "+" r:term -> { l + r }
           | t:term -> { t }
         
-        rule term -> i32 = i:integer -> { i }
+        rule term -> i32 = i:i32 -> { i }
     }
 }
 
@@ -508,7 +557,7 @@ grammar! {
             l:expr "+" r:term -> { l + r }
           | t:term            -> { t }
           
-        rule term -> i32 = i:integer -> { i }
+        rule term -> i32 = i:i32 -> { i }
     }
 }
 ```

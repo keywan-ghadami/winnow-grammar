@@ -1,7 +1,13 @@
 // Moved from macros/src/model.rs
+pub mod backend;
+pub mod types;
+
+pub use backend::*;
+pub use types::*;
+
 use crate::parser;
 use proc_macro2::{Span, TokenStream};
-use syn::spanned::Spanned;
+use syn::spanned::Spanned as _;
 use syn::{Attribute, Ident, ItemUse, Lit, LitStr, Type};
 
 #[derive(Debug, Clone)]
@@ -51,6 +57,8 @@ pub enum ModelPattern {
         sync: Box<ModelPattern>,
         span: Span,
     },
+    Peek(Box<ModelPattern>, Span),
+    Not(Box<ModelPattern>, Span),
 }
 
 impl From<parser::GrammarDefinition> for GrammarDefinition {
@@ -144,6 +152,8 @@ impl From<parser::Pattern> for ModelPattern {
                 sync: Box::new(ModelPattern::from(*sync)),
                 span: kw_token.span(),
             },
+            P::Peek(p, token) => ModelPattern::Peek(Box::new(ModelPattern::from(*p)), token.span()),
+            P::Not(p, token) => ModelPattern::Not(Box::new(ModelPattern::from(*p)), token.span()),
         }
     }
 }
@@ -163,6 +173,7 @@ impl ModelPattern {
             ModelPattern::Bracketed(_, s)
             | ModelPattern::Braced(_, s)
             | ModelPattern::Parenthesized(_, s) => *s,
+            ModelPattern::Peek(_, s) | ModelPattern::Not(_, s) => *s,
         }
     }
 }
