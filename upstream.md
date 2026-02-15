@@ -1,54 +1,33 @@
-# Upstream Compatibility and Project Roadmap
+# Required Upstream Features from syn-grammar
 
-This document outlines the current feature set of `winnow-grammar` and tracks the roadmap for future development, particularly concerning features adapted from or inspired by `syn-grammar`.
-
-## Project Status
-
-`winnow-grammar` has matured significantly and now implements the majority of its initial feature goals. It provides a stable foundation for building parsers using an EBNF-like syntax that compiles directly to high-performance `winnow` code.
-
-The focus of development has shifted from core features to advanced capabilities and quality-of-life improvements.
+This document outlines key features needed in the `syn-grammar` frontend. Implementing these features is crucial to unblock development and enhance the capabilities of the `winnow-grammar` backend. It is intended to facilitate communication with the `syn-grammar` team about our specific needs.
 
 ---
 
-## Completed and Implemented Features
+## 1. Parameterized Rules (Generics)
 
-The following major features are fully implemented and documented in the `README.md`.
+-   **Priority:** High
+-   **What we need:** The ability for the `syn-grammar` frontend to parse and model generic, reusable rules, as detailed in `syn-grammar`'s own architecture plan.
+-   **Why it's needed:** This is the most significant feature blocking our users from writing cleaner, more maintainable grammars. Without it, users are forced to duplicate logic for common patterns like comma-separated lists, leading to significant boilerplate.
+-   **Proposed Solution:** We are fully aligned with the approach detailed in **`syn-grammar` ADR-003: Higher-Order Generic Rules**. The proposed "Macro-Time Monomorphization" strategy is an excellent solution. It correctly preserves trait bounds for `rustc` to verify and, crucially, maintains a static call graph, which ensures compatibility with our existing left-recursion detection. Implementing this ADR would fully address our requirements.
+-   **Example of syntax this would enable:**
+    ```rust
+    // A generic rule for a comma-separated list
+    rule separated_list<T>(p: impl Parser<T>) -> Vec<T> =
+        first:p rest:("," p)* -> { ... }
 
-- **Core EBNF Syntax**: Support for sequences, alternatives (`|`), optionals (`?`), repetitions (`*`, `+`), and grouping (`(...)`).
-- **Direct Left Recursion**: The grammar compiler automatically detects and transforms direct left-recursive rules into efficient iterative parsers.
-- **Configurable Whitespace Handling**: The automatic whitespace parser can be overridden by defining a rule named `ws`. If present, this rule will be used to consume whitespace between tokens; otherwise, a default of `multispace0` is used.
-- **Rule Arguments**: Rules can accept arguments, allowing for contextual parsing.
-- **Span Information**: The `@` operator allows capturing the source span of a parsed element.
-- **Cut Operator (`=>`)**: Provides a mechanism to commit to a parsing path, preventing backtracking and improving error messages.
-- **Integration with External Parsers**: Seamlessly call any external `winnow`-compatible parser from within a grammar rule.
-- **`use` Statements**: `use` statements are supported directly within the `grammar!` block for importing necessary types.
-- **Rich Set of Built-ins**: A wide array of built-in parsers are available (e.g., `ident`, `integer`, `string`).
-- **Attributes on Rules**: Standard Rust attributes (`#[...]`) can be placed on rules and are passed through to the generated parser functions.
+    // Using the generic rule
+    rule main -> Vec<i32> = separated_list(integer)
+    ```
 
----
+## 2. Analysis of Indirect Left Recursion
 
-## Roadmap: Needed and Future Features
+-   **Priority:** Medium
+-   **What we need:** We need `syn-grammar` to perform the graph-based analysis required to detect indirect (or mutual) left recursion (e.g., `a = b; b = a;`). The resulting analysis should be available to the backend.
+-   **Why it's needed:** The `winnow-grammar` backend can already transform *direct* left recursion into efficient iterative parsers. However, to support more complex and natural grammar styles, we need `syn-grammar` to identify the more complex cases of mutual recursion so the backend can generate the correct parsing code.
 
-This section outlines the high-priority features planned for future releases.
+## 3. Enhanced Diagnostics for Error Reporting
 
-### 1. Parameterized Rules (Generics)
-- **Priority**: High
-- **Description**: The ability to define generic, reusable rules. This is the most significant missing feature for reducing boilerplate in complex grammars.
-- **Example Syntax**:
-  ```rust
-  // Define a generic rule for a comma-separated list
-  rule separated_list<T>(p: impl Parser<T>) -> Vec<T> =
-      first:p rest:("," p)* -> { ... }
-
-  // Use it
-  rule main -> Vec<i32> = separated_list(integer)
-  ```
-
-### 2. Indirect Left Recursion
-- **Priority**: Medium
-- **Description**: The current engine only supports direct left recursion (e.g., `expr = expr "+" term`). The next step is to support indirect or mutual left recursion (e.g., `a = b; b = a;`). This requires a more advanced graph-based analysis of rule dependencies.
-- **Status**: This is a complex feature that requires significant research and development.
-
-### 3. Improved Error Reporting
-- **Priority**: Low
-- **Description**: While the cut operator helps, the errors generated by the macro itself (when the grammar definition is invalid) could be improved. The goal is to provide more specific and helpful compile-time errors.
+-   **Priority:** Low
+-   **What we need:** More specific error types and precise source-span information from `syn-grammar` when it fails to parse a grammar definition.
+-   **Why it's needed:** The quality of our compile-time error messages is directly limited by the information `syn-grammar` provides. With better diagnostics, we can give our users much more specific and actionable feedback, pinpointing the exact location and cause of an error in their grammar. This would significantly improve the overall developer experience.
