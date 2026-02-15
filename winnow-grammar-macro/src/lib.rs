@@ -117,6 +117,6 @@ fn grammar_impl(input: TokenStream) -> TokenStream {
     // 2. Generate Code using local winnow codegen
     match codegen::generate_rust(m_ast) {
         Ok(stream) => stream.into(),
-        Err(e) => return e.to_compile_error().into(),
+        Err(e) => e.to_compile_error().into(),
     }
 }
