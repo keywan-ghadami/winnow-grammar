@@ -1,90 +1,38 @@
-# Remaining Improvements
+# Remaining High-Priority Tasks
 
-## High Priority (Core Features & Correctness)
+This file tracks critical technical debt and optimization opportunities identified during development. These items represent features that are either partially implemented, stubbed out, or require significant refinement to meet production standards.
 
-1. Optimize usages of the cut operator.
-2. Implement synchronization points for recovery (refine `recover`).
-3. Map `winnow::stream::Location` to spans.
-4. Detect infinite recursion loops during compilation.
-5. Add diagnostics for grammar conflicts.
+## 1. Optimize Cut Operator (`=>`) Implementation
 
-## Medium Priority (Optimization & Usability)
+*   **Current State:** The cut operator logic in `codegen/mod.rs` simply sets an `in_cut` boolean flag when it encounters a cut. Subsequent parsers in the sequence are then blindly wrapped in `::winnow::combinator::cut_err(...)`.
+*   **The Issue:** This approach is somewhat naive. It might wrap too many things or not interact correctly with nested structures like `alt` or `delimited` in all edge cases. Specifically, `cut_err` prevents backtracking, which is the desired behavior, but indiscriminate wrapping can lead to confusing error messages or performance overhead if not scoped precisely. The logic for propagating the "cut" state through complex nested patterns (like groups or repetitions) needs verification.
+*   **Goal:** Refine the `generate_sequence_steps` and `generate_step` logic to apply `cut_err` only at the exact necessary boundaries. Ensure that `cut` properly commits to the current alternative within an `alt` combinator without bleeding into unrelated parsing paths.
 
-6. Optimize `alt` using `dispatch` combinator.
-7. Use `preceded` for efficient whitespace skipping.
-8. Inline small rules automatically for speed.
-9. Support `#[inline]` attribute on rules.
-10. Use `dispatch!` for faster keyword matching.
-11. Optimize literal matching with `one_of`.
-12. Deduplicate common prefixes in alternatives.
-13. Generate lookup tables for character classes.
-14. Profile generated code to find bottlenecks.
-15. Benchmark against handwritten `winnow` parsers.
-16. Support `Partial` input streams explicitly.
-17. Support `Stateful` input streams in macros.
-18. Support custom input types beyond strings.
-19. Expose `winnow` combinators directly in grammar.
-20. Support `checkpoint` and `reset` manually.
-21. Bind to `winnow::token::any` combinator.
-22. Support `winnow::token::eof` for end check.
-23. Support custom whitespace parsers per rule.
-24. Generate `Debug` impls for AST nodes.
-25. Allow external rule imports with paths.
-26. Support multiple grammar blocks in one file.
-27. Generate parsing traces for debugging.
-28. Support `#[cfg]` attributes on alternatives.
-29. Generate `Display` impl for unparsing.
-30. Add property-based testing generator.
-31. Improve hygiene of generated rust code.
+## 2. Robust Error Recovery (`recover`)
 
-## Low Priority (Nice to Haves & Extras)
+*   **Current State:** The `recover(rule, sync)` pattern is implemented in `codegen/mod.rs` using a combination of `alt`, `repeat`, and `peek`. It effectively says: "Try to parse `rule`. If it fails, consume characters one-by-one until `sync` is peekable, then return `None`."
+*   **The Issue:**
+    *   **Performance:** Consuming tokens one by one (`repeat(.., (not(peek(sync)), any))`) is inefficient (O(N^2) in worst case if `sync` is complex). It should use `winnow`'s optimized `take_until` or similar fast-scanning combinators if possible.
+    *   **Correctness:** The current implementation assumes strict success/fail binary. Real-world recovery often needs to accumulate errors (diagnostics) rather than just returning `None`. The integration with `winnow`'s error reporting traits needs to be stronger so that the "skipped" bad input is reported as a specific error type to the user.
+*   **Goal:** Replace the naive `repeat` loop with a more efficient scanning mechanism (e.g., `take_until` or `find_slice`). Consider extending the `recover` syntax or semantics to allow capturing the error for diagnostic reporting instead of just silently discarding it.
 
-32. Generate `Visitor` trait for AST nodes.
-33. Generate `Fold` trait for AST nodes.
-34. Implement `fold` or `reduce` actions.
-35. Support binary data parsing specific rules.
-36. Add bit-level parsing support.
-37. Support stateful parsing by passing context.
-38. Allow mutable arguments in rules.
-39. Support `impl` blocks for grammar state.
-40. Add `@` binding for arbitrary expressions.
-41. Support regex-like repetition ranges.
-42. Create grammar debugger and visualizer tool.
-43. Add LSP support for grammar files.
-44. Generate railroad diagrams from grammar.
-45. Add fuzzer integration for grammars.
-46. Improve compile error messages for macros.
-47. Add `trace` feature to print steps.
-48. Validate left-recursion logic for edge cases.
-49. Add examples for parsing JSON format.
-50. Add examples for parsing TOML format.
-51. Remove unused imports in generated code.
-52. Simplify recursive loop generation logic.
-53. Refactor `Codegen` struct for readability.
-54. Standardize naming of generated functions.
-55. Update `syn-grammar` dependency version.
-56. Clean up `winnow-grammar-macro` dependencies.
-57. Remove `allow(dead_code)` where possible.
-58. Unify delimiter handling in codegen.
-59. Abstract sequence generation logic further.
-60. Improve handling of binding names.
-61. Write a tutorial for complex expressions.
-62. Document best practices for error recovery.
-63. Create a cookbook of common patterns.
-64. Add links to `winnow` documentation.
-65. Document how to mix handwritten parsers.
-66. Explain whitespace handling in depth.
-67. Create a migration guide from `nom`.
-68. Add badges to README file.
-69. Setup CI/CD pipeline for project.
-70. Add contributing guidelines for developers.
-71. Support semantic actions without AST construction.
-72. Allow async parsing rules in grammar.
-73. Support streaming parsing mode explicitly.
-74. Integrate with `ariadne` for error reports.
-75. Support indentation-sensitive grammars.
-76. Add macro for testing parsers inline.
-77. Support precedence climbing helper utility.
-78. Allow defining tokens separately from rules.
-79. Support operator overloading syntax in rules.
-80. Optimize codegen for `no_std` environments.
+## 3. Map `winnow::stream::Location` to Proper Spans
+
+*   **Current State:** The `@` binding syntax uses `.with_span()` which returns a `Range<usize>`. The code currently assumes the user will manually handle this `Range` or that it is sufficient.
+*   **The Issue:** In many parser use cases (especially when using `LocatingSlice`), users want a rich `Span` object that might include line/column information, or they might be using a custom input type where `Range<usize>` isn't the natural span representation. The code comment explicitly states: *"This is where 'Map winnow::stream::Location to spans' task comes in... winnow-grammar currently just returns the Range as the 'span'."*
+*   **Goal:** Make the span type configurable or smarter. If the input is `LocatingSlice`, we might want to return the slice itself or a custom `Span` struct. We need to verify if `winnow::stream::Location` is being fully utilized to provide rich location data (line/col) vs just raw byte offsets.
+
+## 4. Detect Infinite Recursion Loops
+
+*   **Current State:** The macro detects *direct* left recursion (e.g., `A -> A b`) and compiles it into a loop. It also has a check ensuring that at least one base case exists: `if base_refs.is_empty() { compile_error!(...) }`.
+*   **The Issue:** This does not catch *indirect* left recursion (e.g., `A -> B`, `B -> A`) or more complex cycles that don't fit the simple "starts with self" pattern. These will compile but cause a stack overflow at runtime.
+*   **Goal:** Implement a graph analysis pass on the grammar rules before code generation. Build a dependency graph of rules and detect cycles that do not consume tokens (nullable loops). Emit a compile-time error if such a cycle is detected.
+
+## 5. Add Diagnostics for Grammar Conflicts
+
+*   **Current State:** There is no ambiguity detection. If a user writes `rule -> A | A`, the second alternative is simply unreachable code.
+*   **The Issue:** Users can easily write ambiguous grammars or "shadowed" alternatives (e.g., matching a keyword `if` after matching a variable `ident` that accepts "if").
+*   **Goal:** Implement basic FIRST/FOLLOW set analysis or similar reachability checks to warn users about:
+    *   Unreachable alternatives.
+    *   Ambiguous overlaps between alternatives (e.g., string literals overlapping with identifier patterns).
+    *   Unused rules.

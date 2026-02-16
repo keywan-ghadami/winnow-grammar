@@ -8,6 +8,29 @@
 
 This crate is built on top of `syn-grammar-model` but targets the `winnow` parser combinator library. While `syn-grammar` is specialized for parsing Rust code (using `TokenStream`), `winnow-grammar` is designed for general-purpose parsing of text, data formats, and custom DSLs (using `&str` or `&[u8]`).
 
+## Why use winnow-grammar?
+
+**`winnow-grammar` bridges the gap between readable EBNF grammars and high-performance parser combinators.**
+
+It allows developers to write grammars declaratively (like `pest`) but compiles them into raw, high-performance `winnow` combinators (like manual `nom` or `winnow` code) at compile time.
+
+### Comparison
+
+| Feature | `winnow-grammar` | Manual `winnow`/`nom` | `pest` | `syn` |
+| :--- | :--- | :--- | :--- | :--- |
+| **Input Type** | Text/Bytes (`&str`, `&[u8]`) | Text/Bytes | Text | Rust Tokens |
+| **Definition Style** | Declarative (EBNF) | Imperative (Combinators) | Declarative (PEG file) | Imperative (Recursive Descent) |
+| **Performance** | High (compiled) | High | Medium (interpreter overhead) | High |
+| **Type Safety** | High (Bindings) | High | Low (String/Pair traversal) | High |
+| **Boilerplate** | Low | High | Medium | High |
+
+### Key Advantages
+
+1.  **Readability vs. Raw Combinators**: Writing parsers manually using functions like `preceded`, `terminated`, `alt`, and `map` results in verbose, nested code that is difficult to read and maintain ("rightward drift"). `winnow-grammar` lets you define the grammar using familiar EBNF syntax directly in your code.
+2.  **Performance**: Since `winnow-grammar` is a macro that generates `winnow` code at compile time, there is **zero runtime overhead** compared to writing the combinators yourself.
+3.  **Type Safety vs. External Files**: Tools like `pest` require separate grammar files and often lead to loosely typed parsing where you have to iterate over "Pairs" or string tokens manually. `winnow-grammar` allows you to bind grammar rules directly to Rust structs and enums. The parsing logic and data structure definitions sit side-by-side.
+4.  **No Context Switch**: You don't need to learn a proprietary API to traverse a syntax tree; the output is your native Rust types.
+
 ## Features
 
 - **Inline Grammars**: Define your grammar directly in your Rust code using the `grammar!` macro.
