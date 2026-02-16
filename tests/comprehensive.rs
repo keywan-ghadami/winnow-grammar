@@ -14,8 +14,8 @@ pub enum Value {
 grammar! {
     grammar Comprehensive {
         pub rule value -> Value =
-            i:integer not(".") not("e") not("E") -> { Value::Int(i) }
-          | f:float -> { Value::Float(f) }
+            i:i32 not(".") not("e") not("E") -> { Value::Int(i) }
+          | f:f64 -> { Value::Float(f) }
           | s:string -> { Value::String(s) }
           | "true" -> { Value::Bool(true) }
           | "false" -> { Value::Bool(false) }
@@ -72,7 +72,7 @@ fn test_mixed_values() {
 grammar! {
     grammar GenericReturn {
         pub rule optional_int -> Option<i32> =
-            i:integer -> { Some(i) }
+            i:i32 -> { Some(i) }
           | "none" -> { None }
     }
 }

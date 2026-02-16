@@ -26,7 +26,7 @@ grammar! {
           | t:term -> { t }
 
         rule term -> Expr =
-            n:uint -> { Expr::Num(n) }
+            n:u32 -> { Expr::Num(n) }
           | i:ident -> { Expr::Var(i) }
           | "(" e:expr ")" -> { e }
 
@@ -80,7 +80,7 @@ fn test_span() {
     let input = LocatingSlice::new(input);
     let result = MiniLang::parse_spanned_term.parse(input).unwrap();
     assert_eq!(result.0, Expr::Num(123));
-    // The built-in `term` calls `uint`.
+    // The built-in `term` calls `u32` (was uint).
     // " 123" -> length 4.
     assert_eq!(result.1, 0..4);
 }

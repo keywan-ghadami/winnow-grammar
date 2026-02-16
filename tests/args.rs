@@ -8,7 +8,7 @@ grammar! {
             "start" v:value(10) -> { v }
 
         rule value(offset: i32) -> i32 =
-            i:integer -> { i + offset }
+            i:i32 -> { i + offset }
     }
 }
 

@@ -54,7 +54,7 @@ grammar! {
           | f:factor            -> { f }
 
         rule factor -> i32 =
-            i:integer           -> { i }
+            i:i32               -> { i }
           | paren(e:expression) -> { e }
     }
 }
@@ -126,7 +126,7 @@ grammar! {
             "start" v:value(10) -> { v }
 
         rule value(offset: i32) -> i32 =
-            i:integer -> { i + offset }
+            i:i32 -> { i + offset }
     }
 }
 ```
@@ -152,9 +152,13 @@ grammar! {
 | Parser | Description | Returns |
 |--------|-------------|---------|
 | `ident` | An alphanumeric identifier (including `_`) | `String` |
-| `integer` | A decimal integer | `i32` |
-| `uint` | A decimal unsigned integer | `u32` |
 | `string` | A quoted string literal (supports escapes) | `String` |
+| `i32` | A decimal integer | `i32` |
+| `u32` | A decimal unsigned integer | `u32` |
+| `f64` | A floating point number | `f64` |
+| `u8`..`u128` | Unsigned integers of various sizes | `u8`..`u128` |
+| `i8`..`i128` | Signed integers of various sizes | `i8`..`i128` |
+| `bool` | `true` or `false` | `bool` |
 
 #### Custom and External Rules
 You can use any function that matches the `winnow` parser signature `Fn(&mut I) -> ModalResult<T>` as a rule. You just need to import it or define it in your crate.
@@ -187,7 +191,7 @@ use winnow_grammar::grammar;
 grammar! {
     grammar Assignment {
         rule assignment -> (String, i32) = 
-            name:ident "=" val:integer -> { 
+            name:ident "=" val:i32 -> { 
                 (name, val) 
             }
     }
@@ -236,7 +240,7 @@ use winnow_grammar::grammar;
 grammar! {
     grammar List {
         rule list -> Vec<i32> = 
-            "[" elements:integer* "]" -> { elements }
+            "[" elements:i32* "]" -> { elements }
     }
 }
 ```
@@ -254,7 +258,7 @@ use winnow_grammar::grammar;
 grammar! {
     grammar Tuple {
         rule tuple -> (i32, i32) = 
-            paren(a:integer "," b:integer) -> { (a, b) }
+            paren(a:i32 "," b:i32) -> { (a, b) }
     }
 }
 ```
@@ -280,7 +284,7 @@ grammar! {
             "let" => "mut"? name:ident "=" e:expr -> { Stmt::Let(name, e) }
           | e:expr -> { Stmt::Expr(e) }
           
-        rule expr -> i32 = i:integer -> { i }
+        rule expr -> i32 = i:i32 -> { i }
     }
 }
 # fn main() {}
@@ -302,7 +306,7 @@ grammar! {
             l:expr "+" r:term -> { l + r }
           | t:term            -> { t }
           
-        rule term -> i32 = i:integer -> { i }
+        rule term -> i32 = i:i32 -> { i }
     }
 }
 ```

@@ -15,7 +15,7 @@ grammar! {
           | t:term -> { t }
 
         rule term -> Expr =
-            n:uint -> { Expr::Num(n) }
+            n:u32 -> { Expr::Num(n) }
     }
 }
 

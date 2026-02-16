@@ -143,7 +143,7 @@ impl<'a> Codegen<'a> {
                    // Required for recover which uses find_slice
                    + ::winnow::stream::FindSlice<char>
                    + ::winnow::stream::FindSlice<&'static str>,
-                <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr + AsRef<str> + std::fmt::Display + ::winnow::stream::ParseSlice<f64>,
+                <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr + AsRef<str> + std::fmt::Display + ::winnow::stream::ParseSlice<f64> + ::winnow::stream::ParseSlice<f32>,
                 <I as ::winnow::stream::Stream>::IterOffsets: Clone,
             {
                 use ::winnow::Parser;
@@ -431,12 +431,6 @@ impl<'a> Codegen<'a> {
                 (ws, ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_'))
                     .map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
-            "integer" => quote_spanned! {span=>
-                (ws, ::winnow::ascii::dec_int::<_, i32, _>).map(|(_, i)| i)
-            },
-            "uint" => quote_spanned! {span=>
-                (ws, ::winnow::ascii::dec_uint::<_, u32, _>).map(|(_, i)| i)
-            },
             "string" => quote_spanned! {span=>
                  (ws, delimited(
                     '"',
@@ -500,14 +494,17 @@ impl<'a> Codegen<'a> {
                 (ws, ::winnow::token::take_while(1.., |c| c == '0' || c == '1'))
                     .map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
-            "float" => quote_spanned! {span=>
-                (ws, ::winnow::ascii::float::<_, f64, _>).map(|(_, f)| f)
-            },
             "space0" => quote_spanned! {span=>
                 (ws, ::winnow::ascii::space0).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
             "space1" => quote_spanned! {span=>
                 (ws, ::winnow::ascii::space1).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+            },
+            "multispace0" => quote_spanned! {span=>
+                (ws, ::winnow::ascii::multispace0).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+            },
+            "multispace1" => quote_spanned! {span=>
+                (ws, ::winnow::ascii::multispace1).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
             "line_ending" => quote_spanned! {span=>
                 (ws, ::winnow::ascii::line_ending).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
@@ -515,6 +512,60 @@ impl<'a> Codegen<'a> {
             "empty" => quote_spanned! {span=>
                 ::winnow::combinator::empty
             },
+
+            // Standard Rust Types
+            "u8" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_uint::<_, u8, _>).map(|(_, i)| i) }
+            }
+            "u16" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_uint::<_, u16, _>).map(|(_, i)| i) }
+            }
+            "u32" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_uint::<_, u32, _>).map(|(_, i)| i) }
+            }
+            "u64" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_uint::<_, u64, _>).map(|(_, i)| i) }
+            }
+            "u128" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_uint::<_, u128, _>).map(|(_, i)| i) }
+            }
+            "usize" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_uint::<_, usize, _>).map(|(_, i)| i) }
+            }
+
+            "i8" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_int::<_, i8, _>).map(|(_, i)| i) }
+            }
+            "i16" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_int::<_, i16, _>).map(|(_, i)| i) }
+            }
+            "i32" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_int::<_, i32, _>).map(|(_, i)| i) }
+            }
+            "i64" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_int::<_, i64, _>).map(|(_, i)| i) }
+            }
+            "i128" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_int::<_, i128, _>).map(|(_, i)| i) }
+            }
+            "isize" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::dec_int::<_, isize, _>).map(|(_, i)| i) }
+            }
+
+            "f32" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::float::<_, f32, _>).map(|(_, f)| f) }
+            }
+            "f64" => {
+                quote_spanned! {span=> (ws, ::winnow::ascii::float::<_, f64, _>).map(|(_, f)| f) }
+            }
+
+            "bool" => quote_spanned! {span=>
+                (ws, ::winnow::combinator::alt((
+                    ::winnow::token::literal("true").map(|_| true),
+                    ::winnow::token::literal("false").map(|_| false),
+                ))).map(|(_, b)| b)
+            },
+
             _ => {
                 if args.is_empty() {
                     quote_spanned! {span=> #rule_name }
@@ -598,7 +649,7 @@ impl<'a> Codegen<'a> {
                                 ::winnow::combinator::not(::winnow::combinator::peek(#sync_parser)),
                                 ::winnow::token::any
                             )).map(|()| ()),
-                            ::winnow::combinator::peek(#sync_parser)
+                            #sync_parser
                         ).map(|_| None)
                     ))
                 }

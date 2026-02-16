@@ -16,19 +16,11 @@ impl Backend for WinnowBackend {
         &[
             BuiltIn {
                 name: "ident",
-                return_type: "syn_grammar::Identifier",
-            },
-            BuiltIn {
-                name: "integer",
-                return_type: "i32",
-            },
-            BuiltIn {
-                name: "uint",
-                return_type: "u32",
+                return_type: "String",
             },
             BuiltIn {
                 name: "string",
-                return_type: "syn_grammar::StringLiteral",
+                return_type: "String",
             },
             BuiltIn {
                 name: "char",
@@ -79,10 +71,6 @@ impl Backend for WinnowBackend {
                 return_type: "String",
             },
             BuiltIn {
-                name: "float",
-                return_type: "f64",
-            },
-            BuiltIn {
                 name: "space0",
                 return_type: "String",
             },
@@ -97,6 +85,67 @@ impl Backend for WinnowBackend {
             BuiltIn {
                 name: "empty",
                 return_type: "()",
+            },
+            // Explicit Rust Types
+            BuiltIn {
+                name: "u8",
+                return_type: "u8",
+            },
+            BuiltIn {
+                name: "u16",
+                return_type: "u16",
+            },
+            BuiltIn {
+                name: "u32",
+                return_type: "u32",
+            },
+            BuiltIn {
+                name: "u64",
+                return_type: "u64",
+            },
+            BuiltIn {
+                name: "u128",
+                return_type: "u128",
+            },
+            BuiltIn {
+                name: "usize",
+                return_type: "usize",
+            },
+            BuiltIn {
+                name: "i8",
+                return_type: "i8",
+            },
+            BuiltIn {
+                name: "i16",
+                return_type: "i16",
+            },
+            BuiltIn {
+                name: "i32",
+                return_type: "i32",
+            },
+            BuiltIn {
+                name: "i64",
+                return_type: "i64",
+            },
+            BuiltIn {
+                name: "i128",
+                return_type: "i128",
+            },
+            BuiltIn {
+                name: "isize",
+                return_type: "isize",
+            },
+            BuiltIn {
+                name: "f32",
+                return_type: "f32",
+            },
+            BuiltIn {
+                name: "f64",
+                return_type: "f64",
+            },
+            BuiltIn {
+                name: "bool",
+                return_type: "bool",
             },
         ]
     }

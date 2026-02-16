@@ -14,7 +14,7 @@ pub struct PlusList {
 grammar! {
     grammar TestPlus {
         pub rule list -> PlusList =
-            items:uint+ -> { PlusList { items } }
+            items:u32+ -> { PlusList { items } }
     }
 }
 
@@ -51,8 +51,8 @@ pub enum GroupEnum {
 grammar! {
     grammar TestGroup {
         pub rule main -> GroupEnum =
-            "a" n:uint -> { GroupEnum::A(n) }
-          | "b" n:uint -> { GroupEnum::B(n) }
+            "a" n:u32 -> { GroupEnum::A(n) }
+          | "b" n:u32 -> { GroupEnum::B(n) }
     }
 }
 
@@ -81,7 +81,7 @@ pub struct Builtins {
 grammar! {
     grammar TestBuiltins {
         pub rule main -> Builtins =
-            s:string i:uint id:ident -> { Builtins { s, i, id } }
+            s:string i:u32 id:ident -> { Builtins { s, i, id } }
     }
 }
 
