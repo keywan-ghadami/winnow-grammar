@@ -170,7 +170,7 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 |input: &mut I| -> ::winnow::ModalResult<#ret_type> {
                     #steps
-                    Ok(#action)
+                    Ok({ #action })
                 }
             }
         });
@@ -182,7 +182,7 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 {
                     #steps
-                    Ok(#action)
+                    Ok({ #action })
                 }
             }
         } else {
@@ -231,7 +231,7 @@ impl<'a> Codegen<'a> {
                     let attempt = (|| -> ::winnow::ModalResult<#ret_type> {
                         #steps
                         #bind_lhs
-                        Ok(#action)
+                        Ok({ #action })
                     })();
 
                     match attempt {
