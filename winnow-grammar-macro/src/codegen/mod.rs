@@ -397,7 +397,22 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    fn generate_rule_call_parser(&self, rule_name: &syn::Ident, args: &[syn::Lit]) -> TokenStream {
+    fn generate_argument_expr(&self, pattern: &ModelPattern) -> TokenStream {
+        let span = Span::mixed_site();
+        match pattern {
+            ModelPattern::Lit(lit) => match lit {
+                syn::Lit::Int(_) | syn::Lit::Bool(_) => quote_spanned! {span=> #lit },
+                _ => self.generate_parser_expr(pattern),
+            },
+            _ => self.generate_parser_expr(pattern),
+        }
+    }
+
+    fn generate_rule_call_parser(
+        &self,
+        rule_name: &syn::Ident,
+        args: &[ModelPattern],
+    ) -> TokenStream {
         let span = Span::mixed_site();
         let name_str = rule_name.to_string();
 
@@ -406,7 +421,8 @@ impl<'a> Codegen<'a> {
             if args.is_empty() {
                 return quote_spanned! {span=> #fn_name };
             } else {
-                return quote_spanned! {span=> (|i: &mut _| #fn_name(i, #(#args),*)) };
+                let arg_exprs = args.iter().map(|arg| self.generate_argument_expr(arg));
+                return quote_spanned! {span=> (|i: &mut _| #fn_name(i, #(#arg_exprs),*)) };
             }
         }
 
@@ -503,7 +519,8 @@ impl<'a> Codegen<'a> {
                 if args.is_empty() {
                     quote_spanned! {span=> #rule_name }
                 } else {
-                    quote_spanned! {span=> (|i: &mut _| #rule_name(i, #(#args),*)) }
+                    let arg_exprs = args.iter().map(|arg| self.generate_argument_expr(arg));
+                    quote_spanned! {span=> (|i: &mut _| #rule_name(i, #(#arg_exprs),*)) }
                 }
             }
         }
@@ -520,9 +537,8 @@ impl<'a> Codegen<'a> {
                 rule_name, args, ..
             } => self.generate_rule_call_parser(rule_name, args),
             ModelPattern::Lit(lit_str) => {
-                let s = lit_str.value();
                 quote_spanned! {span=>
-                    (ws, literal(#s)).map(|(_, s)| s)
+                    (ws, literal(#lit_str)).map(|(_, s)| s)
                 }
             }
             ModelPattern::Group(alternatives, _) => {

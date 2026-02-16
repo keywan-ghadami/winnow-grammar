@@ -11,9 +11,9 @@ grammar! {
 
 #[test]
 fn test_float_literal() {
-    let input = LocatingSlice::new("3.14");
+    let input = LocatingSlice::new("1.5");
     let result = FloatParser::parse_test_float.parse(input).unwrap();
-    assert!((result - 3.14).abs() < f64::EPSILON);
+    assert!((result - 1.5).abs() < f64::EPSILON);
 
     let input = LocatingSlice::new("-0.5");
     let result = FloatParser::parse_test_float.parse(input).unwrap();
