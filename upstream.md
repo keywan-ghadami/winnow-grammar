@@ -19,15 +19,3 @@ This document outlines key features needed in the `syn-grammar` frontend. Implem
     // Using the generic rule
     rule main -> Vec<i32> = separated_list(integer)
     ```
-
-## 2. Analysis of Indirect Left Recursion
-
--   **Priority:** Medium
--   **What we need:** We need `syn-grammar` to perform the graph-based analysis required to detect indirect (or mutual) left recursion (e.g., `a = b; b = a;`). The resulting analysis should be available to the backend.
--   **Why it's needed:** The `winnow-grammar` backend can already transform *direct* left recursion into efficient iterative parsers. However, to support more complex and natural grammar styles, we need `syn-grammar` to identify the more complex cases of mutual recursion so the backend can generate the correct parsing code.
-
-## 3. Enhanced Diagnostics for Error Reporting
-
--   **Priority:** Low
--   **What we need:** More specific error types and precise source-span information from `syn-grammar` when it fails to parse a grammar definition.
--   **Why it's needed:** The quality of our compile-time error messages is directly limited by the information `syn-grammar` provides. With better diagnostics, we can give our users much more specific and actionable feedback, pinpointing the exact location and cause of an error in their grammar. This would significantly improve the overall developer experience.
