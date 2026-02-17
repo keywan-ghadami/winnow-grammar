@@ -22,17 +22,14 @@ This file tracks critical technical debt and optimization opportunities identifi
 *   **The Issue:** In many parser use cases (especially when using `LocatingSlice`), users want a rich `Span` object that might include line/column information, or they might be using a custom input type where `Range<usize>` isn't the natural span representation. The code comment explicitly states: *"This is where 'Map winnow::stream::Location to spans' task comes in... winnow-grammar currently just returns the Range as the 'span'."*
 *   **Goal:** Make the span type configurable or smarter. If the input is `LocatingSlice`, we might want to return the slice itself or a custom `Span` struct. We need to verify if `winnow::stream::Location` is being fully utilized to provide rich location data (line/col) vs just raw byte offsets.
 
-## 4. Detect Infinite Recursion Loops
+## 4. [Awaiting Integration] Detect Infinite Recursion Loops
 
-*   **Current State:** The macro detects *direct* left recursion (e.g., `A -> A b`) and compiles it into a loop. It also has a check ensuring that at least one base case exists: `if base_refs.is_empty() { compile_error!(...) }`.
-*   **The Issue:** This does not catch *indirect* left recursion (e.g., `A -> B`, `B -> A`) or more complex cycles that don't fit the simple "starts with self" pattern. These will compile but cause a stack overflow at runtime.
-*   **Goal:** Implement a graph analysis pass on the grammar rules before code generation. Build a dependency graph of rules and detect cycles that do not consume tokens (nullable loops). Emit a compile-time error if such a cycle is detected.
+*   **Upstream Status:** The `syn-grammar v0.7` dependency now includes a graph analysis pass that detects and reports cycles in the grammar rules.
+*   **The Issue:** This analysis is performed in the upstream crate but is not yet explicitly invoked or tested within `winnow-grammar`. The compile-time errors or warnings it produces need to be verified to ensure they are presented to the user correctly.
+*   **Goal:** Create test cases with indirect left-recursion and other complex recursive patterns to confirm that the upstream analysis correctly identifies them. Ensure that the error messages are clear and actionable for `winnow-grammar` users.
 
-## 5. Add Diagnostics for Grammar Conflicts
+## 5. [Awaiting Integration] Add Diagnostics for Grammar Conflicts
 
-*   **Current State:** There is no ambiguity detection. If a user writes `rule -> A | A`, the second alternative is simply unreachable code.
-*   **The Issue:** Users can easily write ambiguous grammars or "shadowed" alternatives (e.g., matching a keyword `if` after matching a variable `ident` that accepts "if").
-*   **Goal:** Implement basic FIRST/FOLLOW set analysis or similar reachability checks to warn users about:
-    *   Unreachable alternatives.
-    *   Ambiguous overlaps between alternatives (e.g., string literals overlapping with identifier patterns).
-    *   Unused rules.
+*   **Upstream Status:** The `syn-grammar v0.7` dependency now includes FIRST/FOLLOW set analysis and can detect unreachable alternatives or ambiguous overlaps.
+*   **The Issue:** Similar to recursion detection, this feature exists upstream but its results are not yet integrated into `winnow-grammar`'s diagnostic output.
+*   **Goal:** Add test cases with ambiguous grammars (e.g., overlapping keywords, unreachable `alt` branches) to verify that the upstream diagnostics are triggered. Confirm that the warnings or errors are surfaced effectively during compilation of a `winnow-grammar` project.
