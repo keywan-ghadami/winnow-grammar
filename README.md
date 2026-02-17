@@ -154,6 +154,31 @@ grammar! {
 }
 ```
 
+### Generic Rules
+
+You can define rules that accept generic type parameters and parser arguments. This allows you to create reusable grammar patterns.
+
+```rust
+use winnow_grammar::grammar;
+use winnow::prelude::*;
+
+grammar! {
+    grammar Generics {
+        // A generic rule that parses a list of elements of type T.
+        // `item` is a parser argument that produces T.
+        // `I` is the implicit generic parameter for the input stream type.
+        rule list<T>(item: impl Parser<I, T, winnow::error::ContextError>) -> Vec<T> =
+            "[" elements:item* "]" -> { elements }
+
+        // Using the generic rule with a parser for u32
+        rule main -> Vec<u32> = list(u32_parser) -> { main }
+        
+        rule u32_parser -> u32 = i:u32 -> { i }
+    }
+}
+# fn main() {}
+```
+
 ### Patterns
 
 #### Literals
