@@ -85,13 +85,22 @@ impl<'a> Codegen<'a> {
         let fn_name = format_ident!("parse_{}", rule_name, span = span);
         let ret_type = &rule.return_type;
 
-        let params: Vec<TokenStream> = rule
-            .params
-            .iter()
-            .map(|(name, ty)| {
-                quote! { #name: #ty }
-            })
-            .collect();
+        let mut extra_generics = Vec::new();
+        let mut params_tokens = Vec::new();
+
+        for (name, ty) in &rule.params {
+            match ty {
+                Some(t) => params_tokens.push(quote! { mut #name: #t }),
+                None => {
+                    let output_type = format_ident!("Output_{}", name, span = Span::mixed_site());
+                    extra_generics.push(output_type.clone());
+                    // We assume standard ContextError. If user wants custom error, they should provide explicit type.
+                    params_tokens.push(quote! { 
+                        mut #name: impl ::winnow::Parser<I, #output_type, ::winnow::error::ContextError> 
+                    });
+                }
+            }
+        }
 
         let (recursive_refs, base_refs) =
             analysis::split_left_recursive(&rule.name, &rule.variants);
@@ -129,9 +138,32 @@ impl<'a> Codegen<'a> {
             quote! {}
         };
 
+        // Generics support
+        let gen_params = &rule.generics.params;
+        let gen_where = &rule.generics.where_clause;
+
+        let comma1 = if gen_params.is_empty() {
+            quote! {}
+        } else {
+            quote! {,}
+        };
+        let comma2 = if extra_generics.is_empty() {
+            quote! {}
+        } else {
+            quote! {,}
+        };
+
+        let where_preds = if let Some(w) = gen_where {
+            let p = &w.predicates;
+            quote! { #p, }
+        } else {
+            quote! {}
+        };
+
         quote_spanned! {span=>
-            #vis fn #fn_name<I>(input: &mut I, #(#params),*) -> ::winnow::ModalResult<#ret_type>
+            #vis fn #fn_name<#gen_params #comma1 I #comma2 #(#extra_generics),* >(input: &mut I, #(#params_tokens),*) -> ::winnow::ModalResult<#ret_type>
             where
+                #where_preds
                 I: ::winnow::stream::Stream<Token = char>
                    + ::winnow::stream::StreamIsPartial
                    + ::winnow::stream::Location
@@ -568,7 +600,7 @@ impl<'a> Codegen<'a> {
 
             _ => {
                 if args.is_empty() {
-                    quote_spanned! {span=> #rule_name }
+                    quote_spanned! {span=> (|i: &mut _| ::winnow::Parser::parse_next(&mut #rule_name, i)) }
                 } else {
                     let arg_exprs = args.iter().map(|arg| self.generate_argument_expr(arg));
                     quote_spanned! {span=> (|i: &mut _| #rule_name(i, #(#arg_exprs),*)) }

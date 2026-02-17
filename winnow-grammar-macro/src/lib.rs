@@ -158,6 +158,7 @@ pub fn grammar(input: TokenStream) -> TokenStream {
 
 fn grammar_impl(input: TokenStream) -> TokenStream {
     // 1. Parse & Validate using syn-grammar-model with specific built-ins
+    // Note: validator is patched in vendored source to support typed generic params.
     let m_ast = match parse_grammar::<WinnowBackend>(input.into()) {
         Ok(ast) => ast,
         Err(e) => return e.to_compile_error().into(),

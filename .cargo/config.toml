@@ -1,2 +1,5 @@
-[alias]
-ctest = "!cargo clippy --all-targets --all-features && cargo test"
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
