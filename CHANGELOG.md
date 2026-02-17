@@ -13,3 +13,4 @@
 - **Built-in Parsers**: `ident`, `integer`, `uint`, `string`, `char`, `hex_digit0`, `hex_digit1`, `oct_digit0`, `oct_digit1`, `binary_digit0`, `binary_digit1`, `float`, `space0`, `space1`, `line_ending`.
 - **External Rules**: Support for calling custom or external `winnow` parsers.
 - **Cut Operator**: Support for the cut operator `=>` to control backtracking.
+- **Diagnostics**: Compile-time detection of indirect left recursion and unreachable alternatives (via `syn-grammar` 0.7).
