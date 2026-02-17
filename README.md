@@ -334,6 +334,15 @@ grammar! {
 }
 ```
 
+### Diagnostics and Verification
+
+`winnow-grammar` provides compile-time checks to ensure your grammar is sound. It will detect:
+
+-   **Indirect Left Recursion**: Cycles like `A -> B -> A` are detected and reported as compile errors, preventing runtime stack overflows.
+-   **Unreachable Alternatives**: If an alternative in an `|` sequence is identical to or shadowed by a previous one, a warning or error is emitted (e.g., `rule -> "a" | "a"`).
+
+These diagnostics help you catch logical errors early in the development process.
+
 ### Whitespace Handling
 
 By default, `winnow-grammar` assumes you want to skip whitespace between tokens. It inserts a parser equivalent to `winnow::ascii::multispace0` before every literal, built-in, and delimiter.
