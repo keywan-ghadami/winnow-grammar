@@ -86,6 +86,10 @@ impl Backend for WinnowBackend {
                 name: "empty",
                 return_type: "()",
             },
+            BuiltIn {
+                name: "eof",
+                return_type: "()",
+            },
             // Explicit Rust Types
             BuiltIn {
                 name: "u8",

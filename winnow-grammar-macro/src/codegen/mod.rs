@@ -81,6 +81,7 @@ impl<'a> Codegen<'a> {
     fn generate_rule(&self, rule: &Rule) -> TokenStream {
         let rule_name = &rule.name;
         let rule_name_str = rule_name.to_string();
+        let is_ws_rule = rule_name_str == "ws";
         let span = Span::mixed_site();
         let fn_name = format_ident!("parse_{}", rule_name, span = span);
         let ret_type = &rule.return_type;
@@ -160,6 +161,20 @@ impl<'a> Codegen<'a> {
             quote! {}
         };
 
+        let ws_shadow = if is_ws_rule {
+            quote_spanned! {span=>
+                #[allow(dead_code)]
+                fn ws<I>(_: &mut I) -> ::winnow::ModalResult<()>
+                where
+                    I: ::winnow::stream::Stream,
+                {
+                    Ok(())
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         quote_spanned! {span=>
             #vis fn #fn_name<#gen_params #comma1 I #comma2 #(#extra_generics),* >(input: &mut I, #(#params_tokens),*) -> ::winnow::ModalResult<#ret_type>
             where
@@ -180,6 +195,8 @@ impl<'a> Codegen<'a> {
             {
                 use ::winnow::Parser;
                 use ::winnow::error::ContextError;
+
+                #ws_shadow
 
                 (|input: &mut I| -> ::winnow::ModalResult<#ret_type> {
                     #body
@@ -527,22 +544,25 @@ impl<'a> Codegen<'a> {
                     .map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
             },
             "space0" => quote_spanned! {span=>
-                (ws, ::winnow::ascii::space0).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+                ::winnow::ascii::space0.map(|s| AsRef::<str>::as_ref(&s).to_string())
             },
             "space1" => quote_spanned! {span=>
-                (ws, ::winnow::ascii::space1).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+                ::winnow::ascii::space1.map(|s| AsRef::<str>::as_ref(&s).to_string())
             },
             "multispace0" => quote_spanned! {span=>
-                (ws, ::winnow::ascii::multispace0).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+                ::winnow::ascii::multispace0.map(|s| AsRef::<str>::as_ref(&s).to_string())
             },
             "multispace1" => quote_spanned! {span=>
-                (ws, ::winnow::ascii::multispace1).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+                ::winnow::ascii::multispace1.map(|s| AsRef::<str>::as_ref(&s).to_string())
             },
             "line_ending" => quote_spanned! {span=>
-                (ws, ::winnow::ascii::line_ending).map(|(_, s)| AsRef::<str>::as_ref(&s).to_string())
+                ::winnow::ascii::line_ending.map(|s| AsRef::<str>::as_ref(&s).to_string())
             },
             "empty" => quote_spanned! {span=>
                 ::winnow::combinator::empty
+            },
+            "eof" => quote_spanned! {span=>
+                ::winnow::combinator::eof
             },
 
             // Standard Rust Types

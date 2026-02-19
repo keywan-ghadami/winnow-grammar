@@ -105,6 +105,35 @@ The `grammar!` macro expands into a Rust module (named `Calc` in the example) co
 
 ## Detailed Syntax Guide
 
+### Naming Convention
+
+For each rule named `rule_name` in your grammar, `winnow-grammar` generates a function named `parse_rule_name`. This function is placed inside the module named after your grammar.
+
+```rust
+grammar! {
+    grammar MyGrammar {
+        pub rule start -> () = ...
+    }
+}
+
+// Access the parser as:
+// MyGrammar::parse_start
+```
+
+### Input Type Requirements
+
+The generated parsers work on any input that implements the necessary `winnow` traits. This includes `&str` and `&[u8]`.
+
+If you use **Span Binding (`@`)**, your input type **must** implement `winnow::stream::Location`. The recommended type for this is `winnow::stream::LocatingSlice`.
+
+```rust
+use winnow::stream::LocatingSlice;
+use winnow::prelude::*;
+
+let input = LocatingSlice::new("some input");
+let result = MyGrammar::parse_start.parse(input);
+```
+
 ### Use Statements
 
 You can include standard Rust `use` statements directly within your grammar block. These are passed through to the generated parser module, allowing you to easily import types needed for your rules.
@@ -195,7 +224,7 @@ grammar! {
 ```
 
 #### Built-in Parsers
-`winnow-grammar` provides several built-in parsers for common text patterns. These are automatically generated with whitespace support.
+`winnow-grammar` provides several built-in parsers for common text patterns.
 
 | Parser | Description | Returns |
 |--------|-------------|---------|
@@ -207,6 +236,15 @@ grammar! {
 | `u8`..`u128` | Unsigned integers of various sizes | `u8`..`u128` |
 | `i8`..`i128` | Signed integers of various sizes | `i8`..`i128` |
 | `bool` | `true` or `false` | `bool` |
+| `multispace0` | Zero or more whitespace characters | `String` |
+| `multispace1` | One or more whitespace characters | `String` |
+| `space0` | Zero or more horizontal spaces | `String` |
+| `space1` | One or more horizontal spaces | `String` |
+| `line_ending` | `\n` or `\r\n` | `String` |
+| `empty` | Matches nothing and always succeeds | `()` |
+| `eof` | Matches the end of the input | `()` |
+
+*Note: Built-in parsers like `ident`, `string`, and the numeric types automatically consume leading whitespace. Whitespace-specific parsers like `multispace0` do NOT consume leading whitespace.*
 
 #### Custom and External Rules
 You can use any function that matches the `winnow` parser signature `Fn(&mut I) -> ModalResult<T>` as a rule. You just need to import it or define it in your crate.
@@ -215,8 +253,6 @@ You can use any function that matches the `winnow` parser signature `Fn(&mut I) 
 use winnow_grammar::grammar;
 
 // We define or import the parser outside. 
-// Note: In doctests, 'super' refers to the function scope, which can be tricky.
-// We use fully qualified paths here for clarity.
 use winnow::ascii::alpha1;
 
 grammar! {
@@ -359,6 +395,38 @@ grammar! {
 }
 ```
 
+### Whitespace Handling
+
+By default, `winnow-grammar` assumes you want to skip whitespace between tokens. It inserts a parser equivalent to `winnow::ascii::multispace0` before every literal, built-in (except whitespace parsers), and delimiter.
+
+#### Overriding Whitespace
+
+You can override the default whitespace handling by defining a rule named `ws`. If this rule exists, it will be used instead of the default `multispace0`.
+
+```rust
+grammar! {
+    grammar NoWs {
+        // Disable automatic whitespace by making ws do nothing
+        rule ws -> () = empty -> { () }
+        
+        pub rule test -> String = "a" "b" -> { "ab".into() }
+    }
+}
+```
+
+#### Handling Trailing Whitespace
+
+The generated rules consume leading whitespace. If you want to ensure the entire input is consumed, including any trailing whitespace, add `ws eof` at the end of your entry rule.
+
+```rust
+grammar! {
+    grammar MyGrammar {
+        pub rule entry -> Expr = e:expr ws eof -> { e }
+        rule expr -> Expr = ...
+    }
+}
+```
+
 ### Diagnostics and Verification
 
 `winnow-grammar` provides compile-time checks to ensure your grammar is sound. It will detect:
@@ -367,12 +435,6 @@ grammar! {
 -   **Unreachable Alternatives**: If an alternative in an `|` sequence is identical to or shadowed by a previous one, a warning or error is emitted (e.g., `rule -> "a" | "a"`).
 
 These diagnostics help you catch logical errors early in the development process.
-
-### Whitespace Handling
-
-By default, `winnow-grammar` assumes you want to skip whitespace between tokens. It inserts a parser equivalent to `winnow::ascii::multispace0` before every literal, built-in, and delimiter.
-
-If you need precise control over whitespace (e.g., for whitespace-sensitive languages), you may need to implement custom rules or override the default behavior (future versions will provide more configuration options for this).
 
 ## License
 
