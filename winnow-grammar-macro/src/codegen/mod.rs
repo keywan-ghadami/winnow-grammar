@@ -96,8 +96,8 @@ impl<'a> Codegen<'a> {
                     let output_type = format_ident!("Output_{}", name, span = Span::mixed_site());
                     extra_generics.push(output_type.clone());
                     // We assume standard ContextError. If user wants custom error, they should provide explicit type.
-                    params_tokens.push(quote! { 
-                        mut #name: impl ::winnow::Parser<I, #output_type, ::winnow::error::ContextError> 
+                    params_tokens.push(quote! {
+                        mut #name: impl ::winnow::Parser<I, #output_type, ::winnow::error::ContextError>
                     });
                 }
             }
@@ -449,7 +449,7 @@ impl<'a> Codegen<'a> {
     fn generate_argument_expr(&self, pattern: &ModelPattern) -> TokenStream {
         let span = Span::mixed_site();
         match pattern {
-            ModelPattern::Lit(lit) => match lit {
+            ModelPattern::Lit { lit, .. } => match lit {
                 syn::Lit::Int(_) | syn::Lit::Bool(_) => quote_spanned! {span=> #lit },
                 _ => self.generate_parser_expr(pattern),
             },
@@ -639,9 +639,9 @@ impl<'a> Codegen<'a> {
             ModelPattern::RuleCall {
                 rule_name, args, ..
             } => self.generate_rule_call_parser(rule_name, args),
-            ModelPattern::Lit(lit_str) => {
+            ModelPattern::Lit { lit, .. } => {
                 quote_spanned! {span=>
-                    (ws, literal(#lit_str)).map(|(_, s)| s)
+                    (ws, literal(#lit)).map(|(_, s)| s)
                 }
             }
             ModelPattern::Group(alternatives, _) => {
@@ -768,6 +768,7 @@ fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
                 None
             }
         }
+        ModelPattern::Lit { binding, .. } => binding.as_ref(),
         ModelPattern::Optional(inner, _) => get_inner_binding(inner),
         ModelPattern::Repeat(inner, _) => get_inner_binding(inner),
         ModelPattern::Plus(inner, _) => get_inner_binding(inner),

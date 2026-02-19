@@ -17,8 +17,7 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 [[package]]
 name = "grammar-kit"
 version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8aba7fa709788fadce0028d9f106f1a58eadc9b3f37f9f0043205d529fb24be5"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#9bbfce11f3fe0e6b33b611141773e6f3dc57d78d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -136,8 +135,7 @@ dependencies = [
 [[package]]
 name = "syn-grammar"
 version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23351ab1a05356ff3f4d46f5b3e6b99ef4e85ed841f11d75112027ceeb55f376"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#9bbfce11f3fe0e6b33b611141773e6f3dc57d78d"
 dependencies = [
  "grammar-kit",
  "proc-macro2",
@@ -150,8 +148,7 @@ dependencies = [
 [[package]]
 name = "syn-grammar-macros"
 version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85b7ac854aea331c18fe6dbdb7d42656be9962c710b46a50bd1f27a53198cb2d"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#9bbfce11f3fe0e6b33b611141773e6f3dc57d78d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -162,8 +159,7 @@ dependencies = [
 [[package]]
 name = "syn-grammar-model"
 version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d38e295844491ff6bf4fee1cc33d9fbbdb8012f48a59fbaf687b895e91f6264"
+source = "git+https://github.com/keywan-ghadami/syn-grammar?branch=main#9bbfce11f3fe0e6b33b611141773e6f3dc57d78d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -187,9 +183,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.0.2+spec-1.1.0"
+version = "1.0.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1dfefef6a142e93f346b64c160934eb13b5594b84ab378133ac6815cb2bd57f"
+checksum = "c7614eaf19ad818347db24addfa201729cf2a9b6fdfd9eb0ab870fcacc606c0c"
 dependencies = [
  "indexmap",
  "serde_core",

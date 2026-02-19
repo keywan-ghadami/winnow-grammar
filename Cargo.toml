@@ -10,8 +10,8 @@ edition = "2021"
 [dependencies]
 winnow = "0.6"
 winnow-grammar-macro = { path = "winnow-grammar-macro" }
-syn-grammar = "0.7"
-syn-grammar-model = "0.7"
+syn-grammar = { git = "https://github.com/keywan-ghadami/syn-grammar", branch = "main" }
+syn-grammar-model = { git = "https://github.com/keywan-ghadami/syn-grammar", branch = "main" }
 proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "extra-traits"] }

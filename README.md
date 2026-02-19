@@ -110,9 +110,11 @@ The `grammar!` macro expands into a Rust module (named `Calc` in the example) co
 For each rule named `rule_name` in your grammar, `winnow-grammar` generates a function named `parse_rule_name`. This function is placed inside the module named after your grammar.
 
 ```rust
+use winnow_grammar::grammar;
+
 grammar! {
     grammar MyGrammar {
-        pub rule start -> () = ...
+        pub rule start -> () = "start" -> { () }
     }
 }
 
@@ -129,9 +131,18 @@ If you use **Span Binding (`@`)**, your input type **must** implement `winnow::s
 ```rust
 use winnow::stream::LocatingSlice;
 use winnow::prelude::*;
+use winnow_grammar::grammar;
 
-let input = LocatingSlice::new("some input");
-let result = MyGrammar::parse_start.parse(input);
+grammar! {
+    grammar MyGrammar {
+        pub rule start -> () = "some input" -> { () }
+    }
+}
+
+fn main() {
+    let input = LocatingSlice::new("some input");
+    let result = MyGrammar::parse_start.parse(input);
+}
 ```
 
 ### Use Statements
@@ -200,7 +211,7 @@ grammar! {
             "[" elements:item* "]" -> { elements }
 
         // Using the generic rule with a parser for u32
-        rule main -> Vec<u32> = list(u32_parser) -> { main }
+        rule main -> Vec<u32> = l:list(u32_parser) -> { l }
         
         rule u32_parser -> u32 = i:u32 -> { i }
     }
@@ -404,6 +415,9 @@ By default, `winnow-grammar` assumes you want to skip whitespace between tokens.
 You can override the default whitespace handling by defining a rule named `ws`. If this rule exists, it will be used instead of the default `multispace0`.
 
 ```rust
+use winnow_grammar::grammar;
+use winnow::prelude::*;
+
 grammar! {
     grammar NoWs {
         // Disable automatic whitespace by making ws do nothing
@@ -418,7 +432,7 @@ grammar! {
 
 The generated rules consume leading whitespace. If you want to ensure the entire input is consumed, including any trailing whitespace, add `ws eof` at the end of your entry rule.
 
-```rust
+```rust,ignore
 grammar! {
     grammar MyGrammar {
         pub rule entry -> Expr = e:expr ws eof -> { e }
