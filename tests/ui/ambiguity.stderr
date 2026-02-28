@@ -1,0 +1,5 @@
+error: Rule 'choice': Alternative 1 and 2 are identical. Alternative 2 is dead code.
+ --> tests/ui/ambiguity.rs:8:13
+  |
+8 |           | "a" -> { () } // Unreachable
+  |             ^^^

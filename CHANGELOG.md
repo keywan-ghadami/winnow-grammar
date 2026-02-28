@@ -1,0 +1,16 @@
+# Changelog
+
+## [0.1.0] - Unreleased
+
+### Added
+- **Inline Grammars**: Support for defining grammars directly in Rust code using `grammar!`.
+- **EBNF Syntax**: Sequences, alternatives (`|`), optionals (`?`), repetitions (`*`, `+`), and groups (`(...)`).
+- **Winnow Backend**: Generates efficient `winnow` parsers (`ModalResult<T>`).
+- **Whitespace Handling**: Automatic whitespace skipping using `multispace0`.
+- **Left Recursion**: Automatic compilation of direct left-recursive rules into loops.
+- **Rule Arguments**: Support for passing arguments to rules.
+- **Span Tracking**: Support for capturing spans with `@` syntax (using `LocatingSlice`).
+- **Built-in Parsers**: `ident`, `integer`, `uint`, `string`, `char`, `hex_digit0`, `hex_digit1`, `oct_digit0`, `oct_digit1`, `binary_digit0`, `binary_digit1`, `float`, `space0`, `space1`, `line_ending`.
+- **External Rules**: Support for calling custom or external `winnow` parsers.
+- **Cut Operator**: Support for the cut operator `=>` to control backtracking.
+- **Diagnostics**: Compile-time detection of indirect left recursion and unreachable alternatives (via `syn-grammar` 0.7).

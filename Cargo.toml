@@ -1,0 +1,16 @@
+[package]
+name = "winnow-grammar"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+winnow = "0.6"
+winnow-grammar-macros = { path = "winnow-grammar-macros" }
+grammar-kit = { path = "../core/grammar-kit" }
+syn-grammar-model = { path = "../core/syn-grammar-model" }
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+
+[dev-dependencies]
+trybuild = "1.0.116"
