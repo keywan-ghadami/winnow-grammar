@@ -14,3 +14,4 @@
 - **External Rules**: Support for calling custom or external `winnow` parsers.
 - **Cut Operator**: Support for the cut operator `=>` to control backtracking.
 - **Diagnostics**: Compile-time detection of indirect left recursion and unreachable alternatives (via `syn-grammar` 0.7).
+- **Group Bindings**: Support for bindings on groups (e.g. `x:(a | b)`).

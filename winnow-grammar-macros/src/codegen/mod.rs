@@ -327,7 +327,7 @@ impl<'a> Codegen<'a> {
 
         // Special case: Unwrap groups to allow bindings to escape to the current scope.
         // But only if they are simple sequences. If they are alts, generate_parser_expr handles them (returning a value).
-        if let ModelPattern::Group(alts, _) = pattern {
+        if let ModelPattern::Group { alts, .. } = pattern {
             if alts.len() == 1 {
                 return self.generate_sequence_steps(&alts[0].0, in_cut);
             }
@@ -669,8 +669,8 @@ impl<'a> Codegen<'a> {
                     }
                 }
             },
-            ModelPattern::Group(alternatives, _) => {
-                let alts: Vec<TokenStream> = alternatives
+            ModelPattern::Group { alts, .. } => {
+                let alts: Vec<TokenStream> = alts
                     .iter()
                     .map(|(seq, _, _)| self.generate_sequence_parser(seq))
                     .collect();
@@ -818,7 +818,10 @@ impl<'a> Codegen<'a> {
 fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
     match pattern {
         ModelPattern::RuleCall { binding, .. } => binding.as_ref(),
-        ModelPattern::Group(alts, _) => {
+        ModelPattern::Group { alts, binding, .. } => {
+            if let Some(b) = binding {
+                return Some(b);
+            }
             if alts.len() == 1 && alts[0].0.len() == 1 {
                 get_inner_binding(&alts[0].0[0])
             } else {
