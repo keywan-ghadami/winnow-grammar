@@ -1,6 +1,5 @@
-use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar LineEndingParser {
@@ -8,6 +7,7 @@ grammar! {
         // Using "custom_ws" to avoid conflict if any, but rule ws -> () is the standard override.
         // We need to make sure we don't recurse infinitely if ws calls ws.
         // Empty string literal is a parser that consumes nothing and succeeds.
+        #[allow(dead_code)]
         rule ws -> () = empty -> { () }
         pub rule test_line_ending -> String =
             s:line_ending -> { s }
@@ -16,19 +16,15 @@ grammar! {
 
 #[test]
 fn test_line_ending_literal() {
-    let input = LocatingSlice::new("\n");
-    let result = LineEndingParser::parse_test_line_ending
-        .parse(input)
-        .unwrap();
-    assert_eq!(result, "\n");
+    LineEndingParser::parse_test_line_ending
+        .parse_test("\n")
+        .assert_success_is("\n".to_string());
 
-    let input = LocatingSlice::new("\r\n");
-    let result = LineEndingParser::parse_test_line_ending
-        .parse(input)
-        .unwrap();
-    assert_eq!(result, "\r\n");
+    LineEndingParser::parse_test_line_ending
+        .parse_test("\r\n")
+        .assert_success_is("\r\n".to_string());
 
-    let input = LocatingSlice::new("a");
-    let result = LineEndingParser::parse_test_line_ending.parse(input);
-    assert!(result.is_err());
+    LineEndingParser::parse_test_line_ending
+        .parse_test("a")
+        .assert_failure();
 }

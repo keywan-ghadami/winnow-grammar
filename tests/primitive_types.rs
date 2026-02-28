@@ -1,6 +1,5 @@
-use grammar_kit::testing::Testable;
-use winnow::{stream::LocatingSlice, Parser};
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar Primitives {
@@ -27,51 +26,35 @@ grammar! {
 
 #[test]
 fn test_primitives() {
-    let input = LocatingSlice::new("255");
     Primitives::parse_test_u8
-        .parse(input)
-        .test()
+        .parse_test("255")
         .assert_success_is(255);
 
-    let input = LocatingSlice::new("65535");
     Primitives::parse_test_u16
-        .parse(input)
-        .test()
+        .parse_test("65535")
         .assert_success_is(65535);
 
-    let input = LocatingSlice::new("18446744073709551615");
     Primitives::parse_test_u64
-        .parse(input)
-        .test()
+        .parse_test("18446744073709551615")
         .assert_success_is(u64::MAX);
 
-    let input = LocatingSlice::new("-128");
     Primitives::parse_test_i8
-        .parse(input)
-        .test()
+        .parse_test("-128")
         .assert_success_is(-128);
 
-    let input = LocatingSlice::new("-9223372036854775808");
     Primitives::parse_test_i64
-        .parse(input)
-        .test()
+        .parse_test("-9223372036854775808")
         .assert_success_is(i64::MIN);
 
-    let input = LocatingSlice::new("1.5");
     Primitives::parse_test_f32
-        .parse(input)
-        .test()
+        .parse_test("1.5")
         .assert_success_with(|v| assert!((v - 1.5f32).abs() < 1e-6));
 
-    let input = LocatingSlice::new("true");
     Primitives::parse_test_bool
-        .parse(input)
-        .test()
+        .parse_test("true")
         .assert_success_is(true);
 
-    let input = LocatingSlice::new("false");
     Primitives::parse_test_bool
-        .parse(input)
-        .test()
+        .parse_test("false")
         .assert_success_is(false);
 }

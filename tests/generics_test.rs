@@ -1,6 +1,6 @@
 use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar Generics {
@@ -16,9 +16,7 @@ grammar! {
 
 #[test]
 fn test_generics() {
-    let input = "[ 1 2 3 ]";
-    let input = LocatingSlice::new(input);
-
-    let result = Generics::parse_main.parse(input).unwrap();
-    assert_eq!(result, vec![1, 2, 3]);
+    Generics::parse_main
+        .parse_test("[ 1 2 3 ]")
+        .assert_success_is(vec![1, 2, 3]);
 }

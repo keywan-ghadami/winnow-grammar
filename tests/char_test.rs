@@ -1,6 +1,5 @@
-use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar CharParser {
@@ -11,19 +10,19 @@ grammar! {
 
 #[test]
 fn test_char_literal() {
-    let input = LocatingSlice::new("'a'");
-    let result = CharParser::parse_test_char.parse(input).unwrap();
-    assert_eq!(result, 'a');
+    CharParser::parse_test_char
+        .parse_test("'a'")
+        .assert_success_is('a');
 
-    let input = LocatingSlice::new("'\\n'");
-    let result = CharParser::parse_test_char.parse(input).unwrap();
-    assert_eq!(result, '\n');
+    CharParser::parse_test_char
+        .parse_test("'\\n'")
+        .assert_success_is('\n');
 
-    let input = LocatingSlice::new("'\\''");
-    let result = CharParser::parse_test_char.parse(input).unwrap();
-    assert_eq!(result, '\'');
+    CharParser::parse_test_char
+        .parse_test("'\\''")
+        .assert_success_is('\'');
 
-    let input = LocatingSlice::new("'\\\\'");
-    let result = CharParser::parse_test_char.parse(input).unwrap();
-    assert_eq!(result, '\\');
+    CharParser::parse_test_char
+        .parse_test("'\\\\'")
+        .assert_success_is('\\');
 }

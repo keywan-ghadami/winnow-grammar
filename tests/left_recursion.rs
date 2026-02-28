@@ -1,6 +1,5 @@
-use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Expr {
@@ -21,14 +20,10 @@ grammar! {
 
 #[test]
 fn test_left_recursion() {
-    let input = LocatingSlice::new("1 + 2 + 3");
-    let result = LeftRec::parse_expr.parse(input).unwrap();
-    // (1 + 2) + 3
-    assert_eq!(
-        result,
-        Expr::Add(
+    LeftRec::parse_expr
+        .parse_test("1 + 2 + 3")
+        .assert_success_is(Expr::Add(
             Box::new(Expr::Add(Box::new(Expr::Num(1)), Box::new(Expr::Num(2)))),
-            Box::new(Expr::Num(3))
-        )
-    );
+            Box::new(Expr::Num(3)),
+        ));
 }

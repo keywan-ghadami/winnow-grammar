@@ -1,6 +1,5 @@
-use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar Args {
@@ -14,8 +13,5 @@ grammar! {
 
 #[test]
 fn test_args() {
-    let input = "start 5";
-    let input = LocatingSlice::new(input);
-    let result = Args::parse_main.parse(input).unwrap();
-    assert_eq!(result, 15);
+    Args::parse_main.parse_test("start 5").assert_success_is(15);
 }

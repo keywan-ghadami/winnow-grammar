@@ -7,9 +7,8 @@ pub use winnow_grammar_macros::grammar;
 // Re-export winnow so generated code has access to it
 pub use winnow;
 
-// Re-export testing utilities from syn-grammar (grammar-kit)
-// Note: You might need to implement Testable for winnow::PResult later
-pub use grammar_kit::testing;
+// Re-export testing utilities
+pub mod testing;
 
 /// Portable types for backend compatibility
 pub mod types {

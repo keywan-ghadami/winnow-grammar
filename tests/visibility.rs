@@ -1,6 +1,5 @@
-use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar VisibilityTest {
@@ -17,12 +16,7 @@ grammar! {
 
 #[test]
 fn test_visibility() {
-    let input = LocatingSlice::new("test");
-    let result = VisibilityTest::parse_start.parse(input).unwrap();
-    assert_eq!(result, "test");
+    VisibilityTest::parse_start
+        .parse_test("test")
+        .assert_success_is("test".to_string());
 }
-
-// We cannot easily test that `VisibilityTest::parse_private_rule` is NOT accessible
-// in a standard `cargo test` run because it would cause a compile error.
-// However, if the codegen works, `parse_start` will be able to call `parse_private_rule`
-// because they are in the same module.

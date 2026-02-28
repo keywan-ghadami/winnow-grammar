@@ -1,6 +1,5 @@
-use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar FloatParser {
@@ -11,19 +10,19 @@ grammar! {
 
 #[test]
 fn test_float_literal() {
-    let input = LocatingSlice::new("1.5");
-    let result = FloatParser::parse_test_float.parse(input).unwrap();
-    assert!((result - 1.5).abs() < f64::EPSILON);
+    FloatParser::parse_test_float
+        .parse_test("1.5")
+        .assert_success_approx(1.5);
 
-    let input = LocatingSlice::new("-0.5");
-    let result = FloatParser::parse_test_float.parse(input).unwrap();
-    assert!((result - -0.5).abs() < f64::EPSILON);
+    FloatParser::parse_test_float
+        .parse_test("-0.5")
+        .assert_success_approx(-0.5);
 
-    let input = LocatingSlice::new("123");
-    let result = FloatParser::parse_test_float.parse(input).unwrap();
-    assert!((result - 123.0).abs() < f64::EPSILON);
+    FloatParser::parse_test_float
+        .parse_test("123")
+        .assert_success_approx(123.0);
 
-    let input = LocatingSlice::new("abc");
-    let result = FloatParser::parse_test_float.parse(input);
-    assert!(result.is_err());
+    FloatParser::parse_test_float
+        .parse_test("abc")
+        .assert_failure();
 }

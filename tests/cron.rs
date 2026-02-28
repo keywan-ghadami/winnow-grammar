@@ -1,6 +1,5 @@
-use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 #[derive(Debug, PartialEq)]
 pub struct Schedule {
@@ -67,49 +66,46 @@ grammar! {
 
 #[test]
 fn test_standard_cron() {
-    let input = LocatingSlice::new("0 30 9 * * 1-5");
-    let result = Cron::parse_schedule.parse(input).unwrap();
-    assert_eq!(
-        result,
-        Schedule {
+    Cron::parse_schedule
+        .parse_test("0 30 9 * * 1-5")
+        .assert_success_is(Schedule {
             second: Field::Value(0),
             minute: Field::Value(30),
             hour: Field::Value(9),
             dom: Field::Any,
             month: Field::Any,
             dow: Field::Range(1, 5),
-        }
-    );
+        });
 }
 
 #[test]
 fn test_complex_precedence() {
-    // "*/5" -> Step(Any, 5)
-    // "1-10/2" -> Step(Range(1, 10), 2)
-    // "1,2,3" -> List(...)
-    let input = LocatingSlice::new("*/5 1-10/2 1,2,3 * * *");
-    let result = Cron::parse_schedule.parse(input).unwrap();
+    Cron::parse_schedule
+        .parse_test("*/5 1-10/2 1,2,3 * * *")
+        .assert_success_with(|result| {
+            match &result.second {
+                Field::Step(f, 5) => assert_eq!(**f, Field::Any),
+                _ => panic!("Expected */5"),
+            }
 
-    match result.second {
-        Field::Step(f, 5) => assert_eq!(*f, Field::Any),
-        _ => panic!("Expected */5"),
-    }
+            match &result.minute {
+                Field::Step(f, 2) => assert_eq!(**f, Field::Range(1, 10)),
+                _ => panic!("Expected 1-10/2"),
+            }
 
-    match result.minute {
-        Field::Step(f, 2) => assert_eq!(*f, Field::Range(1, 10)),
-        _ => panic!("Expected 1-10/2"),
-    }
-
-    match result.hour {
-        Field::List(l) => assert_eq!(l.len(), 3),
-        _ => panic!("Expected list"),
-    }
+            match &result.hour {
+                Field::List(l) => assert_eq!(l.len(), 3),
+                _ => panic!("Expected list"),
+            }
+        });
 }
 
 #[test]
 fn test_messy_whitespace() {
-    let input = LocatingSlice::new(" 0   30\t9 * \n * 1-5");
-    let result = Cron::parse_schedule.parse(input).unwrap();
-    assert_eq!(result.second, Field::Value(0));
-    assert_eq!(result.minute, Field::Value(30));
+    Cron::parse_schedule
+        .parse_test(" 0   30\t9 * \n * 1-5")
+        .assert_success_with(|result| {
+            assert_eq!(result.second, Field::Value(0));
+            assert_eq!(result.minute, Field::Value(30));
+        });
 }

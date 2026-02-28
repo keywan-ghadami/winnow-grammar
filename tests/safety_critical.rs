@@ -1,7 +1,6 @@
 use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
-use winnow_grammar::testing::Testable;
+use winnow_grammar::testing::WinnowTestExt;
 
 // 1. Cut Operator Safety: ensuring that once we commit to a path, we do NOT backtrack.
 // This is critical for preventing ambiguity and ensuring deterministic parsing.
@@ -19,10 +18,8 @@ grammar! {
 #[test]
 fn test_cut_operator_safety() {
     // Scenario 1: Successful commit
-    let input = LocatingSlice::new("commitsuccess");
     CutSafety::parse_deterministic_choice
-        .parse(input)
-        .test()
+        .parse_test("commitsuccess")
         .assert_success_is("committed");
 
     // Scenario 2: Failure after commit
@@ -31,17 +28,13 @@ fn test_cut_operator_safety() {
     // "success" fails.
     // Because of cut, we must NOT try the second alternative "commit" "failure".
     // The parser should fail immediately.
-    let input = LocatingSlice::new("commitfailure");
     CutSafety::parse_deterministic_choice
-        .parse(input)
-        .test()
+        .parse_test("commitfailure")
         .assert_failure_contains("success"); // We expect it to be looking for "success"
 
     // Scenario 3: Alternative path
-    let input = LocatingSlice::new("other");
     CutSafety::parse_deterministic_choice
-        .parse(input)
-        .test()
+        .parse_test("other")
         .assert_success_is("other");
 }
 
@@ -59,13 +52,10 @@ grammar! {
 
 #[test]
 fn test_error_propagation() {
-    let input = LocatingSlice::new("start wrong");
-
     // We verify that the error is propagated correctly and contains relevant info.
     // winnow's default error messages for literals usually include what was expected.
     ErrorProp::parse_main
-        .parse(input)
-        .test()
+        .parse_test("start wrong")
         .assert_failure_contains("expecting_this");
 }
 
@@ -94,8 +84,7 @@ fn test_deep_recursion() {
     }
 
     DeepRecursion::parse_recursive
-        .parse(LocatingSlice::new(input.as_str()))
-        .test()
+        .parse_test(&input)
         .assert_success_is(depth);
 }
 
@@ -110,16 +99,12 @@ grammar! {
 #[test]
 fn test_numeric_boundaries() {
     // Test max limits
-    let input = LocatingSlice::new("255 127 340282366920938463463374607431768211455");
     Boundaries::parse_primitive_limits
-        .parse(input)
-        .test()
+        .parse_test("255 127 340282366920938463463374607431768211455")
         .assert_success_is((255, 127, u128::MAX));
 
     // Test overflow behavior (should fail safely, not panic)
-    let input = LocatingSlice::new("256 0 0");
     Boundaries::parse_primitive_limits
-        .parse(input)
-        .test()
+        .parse_test("256 0 0")
         .assert_failure();
 }
