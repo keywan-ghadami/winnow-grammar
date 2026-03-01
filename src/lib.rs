@@ -1,4 +1,7 @@
 #![doc = include_str!("../README.md")]
+#![doc = "\n\n"]
+#![doc = include_str!("../../SYNTAX.md")]
+
 // src/lib.rs
 
 // Re-export the macro

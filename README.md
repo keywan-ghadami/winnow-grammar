@@ -6,43 +6,20 @@
 
 **winnow-grammar** is a powerful parser generator for Rust that allows you to define EBNF-like grammars directly inside your code. It compiles these definitions into efficient `winnow` parsers at compile time.
 
-This crate is built on top of `syn-grammar-model` but targets the `winnow` parser combinator library. While `syn-grammar` is specialized for parsing Rust code (using `TokenStream`), `winnow-grammar` is designed for general-purpose parsing of text, data formats, and custom DSLs (using `&str` or `&[u8]`).
+This crate is built on top of `syn-grammar-model` but targets the `winnow` parser combinator library. While `syn-grammar` is specialized for parsing Rust code, `winnow-grammar` is designed for general-purpose parsing of text, data formats, and custom DSLs (using `&str` or `&[u8]`).
 
-## Why use winnow-grammar?
+## Documentation
 
-**`winnow-grammar` bridges the gap between readable EBNF grammars and high-performance parser combinators.**
-
-It allows developers to write grammars declaratively (like `pest`) but compiles them into raw, high-performance `winnow` combinators (like manual `nom` or `winnow` code) at compile time.
-
-### Comparison
-
-| Feature | `winnow-grammar` | Manual `winnow`/`nom` | `pest` | `syn` |
-| :--- | :--- | :--- | :--- | :--- |
-| **Input Type** | Text/Bytes (`&str`, `&[u8]`) | Text/Bytes | Text | Rust Tokens |
-| **Definition Style** | Declarative (EBNF) | Imperative (Combinators) | Declarative (PEG file) | Imperative (Recursive Descent) |
-| **Performance** | High (compiled) | High | Medium (interpreter overhead) | High |
-| **Type Safety** | High (Bindings) | High | Low (String/Pair traversal) | High |
-| **Boilerplate** | Low | High | Medium | High |
-
-### Key Advantages
-
-1.  **Readability vs. Raw Combinators**: Writing parsers manually using functions like `preceded`, `terminated`, `alt`, and `map` results in verbose, nested code that is difficult to read and maintain ("rightward drift"). `winnow-grammar` lets you define the grammar using familiar EBNF syntax directly in your code.
-2.  **Performance**: Since `winnow-grammar` is a macro that generates `winnow` code at compile time, there is **zero runtime overhead** compared to writing the combinators yourself.
-3.  **Type Safety vs. External Files**: Tools like `pest` require separate grammar files and often lead to loosely typed parsing where you have to iterate over "Pairs" or string tokens manually. `winnow-grammar` allows you to bind grammar rules directly to Rust structs and enums. The parsing logic and data structure definitions sit side-by-side.
-4.  **No Context Switch**: You don't need to learn a proprietary API to traverse a syntax tree; the output is your native Rust types.
+- **[Grammar Syntax Reference](../SYNTAX.md)**: Detailed guide to the shared grammar definition language (rules, operators, built-ins).
+- **[Extending Guide](../EXTENDING.md)**: Guide for library authors on how to build custom backends.
 
 ## Features
 
 - **Inline Grammars**: Define your grammar directly in your Rust code using the `grammar!` macro.
-- **EBNF Syntax**: Familiar syntax with sequences, alternatives (`|`), optionals (`?`), repetitions (`*`, `+`), and grouping `(...)`.
 - **Type-Safe Actions**: Directly map parsing rules to Rust types and AST nodes using action blocks (`-> { ... }`).
 - **Winnow Integration**: Generates efficient `winnow` parsers that work with standard `winnow` traits.
-- **Automatic Left Recursion**: Write natural expression grammars (e.g., `expr = expr + term`) without worrying about infinite recursion.
 - **Whitespace Handling**: Automatic whitespace skipping (configurable).
-- **Rule Arguments**: Pass context or parameters between rules.
 - **Span Tracking**: Support for `LocatingSlice` to track source positions (e.g., `rule @ span`).
-- **Seamless Integration**: Easily mix generated rules with handwritten `winnow` parsers.
-- **Cut Operator**: Control backtracking explicitly for better error messages and performance.
 
 ## Installation
 
@@ -56,399 +33,141 @@ winnow = "0.6"
 
 ## Quick Start
 
-Here is a complete example of a calculator grammar that parses mathematical expressions into an `i32`.
+Here is a complete example of a Cron expression parser.
 
 ```rust
 use winnow_grammar::grammar;
 use winnow::prelude::*;
 use winnow::stream::LocatingSlice;
 
+#[derive(Debug, PartialEq)]
+pub struct Schedule {
+    pub second: Field,
+    pub minute: Field,
+    pub hour: Field,
+    pub dom: Field,
+    pub month: Field,
+    pub dow: Field,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Field {
+    Any,
+    Value(u32),
+    Range(u32, u32),
+    List(Vec<Field>),
+    Step(Box<Field>, u32),
+}
+
 grammar! {
-    grammar Calc {
-        // The return type of the rule is defined after `->`
-        pub rule expression -> i32 =
-            l:expression "+" r:term -> { l + r }
-          | l:expression "-" r:term -> { l - r }
-          | t:term                  -> { t }
+    grammar Cron {
+        pub rule schedule -> Schedule =
+            sec:field min:field hour:field dom:field mon:field dow:field -> {
+                Schedule {
+                    second: sec,
+                    minute: min,
+                    hour,
+                    dom,
+                    month: mon,
+                    dow,
+                }
+            }
 
-        rule term -> i32 =
-            f:factor "*" t:term -> { f * t }
-          | f:factor "/" t:term -> { f / t }
-          | f:factor            -> { f }
+        rule field -> Field =
+            l:list -> { if l.len() == 1 { l.into_iter().next().unwrap() } else { Field::List(l) } }
 
-        rule factor -> i32 =
-            i:i32               -> { i }
-          | paren(e:expression) -> { e }
+        rule list -> Vec<Field> =
+            base:base_field "," rest:list -> { let mut rest = rest; rest.insert(0, base); rest }
+          | base:base_field -> { vec![base] }
+
+        rule base_field -> Field =
+            f:range_or_val s:step? -> {
+                match s {
+                    Some(step) => Field::Step(Box::new(f), step),
+                    None => f,
+                }
+            }
+          | "*" s:step? -> {
+                match s {
+                    Some(step) => Field::Step(Box::new(Field::Any), step),
+                    None => Field::Any,
+                }
+            }
+
+        rule range_or_val -> Field =
+            a:u32 "-" b:u32 -> { Field::Range(a, b) }
+          | v:u32 -> { Field::Value(v) }
+
+        rule step -> u32 =
+            "/" n:u32 -> { n }
     }
 }
 
 fn main() {
-    // The macro generates a module `Calc` containing a function `parse_expression`
-    // corresponding to the `expression` rule.
-    let input = "10 - 2 * 3";
-    
-    // We use LocatingSlice to support span tracking if needed, 
-    // but a simple &str works too if the grammar doesn't use @ spans.
+    let input = "0 30 9 * * 1-5";
+    // We use LocatingSlice to support span tracking if needed.
     let input = LocatingSlice::new(input);
     
-    let result = Calc::parse_expression.parse(input);
-    assert_eq!(result.unwrap(), 4);
+    let result = Cron::parse_schedule.parse(input);
+    println!("{:?}", result);
 }
 ```
 
 ### What happens under the hood?
 
-The `grammar!` macro expands into a Rust module (named `Calc` in the example) containing:
-- A function `parse_<rule_name>` for each rule (e.g., `parse_expression`).
+The `grammar!` macro expands into a Rust module containing:
+- A function `parse_<rule_name>` for each rule.
 - These functions take a `&mut I` where `I` is a `winnow` stream (e.g., `&str`, `LocatingSlice<&str>`).
-- All necessary imports and helper functions to make the parser work.
 
-## Detailed Syntax Guide
+## Backend Specifics
 
-### Naming Convention
-
-For each rule named `rule_name` in your grammar, `winnow-grammar` generates a function named `parse_rule_name`. This function is placed inside the module named after your grammar.
-
-```rust
-use winnow_grammar::grammar;
-
-grammar! {
-    grammar MyGrammar {
-        pub rule start -> () = "start" -> { () }
-    }
-}
-
-// Access the parser as:
-// MyGrammar::parse_start
-```
-
-### Input Type Requirements
-
-The generated parsers work on any input that implements the necessary `winnow` traits. This includes `&str` and `&[u8]`.
+### Input Type
+The generated parsers work on any input that implements the necessary `winnow` traits (`&str`, `&[u8]`).
 
 If you use **Span Binding (`@`)**, your input type **must** implement `winnow::stream::Location`. The recommended type for this is `winnow::stream::LocatingSlice`.
 
-```rust
-use winnow::stream::LocatingSlice;
-use winnow::prelude::*;
-use winnow_grammar::grammar;
-
-grammar! {
-    grammar MyGrammar {
-        pub rule start -> () = "some input" -> { () }
-    }
-}
-
-fn main() {
-    let input = LocatingSlice::new("some input");
-    let result = MyGrammar::parse_start.parse(input);
-}
-```
-
-### Use Statements
-
-You can include standard Rust `use` statements directly within your grammar block. These are passed through to the generated parser module, allowing you to easily import types needed for your rules.
-
-```rust
-use winnow_grammar::grammar;
-
-grammar! {
-    grammar MyGrammar {
-        use std::collections::HashMap;
-
-        rule map -> HashMap<String, String> = 
-            // ... implementation
-            "test" -> { HashMap::new() }
-    }
-}
-```
-
-### Rules
-
-A grammar consists of a set of rules. Each rule has a name, a return type, and a pattern to match.
-
-```text
-rule name -> ReturnType = pattern -> { action_code }
-```
-
-- **`name`**: The name of the rule (e.g., `expr`).
-- **`ReturnType`**: The Rust type returned by the rule (e.g., `Expr`, `i32`, `Vec<String>`).
-- **`pattern`**: The EBNF pattern defining what to parse.
-- **`action_code`**: A Rust block that constructs the return value from the bound variables.
-
-### Rule Arguments
-
-Rules can accept arguments, allowing you to pass context or state down the parser chain.
-
-```rust
-use winnow_grammar::grammar;
-
-grammar! {
-    grammar Args {
-        rule main -> i32 = 
-            "start" v:value(offset=10) -> { v }
-
-        rule value(offset: i32) -> i32 =
-            i:i32 -> { i + offset }
-    }
-}
-```
-
-### Generic Rules
-
-You can define rules that accept generic type parameters and parser arguments. This allows you to create reusable grammar patterns.
-
-```rust
-use winnow_grammar::grammar;
-use winnow::prelude::*;
-
-grammar! {
-    grammar Generics {
-        // A generic rule that parses a list of elements of type T.
-        // `item` is a parser argument that produces T.
-        // `I` is the implicit generic parameter for the input stream type.
-        rule list<T>(item: impl Parser<I, T, winnow::error::ContextError>) -> Vec<T> =
-            "[" elements:item* "]" -> { elements }
-
-        // Using the generic rule with a parser for u32
-        rule main -> Vec<u32> = l:list(item=u32_parser) -> { l }
-        
-        rule u32_parser -> u32 = i:u32 -> { i }
-    }
-}
-# fn main() {}
-```
-
-### Patterns
-
-#### Literals
-Match specific strings. `winnow-grammar` automatically handles whitespace before literals.
-
-```rust
-use winnow_grammar::grammar;
-
-grammar! {
-    grammar Kws {
-        rule kw -> () = "fn" "name" -> { () }
-    }
-}
-```
-
-#### Built-in Parsers
-`winnow-grammar` provides several built-in parsers for common text patterns.
-
-| Parser | Description | Returns |
-|--------|-------------|---------|
-| `ident` | An alphanumeric identifier (including `_`) | `String` |
-| `string` | A quoted string literal (supports escapes) | `String` |
-| `i32` | A decimal integer | `i32` |
-| `u32` | A decimal unsigned integer | `u32` |
-| `f64` | A floating point number | `f64` |
-| `u8`..`u128` | Unsigned integers of various sizes | `u8`..`u128` |
-| `i8`..`i128` | Signed integers of various sizes | `i8`..`i128` |
-| `bool` | `true` or `false` | `bool` |
-| `multispace0` | Zero or more whitespace characters | `String` |
-| `multispace1` | One or more whitespace characters | `String` |
-| `space0` | Zero or more horizontal spaces | `String` |
-| `space1` | One or more horizontal spaces | `String` |
-| `line_ending` | `\n` or `\r\n` | `String` |
-| `empty` | Matches nothing and always succeeds | `()` |
-| `eof` | Matches the end of the input | `()` |
-
-*Note: Built-in parsers like `ident`, `string`, and the numeric types automatically consume leading whitespace. Whitespace-specific parsers like `multispace0` do NOT consume leading whitespace.*
-
-#### Custom and External Rules
-You can use any function that matches the `winnow` parser signature `Fn(&mut I) -> ModalResult<T>` as a rule. You just need to import it or define it in your crate.
-
-```rust
-use winnow_grammar::grammar;
-
-// We define or import the parser outside. 
-use winnow::ascii::alpha1;
-
-grammar! {
-    grammar MyGrammar {
-        // You can import standard winnow parsers
-        use winnow::ascii::alpha1; 
-
-        rule word -> String = 
-            w:alpha1 -> { w.to_string() }
-    }
-}
-```
-
-#### Sequences and Bindings
-Match a sequence of patterns. Use `name:pattern` to bind the result to a variable available in the action block.
-
-```rust
-use winnow_grammar::grammar;
-
-grammar! {
-    grammar Assignment {
-        rule assignment -> (String, i32) = 
-            name:ident "=" val:i32 -> { 
-                (name, val) 
-            }
-    }
-}
-```
-
-#### Span Binding (`@`)
-You can capture the `Span` (range) of a parsed rule using the syntax `name:rule @ span_var`. This requires your input type to implement `winnow::stream::Location` (e.g., `LocatingSlice`).
-
-```rust
-use winnow_grammar::grammar;
-
-grammar! {
-    grammar Spanned {
-        // We use std::ops::Range<usize> as the return type for spans.
-        rule main -> (String, std::ops::Range<usize>) = 
-            // Binds the identifier to `id` and its span to `s`
-            id:ident @ s -> { (id, s) }
-    }
-}
-```
-
-#### Alternatives (`|`)
-Match one of several alternatives. The first one that matches wins.
-
-```rust
-use winnow_grammar::grammar;
-
-grammar! {
-    grammar Choice {
-        rule choice -> bool = 
-            "yes" -> { true }
-          | "no"  -> { false }
-    }
-}
-```
-
-#### Repetitions (`*`, `+`, `?`)
-- `pattern*`: Match zero or more times. Returns a `Vec`.
-- `pattern+`: Match one or more times. Returns a `Vec`.
-- `pattern?`: Match zero or one time. Returns an `Option`.
-
-```rust
-use winnow_grammar::grammar;
-
-grammar! {
-    grammar List {
-        rule list -> Vec<i32> = 
-            "[" elements:i32* "]" -> { elements }
-    }
-}
-```
-
-#### Delimiters
-Match content inside delimiters. These handle whitespace automatically around the delimiters.
-
-- `paren(pattern)`: Matches `( pattern )`.
-- `[ pattern ]`: Matches `[ pattern ]`.
-- `{ pattern }`: Matches `{ pattern }`.
-
-```rust
-use winnow_grammar::grammar;
-
-grammar! {
-    grammar Tuple {
-        rule tuple -> (i32, i32) = 
-            paren(a:i32 "," b:i32) -> { (a, b) }
-    }
-}
-```
-
-### The Cut Operator (`=>`)
-
-The cut operator `=>` allows you to commit to a specific alternative. If the pattern *before* the `=>` matches, the parser will **not** backtrack to try other alternatives, even if the pattern *after* the `=>` fails. This produces better error messages.
-
-```rust
-use winnow_grammar::grammar;
-
-pub enum Stmt {
-    Let(String, i32),
-    Expr(i32),
-}
-
-grammar! {
-    grammar Cut {
-        rule stmt -> Stmt =
-            // If we see "let", we commit to this rule. 
-            // If "mut" or the identifier is missing, we error immediately 
-            // instead of trying the next alternative.
-            "let" => "mut"? name:ident "=" e:expr -> { Stmt::Let(name, e) }
-          | e:expr -> { Stmt::Expr(e) }
-          
-        rule expr -> i32 = i:i32 -> { i }
-    }
-}
-# fn main() {}
-```
-
-## Advanced Topics
-
-### Left Recursion
-
-Recursive descent parsers typically struggle with left recursion (e.g., `A -> A b`). `winnow-grammar` automatically detects direct left recursion and compiles it into an iterative loop. This makes writing expression parsers natural and straightforward.
-
-```rust
-use winnow_grammar::grammar;
-
-grammar! {
-    grammar Expr {
-        // This works perfectly!
-        rule expr -> i32 = 
-            l:expr "+" r:term -> { l + r }
-          | t:term            -> { t }
-          
-        rule term -> i32 = i:i32 -> { i }
-    }
-}
-```
-
 ### Whitespace Handling
-
 By default, `winnow-grammar` assumes you want to skip whitespace between tokens. It inserts a parser equivalent to `winnow::ascii::multispace0` before every literal, built-in (except whitespace parsers), and delimiter.
 
-#### Overriding Whitespace
-
-You can override the default whitespace handling by defining a rule named `ws`. If this rule exists, it will be used instead of the default `multispace0`.
+To override this, define a rule named `ws`.
 
 ```rust
-use winnow_grammar::grammar;
-use winnow::prelude::*;
-
 grammar! {
     grammar NoWs {
-        // Disable automatic whitespace by making ws do nothing
+        // Disable automatic whitespace
         rule ws -> () = empty -> { () }
-        
-        pub rule test -> String = "a" "b" -> { "ab".into() }
+        rule test -> () = "a" "b" -> { () }
     }
 }
 ```
 
-#### Handling Trailing Whitespace
+### Built-ins
+In addition to the portable built-ins (see [SYNTAX.md](../SYNTAX.md)), `winnow-grammar` provides the following `winnow`-specific parsers:
 
-The generated rules consume leading whitespace. If you want to ensure the entire input is consumed, including any trailing whitespace, add `ws eof` at the end of your entry rule.
+| Parser | Description |
+|---|---|
+| `multispace0` | Zero or more whitespace characters (default `ws`). |
+| `multispace1` | One or more whitespace characters. |
+| `space0` | Zero or more horizontal spaces. |
+| `space1` | One or more horizontal spaces. |
+| `line_ending` | `\n` or `\r\n`. |
+| `empty` | Matches nothing (epsilon). |
 
-```rust,ignore
-grammar! {
-    grammar MyGrammar {
-        pub rule entry -> Expr = e:expr ws eof -> { e }
-        rule expr -> Expr = ...
-    }
-}
-```
+### Return Types
+Portable built-ins map to specific `winnow` return types:
 
-### Diagnostics and Verification
+| Portable Primitive | Return Type | Notes |
+|---|---|---|
+| `ident`, `string` | `String` | Consumes leading whitespace. |
+| `u32`, `i32`, `f64` | `u32`, `i32`, `f64` | |
+| `bool` | `bool` | |
+| `alpha`, `digit` | `char` | |
 
-`winnow-grammar` provides compile-time checks to ensure your grammar is sound. It will detect:
+## Diagnostics
 
--   **Indirect Left Recursion**: Cycles like `A -> B -> A` are detected and reported as compile errors, preventing runtime stack overflows.
--   **Unreachable Alternatives**: If an alternative in an `|` sequence is identical to or shadowed by a previous one, a warning or error is emitted (e.g., `rule -> "a" | "a"`).
-
-These diagnostics help you catch logical errors early in the development process.
+`winnow-grammar` provides compile-time checks to ensure your grammar is sound. It detects:
+- **Indirect Left Recursion**: Cycles like `A -> B -> A`.
+- **Unreachable Alternatives**: Shadowing detection.
 
 ## License
 
