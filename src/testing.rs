@@ -29,3 +29,36 @@ where
         }
     }
 }
+
+/// A macro to define a test case using the winnow backend.
+#[macro_export]
+macro_rules! winnow_test_case {
+    ($name:ident, rule: $rule:ident, { $($grammar:tt)* }, [ $(($input:expr, $($check:tt)*)),* $(,)? ]) => {
+        $crate::testing::test_case_impl!(
+            backend: {
+                grammar_macro: $crate::grammar,
+                test_trait: $crate::testing::WinnowTestExt,
+                parser_mut: mut
+            },
+            name: $name,
+            rule: $rule,
+            grammar: { $($grammar)* },
+            cases: [ $( ($input, $($check)*) ),* ]
+        );
+    };
+    ($name:ident, { $($grammar:tt)* }, [ $(($input:expr, $($check:tt)*)),* $(,)? ]) => {
+        $crate::testing::test_case_impl!(
+            backend: {
+                grammar_macro: $crate::grammar,
+                test_trait: $crate::testing::WinnowTestExt,
+                parser_mut: mut
+            },
+            name: $name,
+            grammar: { $($grammar)* },
+            cases: [ $( ($input, $($check)*) ),* ]
+        );
+    };
+}
+
+// Re-export test_case_impl from grammar_kit so winnow_test_case can use it
+pub use grammar_kit::test_case_impl;
