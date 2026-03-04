@@ -3,6 +3,9 @@ name = "winnow-grammar"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+trace = ["winnow/debug"]
+
 [dependencies]
 winnow = "0.6"
 winnow-grammar-macros = { path = "winnow-grammar-macros" }

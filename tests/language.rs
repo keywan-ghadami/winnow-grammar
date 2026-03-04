@@ -70,6 +70,6 @@ fn test_span() {
         .parse_test(" 123")
         .assert_success_with(|(expr, span)| {
             assert_eq!(expr, &Expr::Num(123));
-            assert_eq!(span, &(0..4));
+            assert_eq!(span, &(1..4));
         });
 }

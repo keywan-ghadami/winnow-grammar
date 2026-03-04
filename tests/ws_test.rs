@@ -22,6 +22,10 @@ fn test_ws_recursion() {
 fn test_eof() {
     WsRepro::parse_test_eof.parse_test("a").assert_success();
 
-    // "a " -> "a" matches. Then "eof". " " remains. eof fails.
-    WsRepro::parse_test_eof.parse_test("a ").assert_failure();
+    // "a " -> "a" matches. Then implicit ws consumes " ". Then "eof" matches.
+    // So this should succeed in syntactic mode.
+    WsRepro::parse_test_eof.parse_test("a ").assert_success();
+
+    // "a b" -> "a" matches. ws consumes " ". "b" remains. eof fails.
+    WsRepro::parse_test_eof.parse_test("a b").assert_failure();
 }
