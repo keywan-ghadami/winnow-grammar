@@ -176,9 +176,7 @@ In addition to the portable built-ins (see [SYNTAX.md](../SYNTAX.md)), `winnow-g
 | `multispace1` | One or more whitespace characters. |
 | `space0` | Zero or more horizontal spaces. |
 | `space1` | One or more horizontal spaces. |
-| `line_ending` | `
-` or `
-`. |
+| `line_ending` | `\n` or `\r\n`. |
 | `empty` | Matches nothing (epsilon). |
 
 ### Return Types
