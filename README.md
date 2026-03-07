@@ -61,7 +61,7 @@ pub enum Field {
 
 grammar! {
     grammar Cron {
-        pub rule schedule -> Schedule =
+        pub schedule -> Schedule =
             sec:field min:field hour:field dom:field mon:field dow:field -> {
                 Schedule {
                     second: sec,
@@ -73,14 +73,14 @@ grammar! {
                 }
             }
 
-        rule field -> Field =
+        field -> Field =
             l:list -> { if l.len() == 1 { l.into_iter().next().unwrap() } else { Field::List(l) } }
 
-        rule list -> Vec<Field> =
+        list -> Vec<Field> =
             base:base_field "," rest:list -> { let mut rest = rest; rest.insert(0, base); rest }
           | base:base_field -> { vec![base] }
 
-        rule base_field -> Field =
+        base_field -> Field =
             f:range_or_val s:step? -> {
                 match s {
                     Some(step) => Field::Step(Box::new(f), step),
@@ -94,11 +94,11 @@ grammar! {
                 }
             }
 
-        rule range_or_val -> Field =
+        range_or_val -> Field =
             a:u32 "-" b:u32 -> { Field::Range(a, b) }
           | v:u32 -> { Field::Value(v) }
 
-        rule step -> u32 =
+        step -> u32 =
             "/" n:u32 -> { n }
     }
 }
@@ -127,17 +127,43 @@ The generated parsers work on any input that implements the necessary `winnow` t
 If you use **Span Binding (`@`)**, your input type **must** implement `winnow::stream::Location`. The recommended type for this is `winnow::stream::LocatingSlice`.
 
 ### Whitespace Handling
-By default, `winnow-grammar` assumes you want to skip whitespace between tokens. It inserts a parser equivalent to `winnow::ascii::multispace0` before every literal, built-in (except whitespace parsers), and delimiter.
+By default, `winnow-grammar` automatically skips whitespace between tokens in syntactic rules (rules with lowercase names). The default whitespace parser is equivalent to `winnow::ascii::multispace0`.
 
-To override this, define a rule named `ws`.
+You can override this behavior by defining a special rule named `ws`. This is a powerful feature for handling more complex spacing, like comments. For example, to make your parser treat `//` style comments as whitespace:
 
 ```rust
+use winnow_grammar::grammar;
+use winnow::prelude::*;
+use winnow::stream::LocatingSlice;
+
 grammar! {
-    grammar NoWs {
-        // Disable automatic whitespace
-        rule ws -> () = empty -> { () }
-        rule test -> () = "a" "b" -> { () }
+    grammar CommentAware {
+        // Override 'ws' to skip spaces, newlines, and single-line comments.
+        WSE = multispace1
+        WS = (WSE | comment)*
+
+        // A rule that recognizes a single-line comment.
+        // `line_ending` is a built-in parser. `until` consumes input up to it.
+        comment = "//" until(line_ending)
+
+        // This rule can now have comments between its tokens because it's a
+        // syntactic rule (lowercase name).
+        pub add -> i32 =
+            a:i32
+            // This is a comment, which our `ws` rule will now handle!
+            "+"
+            b:i32
+            -> { a + b }
     }
+}
+
+fn main() {
+    // The parser will ignore the comment and the newline.
+    let input = "10 // add 20
+ + 20";
+    let stream = LocatingSlice::new(input);
+    let result = CommentAware::parse_add.parse(stream).unwrap();
+    assert_eq!(result, 30);
 }
 ```
 
@@ -150,7 +176,9 @@ In addition to the portable built-ins (see [SYNTAX.md](../SYNTAX.md)), `winnow-g
 | `multispace1` | One or more whitespace characters. |
 | `space0` | Zero or more horizontal spaces. |
 | `space1` | One or more horizontal spaces. |
-| `line_ending` | `\n` or `\r\n`. |
+| `line_ending` | `
+` or `
+`. |
 | `empty` | Matches nothing (epsilon). |
 
 ### Return Types
@@ -158,7 +186,8 @@ Portable built-ins map to specific `winnow` return types:
 
 | Portable Primitive | Return Type | Notes |
 |---|---|---|
-| `ident`, `string` | `String` | Consumes leading whitespace. |
+| `ident` | `String` | Consumes leading whitespace. |
+| `string` | `String` | |
 | `u32`, `i32`, `f64` | `u32`, `i32`, `f64` | |
 | `bool` | `bool` | |
 | `alpha`, `digit` | `char` | |

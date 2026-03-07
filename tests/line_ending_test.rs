@@ -8,7 +8,7 @@ grammar! {
         // We need to make sure we don't recurse infinitely if ws calls ws.
         // Empty string literal is a parser that consumes nothing and succeeds.
         #[allow(dead_code)]
-        rule ws -> () = empty -> { () }
+        WS = empty
         pub rule test_line_ending -> String =
             s:line_ending -> { s }
     }

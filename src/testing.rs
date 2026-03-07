@@ -32,7 +32,7 @@ where
 
 /// A macro to define a test case using the winnow backend.
 #[macro_export]
-macro_rules! winnow_test_case {
+macro_rules! test_case {
     ($name:ident, rule: $rule:ident, { $($grammar:tt)* }, [ $(($input:expr, $($check:tt)*)),* $(,)? ]) => {
         $crate::testing::test_case_impl!(
             backend: {

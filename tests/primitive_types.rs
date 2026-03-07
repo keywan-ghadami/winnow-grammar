@@ -3,24 +3,24 @@ use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar Primitives {
-        pub rule test_u8 -> u8 = n:u8 -> { n }
-        pub rule test_u16 -> u16 = n:u16 -> { n }
-        pub rule test_u32 -> u32 = n:u32 -> { n }
-        pub rule test_u64 -> u64 = n:u64 -> { n }
-        pub rule test_u128 -> u128 = n:u128 -> { n }
-        pub rule test_usize -> usize = n:usize -> { n }
+        pub test_u8 -> u8 = n:u8
+        pub test_u16 -> u16 = n:u16
+        pub test_u32 -> u32 = n:u32
+        pub test_u64 -> u64 = n:u64
+        pub test_u128 -> u128 = n:u128
+        pub test_usize -> usize = n:usize
 
-        pub rule test_i8 -> i8 = n:i8 -> { n }
-        pub rule test_i16 -> i16 = n:i16 -> { n }
-        pub rule test_i32 -> i32 = n:i32 -> { n }
-        pub rule test_i64 -> i64 = n:i64 -> { n }
-        pub rule test_i128 -> i128 = n:i128 -> { n }
-        pub rule test_isize -> isize = n:isize -> { n }
+        pub test_i8 -> i8 = n:i8
+        pub test_i16 -> i16 = n:i16
+        pub test_i32 -> i32 = n:i32
+        pub test_i64 -> i64 = n:i64
+        pub test_i128 -> i128 = n:i128
+        pub test_isize -> isize = n:isize
 
-        pub rule test_f32 -> f32 = n:f32 -> { n }
-        pub rule test_f64 -> f64 = n:f64 -> { n }
+        pub test_f32 -> f32 = n:f32
+        pub test_f64 -> f64 = n:f64
 
-        pub rule test_bool -> bool = b:bool -> { b }
+        pub test_bool -> bool = b:bool
     }
 }
 

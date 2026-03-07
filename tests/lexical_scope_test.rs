@@ -1,6 +1,6 @@
-use winnow_grammar::winnow_test_case;
+use winnow_grammar::test_case;
 
-winnow_test_case!(
+test_case!(
     test_syntactic_rule,
     {
         pub rule main -> (String, String) = "a" "b" -> { ("a".into(), "b".into()) }
@@ -12,7 +12,7 @@ winnow_test_case!(
     ]
 );
 
-winnow_test_case!(
+test_case!(
     test_lexical_rule,
     rule: MAIN,
     {
@@ -24,7 +24,7 @@ winnow_test_case!(
     ]
 );
 
-winnow_test_case!(
+test_case!(
     test_explicit_lex,
     {
         pub rule main -> (String, String) = "start" lex("a" "b") -> { ("a".into(), "b".into()) }
@@ -35,7 +35,7 @@ winnow_test_case!(
     ]
 );
 
-winnow_test_case!(
+test_case!(
     test_spaced_in_lex,
     rule: MAIN,
     {
@@ -48,7 +48,7 @@ winnow_test_case!(
     ]
 );
 
-winnow_test_case!(
+test_case!(
     test_nested_scopes,
     {
         pub rule main -> String =

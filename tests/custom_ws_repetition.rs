@@ -3,8 +3,8 @@ use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar CustomWs {
-        // Override ws to match underscore
-        rule ws -> () = "_" -> { () }
+        // Override ws to match underscore OR nothing
+        WS = ("_")?
 
         pub rule list -> Vec<u32> = l:u32+ -> { l }
     }

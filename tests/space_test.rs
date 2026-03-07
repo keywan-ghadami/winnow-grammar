@@ -6,11 +6,11 @@ grammar! {
         // Disable automatic whitespace skipping by overriding ws with empty
         use winnow::combinator::empty;
         #[allow(dead_code)]
-        rule ws -> () = empty -> { () }
+        WS = empty
 
-        pub rule test_space0 -> String =
+        pub test_space0 -> String =
             s:space0 -> { s }
-        pub rule test_space1 -> String =
+        pub test_space1 -> String =
             s:space1 -> { s }
     }
 }

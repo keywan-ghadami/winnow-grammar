@@ -3,10 +3,10 @@ use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar Args {
-        pub rule main -> i32 =
+        pub main -> i32 =
             "start" v:value(offset=10) -> { v }
 
-        rule value(offset: i32) -> i32 =
+        value(offset: i32) -> i32 =
             i:i32 -> { i + offset }
     }
 }
