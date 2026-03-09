@@ -15,12 +15,6 @@
   - **Sequences:** `step1` -> `ws` -> `step2`.
   - **Delimiters:** `open` -> `ws` -> `inner` -> `ws` -> `close`.
 
-## quantifier handling (`*`, `+`, `Count`)
-- **Issue:** `winnow::separated` panics if separator matches empty (e.g., `multispace0`).
-- **Fix:** Use `repeat(..., preceded(ws, item))` in syntactic mode.
-  - Allows optional separator.
-  - Consistent with `separated` semantics for optional `ws`.
-  - **Lexical:** Uses `repeat` directly.
 
 ## spans & offsets
 - **Wrapper effect:** Wrapper consumes leading `ws`. Inner rule starts *after* `ws`.

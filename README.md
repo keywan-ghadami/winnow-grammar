@@ -10,7 +10,6 @@ This crate is built on top of `syn-grammar-model` but targets the `winnow` parse
 
 ## Documentation
 
-- **[Grammar Syntax Reference](../SYNTAX.md)**: Detailed guide to the shared grammar definition language (rules, operators, built-ins).
 - **[Extending Guide](../EXTENDING.md)**: Guide for library authors on how to build custom backends.
 
 ## Features
