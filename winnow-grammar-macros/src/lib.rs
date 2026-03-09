@@ -170,7 +170,12 @@ fn grammar_impl(input: TokenStream) -> TokenStream {
 
     // 2. Generate Code using local winnow codegen
     match codegen::generate_rust(m_ast) {
-        Ok(stream) => stream.into(),
+        Ok(stream) => {
+            if std::env::var("DEBUG_GRAMMAR").is_ok() {
+                eprintln!("{}", stream);
+            }
+            stream.into()
+        }
         Err(e) => e.to_compile_error().into(),
     }
 }

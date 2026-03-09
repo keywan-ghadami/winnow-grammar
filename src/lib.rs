@@ -20,6 +20,7 @@ pub mod types {
     use std::fmt;
     use std::hash::{Hash, Hasher};
 
+    pub use grammar_kit::WithSpan;
     pub use proc_macro2::Span;
 
     /// A backend-agnostic representation of an identifier.
@@ -160,4 +161,4 @@ pub mod types {
     }
 }
 
-pub use types::{Identifier, SpannedValue, StringLiteral};
+pub use types::{Identifier, SpannedValue, StringLiteral, WithSpan};
