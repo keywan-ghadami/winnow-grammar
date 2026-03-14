@@ -66,7 +66,7 @@ grammar! {
 
 #[test]
 fn test_standard_cron() {
-    Cron::parse_schedule
+    Cron::parse_schedule()
         .parse_test("0 30 9 * * 1-5")
         .assert_success_is(Schedule {
             second: Field::Value(0),
@@ -80,7 +80,7 @@ fn test_standard_cron() {
 
 #[test]
 fn test_complex_precedence() {
-    Cron::parse_schedule
+    Cron::parse_schedule()
         .parse_test("*/5 1-10/2 1,2,3 * * *")
         .assert_success_with(|result| {
             match &result.second {
@@ -102,7 +102,7 @@ fn test_complex_precedence() {
 
 #[test]
 fn test_messy_whitespace() {
-    Cron::parse_schedule
+    Cron::parse_schedule()
         .parse_test(" 0   30\t9 * \n * 1-5")
         .assert_success_with(|result| {
             assert_eq!(result.second, Field::Value(0));
