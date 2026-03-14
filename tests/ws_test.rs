@@ -3,7 +3,7 @@ use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar WsRepro {
-        // Suppress unused warning because 'WS// Nicht verwendete Warnung unterdrücken, da 'WS' implizit vom Parsergenerator verwendet wird ' is used implicitly by the parser generator
+        // Suppress unused warning because 'WS' is used implicitly by the parser generator
         // for whitespace handling, but rustc might not see the direct call.
         #[allow(dead_code)]
         WS = multispace0
@@ -15,17 +15,17 @@ grammar! {
 
 #[test]
 fn test_ws_recursion() {
-    WsRepro::parse_test.parse_test("  a").assert_success();
+    WsRepro::parse_test().parse_test("  a").assert_success();
 }
 
 #[test]
 fn test_eof() {
-    WsRepro::parse_test_eof.parse_test("a").assert_success();
+    WsRepro::parse_test_eof().parse_test("a").assert_success();
 
     // "a " -> "a" matches. Then implicit ws consumes " ". Then "eof" matches.
     // So this should succeed in syntactic mode.
-    WsRepro::parse_test_eof.parse_test("a ").assert_success();
+    WsRepro::parse_test_eof().parse_test("a ").assert_success();
 
     // "a b" -> "a" matches. ws consumes " ". "b" remains. eof fails.
-    WsRepro::parse_test_eof.parse_test("a b").assert_failure();
+    WsRepro::parse_test_eof().parse_test("a b").assert_failure();
 }

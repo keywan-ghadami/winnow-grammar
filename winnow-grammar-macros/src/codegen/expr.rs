@@ -1,7 +1,7 @@
+use super::Codegen;
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use syn_grammar_model::model::{Argument, ModelPattern};
-use super::Codegen;
 
 pub(crate) fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
     match pattern {
@@ -64,7 +64,12 @@ impl<'a> Codegen<'a> {
         quote! { #(#steps)* }
     }
 
-    pub fn generate_step(&self, pattern: &ModelPattern, in_cut: bool, is_lexical: bool) -> TokenStream {
+    pub fn generate_step(
+        &self,
+        pattern: &ModelPattern,
+        in_cut: bool,
+        is_lexical: bool,
+    ) -> TokenStream {
         let span = Span::mixed_site();
         let input = &self.input_ident;
 

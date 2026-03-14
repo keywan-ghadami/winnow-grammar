@@ -5,9 +5,7 @@ pub mod variants;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use std::collections::HashSet;
-use syn_grammar_model::{
-    model::GrammarDefinition,
-};
+use syn_grammar_model::model::GrammarDefinition;
 
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let mut codegen = Codegen::new(&grammar);

@@ -1,7 +1,7 @@
+use super::Codegen;
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use syn_grammar_model::model::{ModelPattern, RuleVariant};
-use super::Codegen;
 
 impl<'a> Codegen<'a> {
     pub fn generate_variants_body(

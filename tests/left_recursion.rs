@@ -20,7 +20,7 @@ grammar! {
 
 #[test]
 fn test_left_recursion() {
-    LeftRec::parse_expr
+    LeftRec::parse_expr()
         .parse_test("1 + 2 + 3")
         .assert_success_is(Expr::Add(
             Box::new(Expr::Add(Box::new(Expr::Num(1)), Box::new(Expr::Num(2)))),

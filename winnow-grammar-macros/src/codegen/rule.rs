@@ -1,10 +1,10 @@
+use super::Codegen;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use syn_grammar_model::{
     analysis,
     model::{Rule, RuleVariant},
 };
-use super::Codegen;
 
 impl<'a> Codegen<'a> {
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
@@ -135,9 +135,9 @@ impl<'a> Codegen<'a> {
             }
         };
 
-        let mut outer_generics = quote!{'a, S: std::fmt::Debug};
+        let mut outer_generics = quote! {'a, S: std::fmt::Debug};
         if !gen_params.is_empty() {
-            outer_generics.extend(quote!{, #gen_params});
+            outer_generics.extend(quote! {, #gen_params});
         }
         let err_type = quote_spanned! { span=> ::winnow::error::ContextError };
 

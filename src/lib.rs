@@ -10,7 +10,8 @@ pub use winnow_grammar_macros::grammar;
 // Re-export winnow so generated code has access to it
 pub use winnow;
 
-pub type ParseInput<'a, S = ()> = ::winnow::stream::Stateful<::winnow::stream::LocatingSlice<&'a str>, S>;
+pub type ParseInput<'a, S = ()> =
+    ::winnow::stream::Stateful<::winnow::stream::LocatingSlice<&'a str>, S>;
 
 // Re-export testing utilities
 pub mod testing;

@@ -1,7 +1,7 @@
-use winnow::error::ContextError;
-use winnow::Parser;
 use crate::ParseInput;
-use winnow::stream::{Stateful, LocatingSlice};
+use winnow::error::ContextError;
+use winnow::stream::{LocatingSlice, Stateful};
+use winnow::Parser;
 
 pub use grammar_kit::testing::*;
 
@@ -22,7 +22,10 @@ where
     O: std::fmt::Debug,
 {
     fn parse_test(&mut self, input: &'a str) -> TestResult<O, String> {
-        let stream = Stateful { state: (), input: LocatingSlice::new(input) };
+        let stream = Stateful {
+            state: (),
+            input: LocatingSlice::new(input),
+        };
         match self.parse(stream) {
             Ok(val) => TestResult::new(Ok(val)).with_source(input),
             Err(e) => {
