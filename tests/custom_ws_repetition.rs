@@ -12,7 +12,7 @@ grammar! {
 
 #[test]
 fn test_custom_ws_repetition() {
-    CustomWs::parse_list
+    CustomWs::parse_list()
         .parse_test("1_2_3")
         .assert_success_is(vec![1, 2, 3]);
 }
