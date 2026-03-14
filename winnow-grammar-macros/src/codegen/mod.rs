@@ -3,7 +3,7 @@ pub mod rule;
 pub mod variants;
 
 use proc_macro2::{Span, TokenStream};
-use quote::{format_ident, quote, quote_spanned};
+use quote::{format_ident, quote_spanned};
 use std::collections::HashSet;
 use syn_grammar_model::model::GrammarDefinition;
 
