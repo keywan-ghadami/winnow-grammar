@@ -5,7 +5,7 @@ use winnow_grammar::testing::WinnowTestExt;
 grammar! {
     grammar Generics {
         // Explicitly type the parameter so we know it produces `T`.
-        rule list<T>(item: impl Parser<I, T, winnow::error::ContextError>) -> Vec<T> =
+        rule list<T>(item: impl Parser<ParseInput<'a, S>, T, winnow::error::ContextError> -> Vec<T> =
             "[" elements:item* "]" -> { elements }
 
         pub rule main -> Vec<u32> = l:list(item=u32_parser) -> { l }
