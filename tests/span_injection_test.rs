@@ -1,7 +1,6 @@
 use grammar_kit::WithSpan;
-use winnow::stream::{LocatingSlice, Stateful};
-use winnow::Parser;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SpannedInt {
@@ -25,11 +24,10 @@ grammar! {
 #[test]
 fn test_span_injection() {
     let input = "  42  ";
-    let stream = LocatingSlice::new(input);
-    let result = SpanTest::parse_main().parse(Stateful::new(stream)).unwrap();
-
-    assert_eq!(result.val, 42);
-    assert_eq!(result.span, 2..4);
+    let expected = SpannedInt { val: 42, span: 2..4 };
+    SpanTest::parse_main()
+        .parse_test(input)
+        .assert_success_is(expected);
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -59,10 +57,8 @@ grammar! {
 #[test]
 fn test_span_injection_tuple() {
     let input = " 10 20 ";
-    let stream = LocatingSlice::new(input);
-    let result = SpanTupleTest::parse_main().parse(Stateful::new(stream)).unwrap();
-
-    assert_eq!(result.a, 10);
-    assert_eq!(result.b, 20);
-    assert_eq!(result.span, 1..6);
+    let expected = SpannedTuple { a: 10, b: 20, span: 1..6 };
+    SpanTupleTest::parse_main()
+        .parse_test(input)
+        .assert_success_is(expected);
 }

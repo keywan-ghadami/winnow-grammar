@@ -8,7 +8,7 @@ grammar! {
     grammar CutSafety {
         // A rule that uses cut. If "commit" is found, we MUST match "success".
         // If "success" fails, we should NOT backtrack to the second alternative.
-        pub rule deterministic_choice -> &str =
+        pub rule deterministic_choice -> &'input str =
             "commit" => "success" -> { "committed" }
           | "commit" "failure"    -> { "backtracked_badly" }
           | "other"               -> { "other" }
