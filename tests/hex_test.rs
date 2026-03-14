@@ -4,7 +4,7 @@ use winnow_grammar::testing::WinnowTestExt;
 grammar! {
     grammar HexParser {
         pub rule test_hex -> String =
-            h:hex_digit1 -> { h }
+            h:hex_digit1 -> { h.to_string() }
     }
 }
 

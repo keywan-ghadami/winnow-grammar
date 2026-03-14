@@ -8,7 +8,7 @@ grammar! {
     grammar CutSafety {
         // A rule that uses cut. If "commit" is found, we MUST match "success".
         // If "success" fails, we should NOT backtrack to the second alternative.
-        pub rule deterministic_choice -> &'static str =
+        pub rule deterministic_choice -> &str =
             "commit" => "success" -> { "committed" }
           | "commit" "failure"    -> { "backtracked_badly" }
           | "other"               -> { "other" }
@@ -18,7 +18,7 @@ grammar! {
 #[test]
 fn test_cut_operator_safety() {
     // Scenario 1: Successful commit
-    CutSafety::parse_deterministic_choice
+    CutSafety::parse_deterministic_choice()
         .parse_test("commitsuccess")
         .assert_success_is("committed");
 
@@ -28,12 +28,12 @@ fn test_cut_operator_safety() {
     // "success" fails.
     // Because of cut, we must NOT try the second alternative "commit" "failure".
     // The parser should fail immediately.
-    CutSafety::parse_deterministic_choice
+    CutSafety::parse_deterministic_choice()
         .parse_test("commitfailure")
         .assert_failure_contains("success"); // We expect it to be looking for "success"
 
     // Scenario 3: Alternative path
-    CutSafety::parse_deterministic_choice
+    CutSafety::parse_deterministic_choice()
         .parse_test("other")
         .assert_success_is("other");
 }
@@ -54,7 +54,7 @@ grammar! {
 fn test_error_propagation() {
     // We verify that the error is propagated correctly and contains relevant info.
     // winnow's default error messages for literals usually include what was expected.
-    ErrorProp::parse_main
+    ErrorProp::parse_main()
         .parse_test("start wrong")
         .assert_failure_contains("expecting_this");
 }
@@ -83,7 +83,7 @@ fn test_deep_recursion() {
         input.push(')');
     }
 
-    DeepRecursion::parse_recursive
+    DeepRecursion::parse_recursive()
         .parse_test(&input)
         .assert_success_is(depth);
 }
@@ -99,12 +99,12 @@ grammar! {
 #[test]
 fn test_numeric_boundaries() {
     // Test max limits
-    Boundaries::parse_primitive_limits
+    Boundaries::parse_primitive_limits()
         .parse_test("255 127 340282366920938463463374607431768211455")
         .assert_success_is((255, 127, u128::MAX));
 
     // Test overflow behavior (should fail safely, not panic)
-    Boundaries::parse_primitive_limits
+    Boundaries::parse_primitive_limits()
         .parse_test("256 0 0")
         .assert_failure();
 }

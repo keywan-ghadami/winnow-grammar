@@ -13,5 +13,5 @@ grammar! {
 
 #[test]
 fn test_args() {
-    Args::parse_main.parse_test("start 5").assert_success_is(15);
+    Args::parse_main().parse_test("start 5").assert_success_is(15);
 }

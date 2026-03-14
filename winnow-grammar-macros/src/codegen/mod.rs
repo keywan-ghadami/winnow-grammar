@@ -3,7 +3,7 @@ use quote::{format_ident, quote, quote_spanned};
 use std::collections::HashSet;
 use syn_grammar_model::{
     analysis,
-    model::{Argument, GrammarDefinition, ModelPattern, Rule, RuleVariant},
+    model::{Argument, GrammarDefinition, ModelPattern, Rule, RuleVariant}
 };
 
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
@@ -49,10 +49,9 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 // Whitespace handling (similar to syn)
                 #[allow(dead_code)]
-                fn WS<I>(#input: &mut I) -> ::winnow::ModalResult<()>
+                fn WS<'a, I>(#input: &mut I) -> ::winnow::Result<()>
                 where
-                    I: ::winnow::stream::Stream<Token = char> + ::winnow::stream::StreamIsPartial + for<'a> ::winnow::stream::Compare<&'a str>,
-                    <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr,
+                    I: ::winnow::stream::Stream<Token = char, Slice = &'a str> + ::winnow::stream::StreamIsPartial + for<'b> ::winnow::stream::Compare<&'b str>,
                 {
                     ::winnow::ascii::multispace0.parse_next(#input).map(|_| ())
                 }
@@ -155,16 +154,16 @@ impl<'a> Codegen<'a> {
 
         let gen_params = &rule.generics.params;
         let gen_where = &rule.generics.where_clause;
-        let comma1 = if gen_params.is_empty() {
-            quote! {}
-        } else {
-            quote! {,}
-        };
-        let comma2 = if extra_generics.is_empty() {
-            quote! {}
-        } else {
-            quote! {,}
-        };
+
+        let mut all_generics = quote! { 'a };
+        if !gen_params.is_empty() {
+            all_generics.extend(quote! {, #gen_params});
+        }
+        all_generics.extend(quote! {, I});
+        if !extra_generics.is_empty() {
+            all_generics.extend(quote! {, #(#extra_generics),*});
+        }
+
         let where_preds = if let Some(w) = gen_where {
             let p = &w.predicates;
             quote! { #p, }
@@ -175,7 +174,7 @@ impl<'a> Codegen<'a> {
         let ws_shadow = if is_ws_rule {
             quote_spanned! {span=>
                 #[allow(dead_code)]
-                fn WS<I>(_: &mut I) -> ::winnow::ModalResult<()>
+                fn WS<I>(_: &mut I) -> ::winnow::Result<()>
                 where
                     I: ::winnow::stream::Stream,
                 {
@@ -188,19 +187,18 @@ impl<'a> Codegen<'a> {
 
         let inner_fn = quote_spanned! {span=>
             #[allow(dead_code)]
-            fn #inner_fn_name<#gen_params #comma1 I #comma2 #(#extra_generics),* >(#input: &mut I, #(#params_tokens),*) -> ::winnow::ModalResult<#ret_type>
+            fn #inner_fn_name<#all_generics>(#input: &mut I, #(#params_tokens),*) -> ::winnow::Result<#ret_type>
             where
                 #where_preds
-                I: ::winnow::stream::Stream<Token = char>
+                I: ::winnow::stream::Stream<Token = char, Slice = &'a str>
                    + ::winnow::stream::StreamIsPartial
                    + ::winnow::stream::Location
                    + ::winnow::stream::Compare<char>
-                   + for<'a> ::winnow::stream::Compare<&'a str>
+                   + for<'b> ::winnow::stream::Compare<&'b str>
                    + ::winnow::stream::Compare<::winnow::ascii::Caseless<&'static str>>
                    + ::winnow::stream::AsBStr
                    + ::winnow::stream::FindSlice<char>
                    + ::winnow::stream::FindSlice<&'static str>,
-                <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr + AsRef<str> + std::fmt::Display + ::winnow::stream::ParseSlice<f64> + ::winnow::stream::ParseSlice<f32>,
                 <I as ::winnow::stream::Stream>::IterOffsets: Clone,
             {
                 use ::winnow::Parser;
@@ -208,7 +206,7 @@ impl<'a> Codegen<'a> {
 
                 #ws_shadow
 
-                let mut parser = (|#input: &mut I| -> ::winnow::ModalResult<#ret_type> {
+                let mut parser = (|#input: &mut I| -> ::winnow::Result<#ret_type> {
                     #body
                 })
                 .context(::winnow::error::StrContext::Label(#rule_name_str));
@@ -225,53 +223,79 @@ impl<'a> Codegen<'a> {
             }
         };
 
-        // Determine if we should consume whitespace in the wrapper.
-        // If it's a lexical rule or the special "WS" rule itself, we don't auto-consume WS.
-        let consume_ws = !is_lexical && !is_ws_rule;
+        let mut outer_generics = quote!{};
+        if !gen_params.is_empty() {
+            outer_generics.extend(quote!{<#gen_params>});
+        }
+        let err_type = quote_spanned! { span=> ::winnow::error::ContextError };
 
-        let initial_ws = if consume_ws {
-            quote! { let _ = WS.parse_next(#input)?; }
-        } else {
-            quote! {}
-        };
-
-        let trailing_ws = if consume_ws {
-            quote! { let _ = WS.parse_next(#input)?; }
-        } else {
-            quote! {}
-        };
-
-        let outer_fn = quote_spanned! {span=>
-            #vis fn #fn_name<#gen_params #comma1 I #comma2 #(#extra_generics),* >(#input: &mut I, #(#params_tokens),*) -> ::winnow::ModalResult<#ret_type>
-            where
-                #where_preds
-                I: ::winnow::stream::Stream<Token = char>
-                   + ::winnow::stream::StreamIsPartial
-                   + ::winnow::stream::Location
-                   + ::winnow::stream::Compare<char>
-                   + for<'a> ::winnow::stream::Compare<&'a str>
-                   + ::winnow::stream::Compare<::winnow::ascii::Caseless<&'static str>>
-                   + ::winnow::stream::AsBStr
-                   + ::winnow::stream::FindSlice<char>
-                   + ::winnow::stream::FindSlice<&'static str>,
-                <I as ::winnow::stream::Stream>::Slice: ::winnow::stream::AsBStr + AsRef<str> + std::fmt::Display + ::winnow::stream::ParseSlice<f64> + ::winnow::stream::ParseSlice<f32>,
-                <I as ::winnow::stream::Stream>::IterOffsets: Clone,
-            {
+        let outer_fn_body = quote! {
+            move |input: &mut _| -> ::winnow::Result<#ret_type> {
                 // Public API wrapper to handle whitespace and EOF
-
-                #initial_ws
+                let _ = WS(input)?;
 
                 // Call inner rule
-                let result = #inner_fn_name(#input, #(#arg_names),*)?;
+                let result = #inner_fn_name(input, #(#arg_names),*)?;
 
-                #trailing_ws
+                let _ = WS(input)?;
 
                 // EOF check
-                ::winnow::combinator::eof.parse_next(#input)?;
+                ::winnow::combinator::eof.parse_next(input)?;
 
                 Ok(result)
             }
         };
+
+        let outer_fn = match rule.return_type_kind {
+            analysis::ReturnTypeKind::Borrowed => {
+                let mut outer_generics_with_lifetime = quote!{<'a>};
+                if !gen_params.is_empty() {
+                    outer_generics_with_lifetime.extend(quote!{, #gen_params});
+                }
+
+                quote_spanned! {span=>
+                    #vis fn #fn_name #outer_generics_with_lifetime (#(#params_tokens),*) -> impl ::winnow::Parser<
+                        ::winnow::stream::LocatingSlice<&'a str>,
+                        #ret_type,
+                        #err_type
+                    >
+                    where
+                        #gen_where
+                    {
+                        #outer_fn_body
+                    }
+                }
+            },
+            analysis::ReturnTypeKind::Primitive => {
+                quote_spanned! {span=>
+                    #vis fn #fn_name #outer_generics (#(#params_tokens),*) -> impl for<'a> ::winnow::Parser<
+                        ::winnow::stream::LocatingSlice<&'a str>,
+                        #ret_type,
+                        #err_type
+                    >
+                    where
+                        #gen_where
+                    {
+                        #outer_fn_body
+                    }
+                }
+            },
+            analysis::ReturnTypeKind::Empty => {
+                quote_spanned! {span=>
+                    #vis fn #fn_name #outer_generics (#(#params_tokens),*) -> impl for<'a> ::winnow::Parser<
+                        ::winnow::stream::LocatingSlice<&'a str>,
+                        #ret_type,
+                        #err_type
+                    >
+                    where
+                        #gen_where
+                    {
+                        #outer_fn_body
+                    }
+                }
+            }
+        };
+
 
         quote! {
             #inner_fn
@@ -337,7 +361,7 @@ impl<'a> Codegen<'a> {
             };
 
             quote_spanned! {span=>
-                |#input: &mut I| -> ::winnow::ModalResult<_> {
+                |#input: &mut I| -> ::winnow::Result<_> {
                     #steps_code
                     #state_injection
                     #final_expr
@@ -492,7 +516,7 @@ impl<'a> Codegen<'a> {
                 {
                     let checkpoint = ::winnow::stream::Stream::checkpoint(#input);
                     #start_capture
-                    let attempt = (|| -> ::winnow::ModalResult<#ret_type> {
+                    let attempt = (|| -> ::winnow::Result<#ret_type> {
                         #steps_code
                         #bind_lhs
                         #state_injection
@@ -505,11 +529,10 @@ impl<'a> Codegen<'a> {
                             continue;
                         },
                         Err(e) => {
-                            match e {
-                                ::winnow::error::ErrMode::Backtrack(_) => {
-                                    ::winnow::stream::Stream::reset(#input, &checkpoint);
-                                }
-                                _ => return Err(e),
+                            if e.is_fatal() {
+                                return Err(e);
+                            } else {
+                                ::winnow::stream::Stream::reset(#input, &checkpoint);
                             }
                         }
                     }
@@ -692,19 +715,18 @@ impl<'a> Codegen<'a> {
         if self.user_rules.contains(&name_str) {
             let fn_name = format_ident!("parse_{}_inner", rule_name, span = span);
             if args.is_empty() {
-                return quote_spanned! {span=> (|i: &mut _| #fn_name(i)) };
+                return quote_spanned! {span=> (move |i: &mut _| #fn_name(i)) };
             } else {
                 let arg_exprs = args
                     .iter()
                     .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                return quote_spanned! {span=> (|i: &mut _| #fn_name(i, #(#arg_exprs),*)) };
+                return quote_spanned! {span=> (move |i: &mut _| #fn_name(i, #(#arg_exprs),*)) };
             }
         }
 
         match name_str.as_str() {
             "ident" => quote_spanned! {span=>
                 ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_')
-                    .map(|s| AsRef::<str>::as_ref(&s).to_string())
             },
             "string" => quote_spanned! {span=>
                  delimited(
@@ -716,7 +738,6 @@ impl<'a> Codegen<'a> {
                     ),
                     '"'
                 )
-                .map(|s| AsRef::<str>::as_ref(&s).to_string())
             },
             "char" => quote_spanned! {span=>
                 delimited(
@@ -734,52 +755,50 @@ impl<'a> Codegen<'a> {
                                 _ => c // fallback
                              }
                         }),
-                        ::winnow::token::none_of(['\''])
+                        ::winnow::token::none_of(['\\', '\''])
                     )),
                     '\''
                 )
             },
             "any" => quote_spanned! {span=> ::winnow::token::any },
             "alpha1" => {
-                quote_spanned! {span=> ::winnow::ascii::alpha1.map(|s| AsRef::<str>::as_ref(&s).to_string()) }
+                quote_spanned! {span=> ::winnow::ascii::alpha1 }
             }
             "digit1" => {
-                quote_spanned! {span=> ::winnow::ascii::digit1.map(|s| AsRef::<str>::as_ref(&s).to_string()) }
+                quote_spanned! {span=> ::winnow::ascii::digit1 }
             }
             "hex_digit0" => {
-                quote_spanned! {span=> ::winnow::ascii::hex_digit0.map(|s| AsRef::<str>::as_ref(&s).to_string()) }
+                quote_spanned! {span=> ::winnow::ascii::hex_digit0 }
             }
             "hex_digit1" => {
-                quote_spanned! {span=> ::winnow::ascii::hex_digit1.map(|s| AsRef::<str>::as_ref(&s).to_string()) }
+                quote_spanned! {span=> ::winnow::ascii::hex_digit1 }
             }
             "oct_digit0" => {
-                quote_spanned! {span=> ::winnow::ascii::oct_digit0.map(|s| AsRef::<str>::as_ref(&s).to_string()) }
+                quote_spanned! {span=> ::winnow::ascii::oct_digit0 }
             }
             "oct_digit1" => {
-                quote_spanned! {span=> ::winnow::ascii::oct_digit1.map(|s| AsRef::<str>::as_ref(&s).to_string()) }
+                quote_spanned! {span=> ::winnow::ascii::oct_digit1 }
             }
             "binary_digit0" => quote_spanned! {span=>
                 ::winnow::token::take_while(0.., |c| c == '0' || c == '1')
-                    .map(|s| AsRef::<str>::as_ref(&s).to_string())
             },
             "binary_digit1" => quote_spanned! {span=>
                 ::winnow::token::take_while(1.., |c| c == '0' || c == '1')
-                    .map(|s| AsRef::<str>::as_ref(&s).to_string())
             },
             "space0" => {
-                quote_spanned! {span=> ::winnow::ascii::space0.map(|s| AsRef::<str>::as_ref(&s).to_string()) }
+                quote_spanned! {span=> ::winnow::ascii::space0 }
             }
             "space1" => {
-                quote_spanned! {span=> ::winnow::ascii::space1.map(|s| AsRef::<str>::as_ref(&s).to_string()) }
+                quote_spanned! {span=> ::winnow::ascii::space1 }
             }
             "multispace0" => {
-                quote_spanned! {span=> ::winnow::ascii::multispace0.map(|s| AsRef::<str>::as_ref(&s).to_string()) }
+                quote_spanned! {span=> ::winnow::ascii::multispace0 }
             }
             "multispace1" => {
-                quote_spanned! {span=> ::winnow::ascii::multispace1.map(|s| AsRef::<str>::as_ref(&s).to_string()) }
+                quote_spanned! {span=> ::winnow::ascii::multispace1 }
             }
             "line_ending" => {
-                quote_spanned! {span=> ::winnow::ascii::line_ending.map(|s| AsRef::<str>::as_ref(&s).to_string()) }
+                quote_spanned! {span=> ::winnow::ascii::line_ending }
             }
             "empty" => quote_spanned! {span=> ::winnow::combinator::empty },
             "eof" => quote_spanned! {span=> ::winnow::combinator::eof },
@@ -806,12 +825,12 @@ impl<'a> Codegen<'a> {
             },
             _ => {
                 if args.is_empty() {
-                    quote_spanned! {span=> (|i: &mut _| ::winnow::Parser::parse_next(&mut #rule_path, i)) }
+                    quote_spanned! {span=> (move |i: &mut _| ::winnow::Parser::parse_next(&mut #rule_path, i)) }
                 } else {
                     let arg_exprs = args
                         .iter()
                         .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                    quote_spanned! {span=> (|i: &mut _| #rule_path(i, #(#arg_exprs),*)) }
+                    quote_spanned! {span=> (move |i: &mut _| #rule_path(i, #(#arg_exprs),*)) }
                 }
             }
         }
@@ -838,14 +857,12 @@ impl<'a> Codegen<'a> {
                     syn::Lit::Str(_) => {
                         quote_spanned! {span=>
                             literal(#lit)
-                                .map(|s| s)
                                 .context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::StringLiteral(#lit)))
                         }
                     }
                     syn::Lit::Char(_) => {
                         quote_spanned! {span=>
                             literal(#lit)
-                                .map(|s| s)
                                 .context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::CharLiteral(#lit)))
                         }
                     }

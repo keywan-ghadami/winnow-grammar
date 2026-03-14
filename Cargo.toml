@@ -7,7 +7,7 @@ edition = "2021"
 trace = ["winnow/debug"]
 
 [dependencies]
-winnow = "0.6"
+winnow = "0.7"
 winnow-grammar-macros = { path = "winnow-grammar-macros" }
 grammar-kit = { path = "../core/grammar-kit" }
 syn-grammar-model = { path = "../core/syn-grammar-model" }

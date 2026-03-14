@@ -16,11 +16,11 @@ impl Backend for WinnowBackend {
         &[
             BuiltIn {
                 name: "ident",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "string",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "char",
@@ -32,55 +32,55 @@ impl Backend for WinnowBackend {
             },
             BuiltIn {
                 name: "alpha1",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "digit1",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "hex_digit0",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "hex_digit1",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "oct_digit0",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "oct_digit1",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "binary_digit0",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "binary_digit1",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "multispace0",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "multispace1",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "space0",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "space1",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "line_ending",
-                return_type: "String",
+                return_type: "&'a str",
             },
             BuiltIn {
                 name: "empty",
