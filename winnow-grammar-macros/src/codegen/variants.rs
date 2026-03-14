@@ -230,7 +230,7 @@ impl<'a> Codegen<'a> {
                             continue;
                         },
                         Err(e) => {
-                            if e.is_fatal() {
+                            if matches!(e, ::winnow::error::Err::Cut(_)) {
                                 return Err(e);
                             } else {
                                 ::winnow::stream::Stream::reset(#input, &checkpoint);

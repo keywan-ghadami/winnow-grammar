@@ -10,21 +10,21 @@ grammar! {
         #[allow(dead_code)]
         WS = empty
         pub rule test_line_ending -> String =
-            s:line_ending -> { s }
+            s:line_ending -> { s.to_string() }
     }
 }
 
 #[test]
 fn test_line_ending_literal() {
-    LineEndingParser::parse_test_line_ending
+    LineEndingParser::parse_test_line_ending()
         .parse_test("\n")
         .assert_success_is("\n".to_string());
 
-    LineEndingParser::parse_test_line_ending
+    LineEndingParser::parse_test_line_ending()
         .parse_test("\r\n")
         .assert_success_is("\r\n".to_string());
 
-    LineEndingParser::parse_test_line_ending
+    LineEndingParser::parse_test_line_ending()
         .parse_test("a")
         .assert_failure();
 }
