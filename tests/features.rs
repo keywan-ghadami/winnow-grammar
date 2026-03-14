@@ -19,17 +19,17 @@ grammar! {
 
 #[test]
 fn test_plus_repetition() {
-    TestPlus::parse_list
+    TestPlus::parse_list()
         .parse_test("1 2 3")
         .assert_success_is(PlusList {
             items: vec![1, 2, 3],
         });
 
-    TestPlus::parse_list
+    TestPlus::parse_list()
         .parse_test("1")
         .assert_success_is(PlusList { items: vec![1] });
 
-    TestPlus::parse_list.parse_test("").assert_failure();
+    TestPlus::parse_list().parse_test("").assert_failure();
 }
 
 // -----------------------------------------------------------------------------
@@ -52,11 +52,11 @@ grammar! {
 
 #[test]
 fn test_grouping() {
-    TestGroup::parse_main
+    TestGroup::parse_main()
         .parse_test("a 10")
         .assert_success_is(GroupEnum::A(10));
 
-    TestGroup::parse_main
+    TestGroup::parse_main()
         .parse_test("b 20")
         .assert_success_is(GroupEnum::B(20));
 }
@@ -75,13 +75,13 @@ pub struct Builtins {
 grammar! {
     grammar TestBuiltins {
         pub rule main -> Builtins =
-            s:string i:u32 id:ident -> { Builtins { s, i, id } }
+            s:string i:u32 id:ident -> { Builtins { s: s.to_string(), i, id: id.to_string() } }
     }
 }
 
 #[test]
 fn test_builtins() {
-    TestBuiltins::parse_main
+    TestBuiltins::parse_main()
         .parse_test(r#" "hello" 123 world"#)
         .assert_success_is(Builtins {
             s: "hello".to_string(),
@@ -104,5 +104,5 @@ grammar! {
 
 #[test]
 fn test_use() {
-    TestUse::parse_main.parse_test("a").assert_success_is('a');
+    TestUse::parse_main().parse_test("a").assert_success_is('a');
 }

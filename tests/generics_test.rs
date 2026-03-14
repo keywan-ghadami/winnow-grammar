@@ -16,7 +16,7 @@ grammar! {
 
 #[test]
 fn test_generics() {
-    Generics::parse_main
+    Generics::parse_main()
         .parse_test("[ 1 2 3 ]")
         .assert_success_is(vec![1, 2, 3]);
 }
