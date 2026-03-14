@@ -1,24 +1,28 @@
 use winnow::error::ContextError;
-use winnow::stream::LocatingSlice;
 use winnow::Parser;
+use crate::ParseInput;
+use winnow::stream::{Stateful, LocatingSlice};
 
 pub use grammar_kit::testing::*;
 
 /// Extension trait for winnow parsers to simplify testing.
 ///
 /// This trait allows writing tests similar to `syn::parse::Parser::parse_str`.
-/// It handles the creation of `LocatingSlice` and conversion of results into `TestResult`.
+/// It handles the creation of `ParseInput` and conversion of results into `TestResult`.
 pub trait WinnowTestExt<O> {
     fn parse_test(&mut self, input: &str) -> TestResult<O, String>;
 }
 
+// NOTE: This impl is intentionally broad to support grammars that are generic over the state `S`.
+// It requires `S` to have a `Default` implementation to create an initial state for testing.
+// The `Debug` requirement on `S` comes from the `grammar!` macro itself.
 impl<P, O> WinnowTestExt<O> for P
 where
-    for<'a> P: Parser<LocatingSlice<&'a str>, O, ContextError>,
+    for<'a> P: Parser<ParseInput<'a, ()>, O, ContextError>,
     O: std::fmt::Debug,
 {
     fn parse_test(&mut self, input: &str) -> TestResult<O, String> {
-        let stream = LocatingSlice::new(input);
+        let stream = Stateful { state: (), input: LocatingSlice::new(input) };
         match self.parse(stream) {
             Ok(val) => TestResult::new(Ok(val)).with_source(input),
             Err(e) => {
@@ -37,7 +41,7 @@ macro_rules! test_case {
         $crate::testing::test_case_impl! (
             backend: {
                 grammar_macro: $crate::grammar,
-                test_trait: $crate::testing::WinnowTestExt,
+                test_trait: $crate::testing::WinnowTestExt<_>,
                 parser_mut: mut
             },
             name: $name,
@@ -50,7 +54,7 @@ macro_rules! test_case {
         $crate::testing::test_case_impl! (
             backend: {
                 grammar_macro: $crate::grammar,
-                test_trait: $crate::testing::WinnowTestExt,
+                test_trait: $crate::testing::WinnowTestExt<_>,
                 parser_mut: mut
             },
             name: $name,
@@ -59,4 +63,3 @@ macro_rules! test_case {
         );
     };
 }
-
