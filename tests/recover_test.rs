@@ -12,7 +12,7 @@ grammar! {
 
 #[test]
 fn test_recovery() {
-    RecoverTest::parse_list
+    RecoverTest::parse_list()
         .parse_test("1; 2; bad; 3;")
         .assert_success_is(vec![Some(1), Some(2), None, Some(3)]);
 }

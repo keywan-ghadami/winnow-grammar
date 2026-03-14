@@ -1,5 +1,5 @@
 use grammar_kit::WithSpan;
-use winnow::stream::LocatingSlice;
+use winnow::stream::{LocatingSlice, Stateful};
 use winnow::Parser;
 use winnow_grammar::grammar;
 
@@ -25,8 +25,8 @@ grammar! {
 #[test]
 fn test_span_injection() {
     let input = "  42  ";
-    let input = LocatingSlice::new(input);
-    let result = SpanTest::parse_main.parse(input).unwrap();
+    let stream = LocatingSlice::new(input);
+    let result = SpanTest::parse_main().parse(Stateful::new(stream)).unwrap();
 
     assert_eq!(result.val, 42);
     assert_eq!(result.span, 2..4);
@@ -59,8 +59,8 @@ grammar! {
 #[test]
 fn test_span_injection_tuple() {
     let input = " 10 20 ";
-    let input = LocatingSlice::new(input);
-    let result = SpanTupleTest::parse_main.parse(input).unwrap();
+    let stream = LocatingSlice::new(input);
+    let result = SpanTupleTest::parse_main().parse(Stateful::new(stream)).unwrap();
 
     assert_eq!(result.a, 10);
     assert_eq!(result.b, 20);
