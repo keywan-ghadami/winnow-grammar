@@ -26,35 +26,35 @@ grammar! {
 
 #[test]
 fn test_primitives() {
-    Primitives::parse_test_u8
+    Primitives::parse_test_u8()
         .parse_test("255")
         .assert_success_is(255);
 
-    Primitives::parse_test_u16
+    Primitives::parse_test_u16()
         .parse_test("65535")
         .assert_success_is(65535);
 
-    Primitives::parse_test_u64
+    Primitives::parse_test_u64()
         .parse_test("18446744073709551615")
         .assert_success_is(u64::MAX);
 
-    Primitives::parse_test_i8
+    Primitives::parse_test_i8()
         .parse_test("-128")
         .assert_success_is(-128);
 
-    Primitives::parse_test_i64
+    Primitives::parse_test_i64()
         .parse_test("-9223372036854775808")
         .assert_success_is(i64::MIN);
 
-    Primitives::parse_test_f32
+    Primitives::parse_test_f32()
         .parse_test("1.5")
         .assert_success_with(|v| assert!((v - 1.5f32).abs() < 1e-6));
 
-    Primitives::parse_test_bool
+    Primitives::parse_test_bool()
         .parse_test("true")
         .assert_success_is(true);
 
-    Primitives::parse_test_bool
+    Primitives::parse_test_bool()
         .parse_test("false")
         .assert_success_is(false);
 }

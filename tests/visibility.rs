@@ -16,7 +16,7 @@ grammar! {
 
 #[test]
 fn test_visibility() {
-    VisibilityTest::parse_start
+    VisibilityTest::parse_start()
         .parse_test("test")
         .assert_success_is("test".to_string());
 }

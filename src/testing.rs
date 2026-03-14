@@ -102,17 +102,17 @@ macro_rules! test_case_impl {
                     macro_rules! run_check {
                         ($inp:expr, val $expect:expr) => {
                             #[allow(unused_mut)]
-                            let $($parser_mut)? parser = [<$name _grammar>]::[<parse_ $rule>];
+                            let $($parser_mut)? parser = [<$name _grammar>]::[<parse_ $rule>]();
                             parser.parse_test($inp).assert_success_is($expect);
                         };
                         ($inp:expr, err $msg:expr) => {
                             #[allow(unused_mut)]
-                            let $($parser_mut)? parser = [<$name _grammar>]::[<parse_ $rule>];
+                            let $($parser_mut)? parser = [<$name _grammar>]::[<parse_ $rule>]();
                             parser.parse_test($inp).assert_failure_contains($msg);
                         };
                         ($inp:expr, check $closure:expr) => {
                             #[allow(unused_mut)]
-                            let $($parser_mut)? parser = [<$name _grammar>]::[<parse_ $rule>];
+                            let $($parser_mut)? parser = [<$name _grammar>]::[<parse_ $rule>]();
                             parser.parse_test($inp).assert_success_with($closure);
                         };
                     }

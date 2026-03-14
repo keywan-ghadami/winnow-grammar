@@ -16,27 +16,27 @@ pub enum Expr {
 
 grammar! {
     grammar MiniLang {
-        pub rule stmt -> Stmt =
-            "let" name:ident "=" e:expr ";" -> { Stmt::Let(name, e) }
+        pub stmt -> Stmt =
+            "let" name:ident "=" e:expr ";" -> { Stmt::Let(name.to_string(), e) }
           | e:expr ";" -> { Stmt::Expr(e) }
 
-        rule expr -> Expr =
+        expr -> Expr =
             l:term "+" r:expr -> { Expr::Add(Box::new(l), Box::new(r)) }
           | t:term -> { t }
 
-        rule term -> Expr =
+        term -> Expr =
             n:u32 -> { Expr::Num(n) }
-          | i:ident -> { Expr::Var(i) }
+          | i:ident -> { Expr::Var(i.to_string()) }
           | "(" e:expr ")" -> { e }
 
-        pub rule spanned_term -> (Expr, std::ops::Range<usize>) =
+        pub spanned_term -> (Expr, std::ops::Range<usize>) =
             t:term @ s -> { (t, s) }
     }
 }
 
 #[test]
 fn test_let_stmt() {
-    MiniLang::parse_stmt
+    MiniLang::parse_stmt()
         .parse_test("let x = 1 + 2;")
         .assert_success_is(Stmt::Let(
             "x".to_string(),
@@ -46,7 +46,7 @@ fn test_let_stmt() {
 
 #[test]
 fn test_expr_stmt() {
-    MiniLang::parse_stmt
+    MiniLang::parse_stmt()
         .parse_test("10 + x;")
         .assert_success_is(Stmt::Expr(Expr::Add(
             Box::new(Expr::Num(10)),
@@ -56,7 +56,7 @@ fn test_expr_stmt() {
 
 #[test]
 fn test_parens() {
-    MiniLang::parse_stmt
+    MiniLang::parse_stmt()
         .parse_test("(1 + 2);")
         .assert_success_is(Stmt::Expr(Expr::Add(
             Box::new(Expr::Num(1)),
@@ -66,7 +66,7 @@ fn test_parens() {
 
 #[test]
 fn test_span() {
-    MiniLang::parse_spanned_term
+    MiniLang::parse_spanned_term()
         .parse_test(" 123")
         .assert_success_with(|(expr, span)| {
             assert_eq!(expr, &Expr::Num(123));
