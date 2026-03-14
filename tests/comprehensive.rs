@@ -15,7 +15,7 @@ grammar! {
         pub rule value -> Value =
             i:i32 not(".") not("e") not("E") -> { Value::Int(i) }
           | f:f64 -> { Value::Float(f) }
-          | s:string -> { Value::String(s) }
+          | s:string -> { Value::String(s.to_string()) }
           | "true" -> { Value::Bool(true) }
           | "false" -> { Value::Bool(false) }
           | "[" l:list_content "]" -> { Value::List(l) }
@@ -29,29 +29,29 @@ grammar! {
 
 #[test]
 fn test_mixed_values() {
-    Comprehensive::parse_value
+    Comprehensive::parse_value()
         .parse_test("123")
         .assert_success_is(Value::Int(123));
 
-    Comprehensive::parse_value
+    Comprehensive::parse_value()
         .parse_test("123.456")
         .assert_success_with(|v| match v {
             Value::Float(f) => assert!((f - 123.456).abs() < 1e-6),
             _ => panic!("Expected Float for 123.456, got {:?}", v),
         });
 
-    Comprehensive::parse_value
+    Comprehensive::parse_value()
         .parse_test("123e2")
         .assert_success_with(|v| match v {
             Value::Float(f) => assert!((f - 12300.0).abs() < 1e-6),
             _ => panic!("Expected Float for 123e2, got {:?}", v),
         });
 
-    Comprehensive::parse_value
+    Comprehensive::parse_value()
         .parse_test("\"hello\"")
         .assert_success_is(Value::String("hello".to_string()));
 
-    Comprehensive::parse_value
+    Comprehensive::parse_value()
         .parse_test("[1, \"two\", 3.0]")
         .assert_success_with(|v| {
             if let Value::List(l) = v {
@@ -80,11 +80,11 @@ grammar! {
 
 #[test]
 fn test_generic_return() {
-    GenericReturn::parse_optional_int
+    GenericReturn::parse_optional_int()
         .parse_test("42")
         .assert_success_is(Some(42));
 
-    GenericReturn::parse_optional_int
+    GenericReturn::parse_optional_int()
         .parse_test("none")
         .assert_success_is(None);
 }
@@ -105,15 +105,15 @@ grammar! {
 
 #[test]
 fn test_num_formats() {
-    NumFormats::parse_hex
+    NumFormats::parse_hex()
         .parse_test("0x1A")
         .assert_success_is(26);
 
-    NumFormats::parse_oct
+    NumFormats::parse_oct()
         .parse_test("0o12")
         .assert_success_is(10);
 
-    NumFormats::parse_bin
+    NumFormats::parse_bin()
         .parse_test("0b1010")
         .assert_success_is(10);
 }
@@ -128,7 +128,7 @@ grammar! {
 
 #[test]
 fn test_int64() {
-    LargeInt::parse_int64
+    LargeInt::parse_int64()
         .parse_test("9223372036854775807")
         .assert_success_is(i64::MAX);
 }

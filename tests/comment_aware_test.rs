@@ -1,5 +1,5 @@
 use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
+use winnow::stream::{LocatingSlice, Stateful};
 use winnow_grammar::grammar;
 
 grammar! {
@@ -21,6 +21,6 @@ fn test_comment_aware() {
     let input = "10 // add 20
  + 20";
     let stream = LocatingSlice::new(input);
-    let result = CommentAware::parse_add().parse(stream).unwrap();
+    let result = CommentAware::parse_add().parse(Stateful::new(stream)).unwrap();
     assert_eq!(result, 30);
 }
