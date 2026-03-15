@@ -16,7 +16,7 @@ impl CustomNode {
 
 grammar! {
     grammar ExplicitSpanTest {
-        pub rule custom_node -> CustomNode @= a:ident -> { CustomNode::from_data(a.to_string(), _span) }
+        pub custom_node -> CustomNode @= a:ident -> { CustomNode::from_data(a.to_string(), _span) }
     }
 }
 
