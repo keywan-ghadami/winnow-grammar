@@ -119,6 +119,7 @@ impl<'a> Codegen<'a> {
                 #ws_shadow
 
                 let mut parser = (|#input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type> {
+                    use ::winnow::prelude::*;
                     #body
                 })
                 .context(::winnow::error::StrContext::Label(#rule_name_str));

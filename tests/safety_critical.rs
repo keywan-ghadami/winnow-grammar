@@ -8,7 +8,7 @@ grammar! {
     grammar CutSafety {
         // A rule that uses cut. If "commit" is found, we MUST match "success".
         // If "success" fails, we should NOT backtrack to the second alternative.
-        pub rule deterministic_choice -> &'input str =
+        pub rule deterministic_choice -> &str =
             "commit" => "success" -> { "committed" }
           | "commit" "failure"    -> { "backtracked_badly" }
           | "other"               -> { "other" }
@@ -42,11 +42,10 @@ fn test_cut_operator_safety() {
 // In safety-critical systems, we need to know exactly where parsing failed.
 grammar! {
     grammar ErrorProp {
-        pub rule main -> () =
-            "start" => inner_rule -> { () }
+        pub main =
+            "start" => inner_rule
 
-        rule inner_rule -> () =
-            "expecting_this" -> { () }
+        inner_rule = "expecting_this"
     }
 }
 
