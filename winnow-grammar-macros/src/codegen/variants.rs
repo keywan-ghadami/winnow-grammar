@@ -62,7 +62,7 @@ impl<'a> Codegen<'a> {
             };
 
             quote_spanned! {span=>
-                |#input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<_> {
+                |#input: &mut ::winnow_grammar::ParseInput<'a, S>| {
                     #steps_code
                     #state_injection
                     #final_expr
@@ -217,7 +217,7 @@ impl<'a> Codegen<'a> {
                 {
                     let checkpoint = ::winnow::stream::Stream::checkpoint(#input);
                     #start_capture
-                    let attempt = (|| -> ::winnow::Result<#ret_type> {
+                    let attempt = (|| {
                         #steps_code
                         #bind_lhs
                         #state_injection
