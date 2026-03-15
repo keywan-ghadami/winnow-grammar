@@ -16,6 +16,7 @@ impl<'a> Codegen<'a> {
         let inner_fn_name = format_ident!("parse_{}_inner", rule_name, span = span);
         let ret_type = &rule.return_type;
         let input = &self.input_ident;
+        let err_type = quote_spanned! { span=> ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>> };
 
         let mut extra_generics = Vec::new();
         let mut params_tokens = Vec::new();
@@ -31,7 +32,7 @@ impl<'a> Codegen<'a> {
                     let output_type = format_ident!("Output_{}", name, span = Span::mixed_site());
                     extra_generics.push(output_type.clone());
                     params_tokens.push(quote! {
-                        mut #name: impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, ::winnow::error::ContextError>
+                        mut #name: impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, #err_type>
                     });
                 }
             }
@@ -81,7 +82,7 @@ impl<'a> Codegen<'a> {
         let gen_params = &rule.generics.params;
         let gen_where = &rule.generics.where_clause;
 
-        let mut all_generics = quote! { 'a, S: std::fmt::Debug };
+        let mut all_generics = quote! { 'a, S: std::fmt::Debug + Clone };
         if !gen_params.is_empty() {
             all_generics.extend(quote! {, #gen_params});
         }
@@ -99,7 +100,7 @@ impl<'a> Codegen<'a> {
         let ws_shadow = if is_ws_rule {
             quote_spanned! {span=>
                 #[allow(dead_code)]
-                fn WS<'a, S: std::fmt::Debug>(_: &mut ::winnow_grammar::ParseInput<'a, S>) -> ::winnow::Result<()> {
+                fn WS<'a, S: std::fmt::Debug + Clone>(_: &mut ::winnow_grammar::ParseInput<'a, S>) -> ::winnow::Result<(), #err_type> {
                     Ok(())
                 }
             }
@@ -109,16 +110,15 @@ impl<'a> Codegen<'a> {
 
         let inner_fn = quote_spanned! {span=>
             #[allow(dead_code)]
-            fn #inner_fn_name<#all_generics>(#input: &mut ::winnow_grammar::ParseInput<'a, S>, #(#params_tokens),*) -> ::winnow::Result<#ret_type>
+            fn #inner_fn_name<#all_generics>(#input: &mut ::winnow_grammar::ParseInput<'a, S>, #(#params_tokens),*) -> ::winnow::Result<#ret_type, #err_type>
             where
                 #where_preds
             {
                 use ::winnow::Parser;
-                use ::winnow::error::ContextError;
 
                 #ws_shadow
 
-                let mut parser = (|#input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type> {
+                let mut parser = (|#input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
                     use ::winnow::prelude::*;
                     #body
                 })
@@ -136,14 +136,13 @@ impl<'a> Codegen<'a> {
             }
         };
 
-        let mut outer_generics = quote! {'a, S: std::fmt::Debug};
+        let mut outer_generics = quote! {'a, S: std::fmt::Debug + Clone };
         if !gen_params.is_empty() {
             outer_generics.extend(quote! {, #gen_params});
         }
-        let err_type = quote_spanned! { span=> ::winnow::error::ContextError };
 
         let outer_fn_body = quote! {
-            move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type> {
+            move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
                 // Public API wrapper to handle whitespace and EOF
                 let _ = WS(input)?;
 

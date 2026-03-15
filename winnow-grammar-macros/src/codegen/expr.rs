@@ -224,6 +224,9 @@ impl<'a> Codegen<'a> {
             }
         }
 
+        let err_type = quote_spanned! {span=> ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>> };
+        let input_type = quote_spanned! {span=> ::winnow_grammar::ParseInput<'a, S> };
+
         match name_str.as_str() {
             "ident" => quote_spanned! {span=>
                 ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_')
@@ -260,7 +263,7 @@ impl<'a> Codegen<'a> {
                     '\''
                 )
             },
-            "any" => quote_spanned! {span=> ::winnow::token::any },
+            "any" => quote_spanned! {span=> ::winnow::token::any::<#input_type, #err_type> },
             "alpha1" => {
                 quote_spanned! {span=> ::winnow::ascii::alpha1 }
             }
@@ -303,20 +306,20 @@ impl<'a> Codegen<'a> {
             "empty" => quote_spanned! {span=> ::winnow::combinator::empty },
             "eof" => quote_spanned! {span=> ::winnow::combinator::eof },
 
-            "u8" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<_, u8, _> },
-            "u16" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<_, u16, _> },
-            "u32" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<_, u32, _> },
-            "u64" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<_, u64, _> },
-            "u128" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<_, u128, _> },
-            "usize" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<_, usize, _> },
-            "i8" => quote_spanned! {span=> ::winnow::ascii::dec_int::<_, i8, _> },
-            "i16" => quote_spanned! {span=> ::winnow::ascii::dec_int::<_, i16, _> },
-            "i32" => quote_spanned! {span=> ::winnow::ascii::dec_int::<_, i32, _> },
-            "i64" => quote_spanned! {span=> ::winnow::ascii::dec_int::<_, i64, _> },
-            "i128" => quote_spanned! {span=> ::winnow::ascii::dec_int::<_, i128, _> },
-            "isize" => quote_spanned! {span=> ::winnow::ascii::dec_int::<_, isize, _> },
-            "f32" => quote_spanned! {span=> ::winnow::ascii::float::<_, f32, _> },
-            "f64" => quote_spanned! {span=> ::winnow::ascii::float::<_, f64, _> },
+            "u8" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u8, #err_type> },
+            "u16" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u16, #err_type> },
+            "u32" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u32, #err_type> },
+            "u64" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u64, #err_type> },
+            "u128" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u128, #err_type> },
+            "usize" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, usize, #err_type> },
+            "i8" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i8, #err_type> },
+            "i16" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i16, #err_type> },
+            "i32" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i32, #err_type> },
+            "i64" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i64, #err_type> },
+            "i128" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i128, #err_type> },
+            "isize" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, isize, #err_type> },
+            "f32" => quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f32, #err_type> },
+            "f64" => quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f64, #err_type> },
             "bool" => quote_spanned! {span=>
                 ::winnow::combinator::alt((
                     ::winnow::token::literal("true").map(|_| true),
