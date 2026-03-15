@@ -6,7 +6,7 @@ grammar! {
     grammar TestGrammar {
         // This rule should parse an identifier and return it as a string slice
         // with the same lifetime as the input string.
-        pub get_identifier -> &str = name:ident -> { name.as_ref() }
+        pub get_identifier -> &'a str = name:ident -> { name.as_ref() }
     }
 }
 
