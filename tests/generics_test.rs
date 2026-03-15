@@ -6,7 +6,7 @@ grammar! {
     grammar Generics {
         list<T>(item) -> Vec<T> =
             elements:item* -> { elements }
-        pub main -> Vec<u32> = l:list<u32>(u32) -> { l }
+        pub main -> Vec<u32> = l:list<u32>(item=u32) -> { l }
     }
 }
 
