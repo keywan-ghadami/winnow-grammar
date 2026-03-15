@@ -1,8 +1,0 @@
-target/
-.aider*
-
-
-# Added by cargo
-
-/target
-vendor
