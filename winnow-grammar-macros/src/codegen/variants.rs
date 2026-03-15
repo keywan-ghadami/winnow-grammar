@@ -130,7 +130,7 @@ impl<'a> Codegen<'a> {
     pub fn generate_recursive_loop_body(
         &self,
         variants: &[RuleVariant],
-        ret_type: &syn::Type,
+        _ret_type: &syn::Type,
         lhs_ident: &syn::Ident,
         is_lexical: bool,
     ) -> TokenStream {
