@@ -68,18 +68,6 @@ impl<'a> Codegen<'a> {
                 // Import types from parent module (e.g. AST structs)
                 #use_super
 
-                pub trait AnyParser<I, E> {
-                    type Output;
-                    fn parse_any(&mut self, input: &mut I) -> ::winnow::Result<Self::Output, E>;
-                }
-                impl<P, I, O, E> AnyParser<I, E> for P where P: ::winnow::Parser<I, O, E> {
-                    type Output = O;
-                    #[inline(always)]
-                    fn parse_any(&mut self, input: &mut I) -> ::winnow::Result<Self::Output, E> {
-                        ::winnow::Parser::parse_next(self, input)
-                    }
-                }
-
                 // User-defined use statements
                 #(#use_statements)*
 

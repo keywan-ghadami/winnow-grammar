@@ -5,6 +5,7 @@ use syn_grammar_model::{
     analysis,
     model::{Rule, RuleVariant},
 };
+use syn;
 
 impl<'a> Codegen<'a> {
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
@@ -20,16 +21,32 @@ impl<'a> Codegen<'a> {
 
         let mut params_tokens = Vec::new();
         let mut arg_names = Vec::new();
+        let mut extra_generics = Vec::<syn::Ident>::new();
 
         for param in &rule.params {
             let name = &param.name;
             let ty = &param.ty;
             arg_names.push(name.clone());
             match ty {
-                Some(t) => params_tokens.push(quote! { mut #name: #t }),
+                Some(t) => {
+                    let mut actual_ty = quote! { #t };
+                    if let syn::Type::Path(type_path) = t {
+                        if let Some(segment) = type_path.path.segments.last() {
+                            if segment.ident == "Rule" {
+                                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                                    let inner_args = &args.args;
+                                    actual_ty = quote! { impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #inner_args, #err_type> };
+                                }
+                            }
+                        }
+                    }
+                    params_tokens.push(quote! { mut #name: #actual_ty });
+                },
                 None => {
+                    let output_type = format_ident!("Output_{}", name, span = Span::mixed_site());
+                    extra_generics.push(output_type.clone());
                     params_tokens.push(quote! {
-                        mut #name: impl AnyParser<::winnow_grammar::ParseInput<'a, S>, #err_type>
+                        mut #name: impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, #err_type>
                     });
                 }
             }
@@ -80,6 +97,9 @@ impl<'a> Codegen<'a> {
         let gen_where = &rule.generics.where_clause;
 
         let mut all_generics = quote! { 'a, S: std::fmt::Debug + Clone };
+        if !extra_generics.is_empty() {
+            all_generics.extend(quote! {, #(#extra_generics),* });
+        }
         if !gen_params.is_empty() {
             all_generics.extend(quote! {, #gen_params});
         }
@@ -131,6 +151,9 @@ impl<'a> Codegen<'a> {
         };
 
         let mut outer_generics = quote! {'a, S: std::fmt::Debug + Clone };
+        if !extra_generics.is_empty() {
+            outer_generics.extend(quote! {, #(#extra_generics),* });
+        }
         if !gen_params.is_empty() {
             outer_generics.extend(quote! {, #gen_params});
         }
