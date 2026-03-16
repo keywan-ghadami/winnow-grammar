@@ -4,7 +4,7 @@ use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar Generics {
-        list<T>(item) -> Vec<T> =
+        list<T>(item: Rule<T>) -> Vec<T> =
             elements:item* -> { elements }
         pub main -> Vec<u32> = l:list<u32>(item=u32) -> { l }
     }

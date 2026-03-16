@@ -215,12 +215,12 @@ impl<'a> Codegen<'a> {
         if self.user_rules.contains(&name_str) {
             let fn_name = quote::format_ident!("parse_{}_inner", rule_name, span = span);
             if args.is_empty() {
-                return quote_spanned! {span=> (move |i: &mut _| #fn_name(i)) };
+                return quote_spanned! {span=> (|i: &mut _| #fn_name(i)) };
             } else {
                 let arg_exprs = args
                     .iter()
                     .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                return quote_spanned! {span=> (move |i: &mut _| #fn_name(i, #(#arg_exprs),*)) };
+                return quote_spanned! {span=> (|i: &mut _| #fn_name(i, #(#arg_exprs),*)) };
             }
         }
 
@@ -328,7 +328,7 @@ impl<'a> Codegen<'a> {
             },
             _ => {
                 if args.is_empty() {
-                    quote_spanned! {span=> (|i: &mut _| AnyParser::parse_any(&mut #rule_path, i)) }
+                    quote_spanned! {span=> (&mut #rule_path) }
                 } else {
                     let arg_exprs = args
                         .iter()
@@ -391,10 +391,10 @@ impl<'a> Codegen<'a> {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 if !is_lexical {
                     if is_discarded {
-                        // Using move |i: &mut _| WS(i) explicitly since WS is a function and preceded requires a Parser.
-                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, (), _, _>(0.., ::winnow::combinator::preceded(move |i: &mut _| WS(i), #p)) }
+                        // Using |i: &mut _| WS(i) explicitly since WS is a function and preceded requires a Parser.
+                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, (), _, _>(0.., ::winnow::combinator::preceded(|i: &mut _| WS(i), #p)) }
                     } else {
-                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, Vec<_>, _, _>(0.., ::winnow::combinator::preceded(move |i: &mut _| WS(i), #p)) }
+                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, Vec<_>, _, _>(0.., ::winnow::combinator::preceded(|i: &mut _| WS(i), #p)) }
                     }
                 } else if is_discarded {
                     quote_spanned! {span=> repeat::<_, _, (), _, _>(0.., #p) }
@@ -406,9 +406,9 @@ impl<'a> Codegen<'a> {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 if !is_lexical {
                     if is_discarded {
-                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, (), _, _>(1.., ::winnow::combinator::preceded(move |i: &mut _| WS(i), #p)) }
+                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, (), _, _>(1.., ::winnow::combinator::preceded(|i: &mut _| WS(i), #p)) }
                     } else {
-                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, Vec<_>, _, _>(1.., ::winnow::combinator::preceded(move |i: &mut _| WS(i), #p)) }
+                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, Vec<_>, _, _>(1.., ::winnow::combinator::preceded(|i: &mut _| WS(i), #p)) }
                     }
                 } else if is_discarded {
                     quote_spanned! {span=> repeat::<_, _, (), _, _>(1.., #p) }
@@ -462,7 +462,7 @@ impl<'a> Codegen<'a> {
             ModelPattern::Count { pattern, .. } => {
                 let p = self.generate_parser_expr(pattern, is_lexical, false);
                 if !is_lexical {
-                    quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, Vec<_>, _, _>(0.., ::winnow::combinator::preceded(move |i: &mut _| WS(i), #p)).map(|v: Vec<_>| v.len()) }
+                    quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, Vec<_>, _, _>(0.., ::winnow::combinator::preceded(|i: &mut _| WS(i), #p)).map(|v: Vec<_>| v.len()) }
                 } else {
                     quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, Vec<_>, _, _>(0.., #p).map(|v: Vec<_>| v.len()) }
                 }
@@ -494,7 +494,7 @@ impl<'a> Codegen<'a> {
             if let ModelPattern::Cut(_) = p {
                 in_cut = true;
                 if i > 0 && !is_lexical {
-                    parsers.push(quote_spanned! {span=> (move |i: &mut _| WS(i)) });
+                    parsers.push(quote_spanned! {span=> (|i: &mut _| WS(i)) });
                 }
                 let p_expr = self.generate_parser_expr(p, is_lexical, false);
                 if in_cut {
@@ -507,7 +507,7 @@ impl<'a> Codegen<'a> {
 
             // Infix WS
             if i > 0 && !is_lexical {
-                parsers.push(quote_spanned! {span=> (move |i: &mut _| WS(i)) });
+                parsers.push(quote_spanned! {span=> (|i: &mut _| WS(i)) });
             }
 
             let p_expr = self.generate_parser_expr(p, is_lexical, false);
@@ -546,7 +546,7 @@ impl<'a> Codegen<'a> {
             // Infix logic: Open, WS, Inner, WS, Close
             // This is: delimited(open, preceded(WS, inner), preceded(WS, close))
             quote_spanned! {span=>
-                delimited(#open_p, preceded(move |i: &mut _| WS(i), #inner_parser), preceded(move |i: &mut _| WS(i), #close_p))
+                delimited(#open_p, preceded(|i: &mut _| WS(i), #inner_parser), preceded(|i: &mut _| WS(i), #close_p))
             }
         }
     }
