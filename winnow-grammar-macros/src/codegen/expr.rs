@@ -328,7 +328,7 @@ impl<'a> Codegen<'a> {
             },
             _ => {
                 if args.is_empty() {
-                    quote_spanned! {span=> (|i: &mut _| ::winnow::Parser::parse_next(&mut #rule_path, i)) }
+                    quote_spanned! {span=> (&mut #rule_path) }
                 } else {
                     let arg_exprs = args
                         .iter()
