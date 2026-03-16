@@ -26,13 +26,15 @@ impl<'a> Codegen<'a> {
         for param in &rule.params {
             let name = &param.name;
             let ty = &param.ty;
-            arg_names.push(name.clone());
+
             match ty {
                 Some(t) => {
                     let mut actual_ty = quote! { #t };
+                    let mut is_parser = false;
                     if let syn::Type::Path(type_path) = t {
                         if let Some(segment) = type_path.path.segments.last() {
                             if segment.ident == "Rule" {
+                                is_parser = true;
                                 if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
                                     let inner_args = &args.args;
                                     actual_ty = quote! { impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #inner_args, #err_type> };
@@ -41,13 +43,19 @@ impl<'a> Codegen<'a> {
                         }
                     }
                     params_tokens.push(quote! { mut #name: #actual_ty });
-                },
+                    if is_parser {
+                        arg_names.push(quote! { &mut #name });
+                    } else {
+                        arg_names.push(quote! { #name.clone() });
+                    }
+                }
                 None => {
                     let output_type = format_ident!("Output_{}", name, span = Span::mixed_site());
                     extra_generics.push(output_type.clone());
                     params_tokens.push(quote! {
                         mut #name: impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, #err_type>
                     });
+                    arg_names.push(quote! { &mut #name });
                 }
             }
         }
@@ -157,7 +165,7 @@ impl<'a> Codegen<'a> {
         if !gen_params.is_empty() {
             outer_generics.extend(quote! {, #gen_params});
         }
-        
+
 
         let outer_fn_body = quote! {
             move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
