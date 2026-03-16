@@ -18,7 +18,6 @@ impl<'a> Codegen<'a> {
         let input = &self.input_ident;
         let err_type = quote_spanned! { span=> ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>> };
 
-        let mut extra_generics = Vec::new();
         let mut params_tokens = Vec::new();
         let mut arg_names = Vec::new();
 
@@ -29,10 +28,8 @@ impl<'a> Codegen<'a> {
             match ty {
                 Some(t) => params_tokens.push(quote! { mut #name: #t }),
                 None => {
-                    let output_type = format_ident!("Output_{}", name, span = Span::mixed_site());
-                    extra_generics.push(output_type.clone());
                     params_tokens.push(quote! {
-                        mut #name: impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, #err_type>
+                        mut #name: impl AnyParser<::winnow_grammar::ParseInput<'a, S>, #err_type>
                     });
                 }
             }
@@ -86,9 +83,6 @@ impl<'a> Codegen<'a> {
         if !gen_params.is_empty() {
             all_generics.extend(quote! {, #gen_params});
         }
-        if !extra_generics.is_empty() {
-            all_generics.extend(quote! {, #(#extra_generics),*});
-        }
 
         let where_preds = if let Some(w) = gen_where {
             let p = &w.predicates;
@@ -140,6 +134,7 @@ impl<'a> Codegen<'a> {
         if !gen_params.is_empty() {
             outer_generics.extend(quote! {, #gen_params});
         }
+        
 
         let outer_fn_body = quote! {
             move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {

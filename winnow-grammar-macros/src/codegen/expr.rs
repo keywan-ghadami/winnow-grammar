@@ -328,12 +328,12 @@ impl<'a> Codegen<'a> {
             },
             _ => {
                 if args.is_empty() {
-                    quote_spanned! {span=> (move |i: &mut _| ::winnow::Parser::parse_next(&mut #rule_path, i)) }
+                    quote_spanned! {span=> (|i: &mut _| AnyParser::parse_any(&mut #rule_path, i)) }
                 } else {
                     let arg_exprs = args
                         .iter()
                         .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                    quote_spanned! {span=> (move |i: &mut _| #rule_path(i, #(#arg_exprs),*)) }
+                    quote_spanned! {span=> (|i: &mut _| #rule_path(i, #(#arg_exprs),*)) }
                 }
             }
         }
