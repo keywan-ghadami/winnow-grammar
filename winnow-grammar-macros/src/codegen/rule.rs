@@ -20,6 +20,7 @@ impl<'a> Codegen<'a> {
         let err_type = quote_spanned! { span=> ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>> };
 
         let mut params_tokens = Vec::new();
+        let mut inner_params_tokens = Vec::new();
         let mut arg_names = Vec::new();
         let mut extra_generics = Vec::<syn::Ident>::new();
 
@@ -44,17 +45,20 @@ impl<'a> Codegen<'a> {
                     }
                     params_tokens.push(quote! { mut #name: #actual_ty });
                     if is_parser {
+                        inner_params_tokens.push(quote! { #name: &mut #actual_ty });
                         arg_names.push(quote! { &mut #name });
                     } else {
+                        inner_params_tokens.push(quote! { #name: #actual_ty });
                         arg_names.push(quote! { #name.clone() });
                     }
                 }
                 None => {
                     let output_type = format_ident!("Output_{}", name, span = Span::mixed_site());
                     extra_generics.push(output_type.clone());
-                    params_tokens.push(quote! {
-                        mut #name: impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, #err_type>
-                    });
+                    let actual_ty = quote! { impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, #err_type> };
+                    
+                    params_tokens.push(quote! { mut #name: #actual_ty });
+                    inner_params_tokens.push(quote! { #name: &mut #actual_ty });
                     arg_names.push(quote! { &mut #name });
                 }
             }
@@ -132,7 +136,7 @@ impl<'a> Codegen<'a> {
 
         let inner_fn = quote_spanned! {span=>
             #[allow(dead_code)]
-            fn #inner_fn_name<#all_generics>(#input: &mut ::winnow_grammar::ParseInput<'a, S>, #(#params_tokens),*) -> ::winnow::Result<#ret_type, #err_type>
+            fn #inner_fn_name<#all_generics>(#input: &mut ::winnow_grammar::ParseInput<'a, S>, #(#inner_params_tokens),*) -> ::winnow::Result<#ret_type, #err_type>
             where
                 #where_preds
             {
