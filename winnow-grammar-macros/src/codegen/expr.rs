@@ -4,12 +4,73 @@ use quote::{quote, quote_spanned};
 use syn_grammar_model::model::{Argument, ModelPattern};
 use std::collections::HashMap;
 
+pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::Ident>) {
+    match pattern {
+        ModelPattern::RuleCall { binding, .. } => *binding = new_binding,
+        ModelPattern::Group { binding, .. } => *binding = new_binding,
+        ModelPattern::Lit { binding, .. } => *binding = new_binding,
+        ModelPattern::Recover { binding, .. } => *binding = new_binding,
+        ModelPattern::Until { binding, .. } => *binding = new_binding,
+        ModelPattern::Count { binding, .. } => *binding = new_binding,
+        ModelPattern::Optional(inner, _) |
+        ModelPattern::Repeat(inner, _) |
+        ModelPattern::Plus(inner, _) |
+        ModelPattern::SpanBinding(inner, _, _) |
+        ModelPattern::LexicalScope(inner, _) |
+        ModelPattern::SpacedScope(inner, _) |
+        ModelPattern::Peek(inner, _) |
+        ModelPattern::Not(inner, _) => set_binding(inner, new_binding),
+        ModelPattern::Parenthesized(inner, _) |
+        ModelPattern::Bracketed(inner, _) |
+        ModelPattern::Braced(inner, _) => {
+            if inner.len() == 1 { set_binding(&mut inner[0], new_binding); }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn replace_type(ty: &mut syn::Type, subst: &HashMap<String, syn::Type>) {
+    match ty {
+        syn::Type::Path(type_path) => {
+            if type_path.qself.is_none() && type_path.path.segments.len() == 1 {
+                let ident = type_path.path.segments[0].ident.to_string();
+                if let Some(new_ty) = subst.get(&ident) {
+                    *ty = new_ty.clone();
+                    return;
+                }
+            }
+            for seg in &mut type_path.path.segments {
+                if let syn::PathArguments::AngleBracketed(args) = &mut seg.arguments {
+                    for arg in &mut args.args {
+                        if let syn::GenericArgument::Type(inner_ty) = arg {
+                            replace_type(inner_ty, subst);
+                        }
+                    }
+                }
+            }
+        }
+        syn::Type::Reference(type_ref) => replace_type(&mut type_ref.elem, subst),
+        syn::Type::Tuple(type_tuple) => {
+            for elem in &mut type_tuple.elems { replace_type(elem, subst); }
+        }
+        syn::Type::Array(type_arr) => replace_type(&mut type_arr.elem, subst),
+        syn::Type::Slice(type_slice) => replace_type(&mut type_slice.elem, subst),
+        syn::Type::Paren(type_paren) => replace_type(&mut type_paren.elem, subst),
+        _ => {}
+    }
+}
+
 pub(crate) fn substitute_pattern(pattern: &mut ModelPattern, subst: &HashMap<String, ModelPattern>) {
     match pattern {
-        ModelPattern::RuleCall { rule_path, .. } => {
+        ModelPattern::RuleCall { rule_path, binding, .. } => {
             if let Some(ident) = rule_path.segments.last().map(|s| s.ident.to_string()) {
                 if let Some(new_pat) = subst.get(&ident) {
-                    *pattern = new_pat.clone();
+                    let mut cloned = new_pat.clone();
+                    // Zuweisung ("elements:") beim Ersetzen auf das Argument übertragen!
+                    if binding.is_some() {
+                        set_binding(&mut cloned, binding.clone());
+                    }
+                    *pattern = cloned;
                     return;
                 }
             }
@@ -252,6 +313,7 @@ impl<'a> Codegen<'a> {
     pub fn generate_rule_call_parser(
         &self,
         rule_path: &syn::Path,
+        call_generics: &[syn::Type],
         args: &[Argument],
         is_lexical: bool,
     ) -> TokenStream {
@@ -274,7 +336,17 @@ impl<'a> Codegen<'a> {
             });
 
             if is_template {
-                // 3. Substitutions-Map aus den Parametern und Argumenten aufbauen
+                // 3a. Typ-Generics Substitutions-Map aufbauen (z.B. T -> u32)
+                let mut type_subst = HashMap::new();
+                for (idx, gen_param) in target_rule.generics.params.iter().enumerate() {
+                    if let syn::GenericParam::Type(ty_param) = gen_param {
+                        if let Some(call_ty) = call_generics.get(idx) {
+                            type_subst.insert(ty_param.ident.to_string(), call_ty.clone());
+                        }
+                    }
+                }
+
+                // 3b. Substitutions-Map aus den Parametern und Argumenten aufbauen
                 let mut subst = HashMap::new();
                 for (idx, param) in target_rule.params.iter().enumerate() {
                     if let Some(arg) = args.get(idx) {
@@ -294,10 +366,12 @@ impl<'a> Codegen<'a> {
                     }
                 }
 
-                // 5. Inlined Parser-Body direkt kompilieren
-                let ret_type = &target_rule.return_type;
+                // 5. Inlined Parser-Body direkt kompilieren (inkl. Typ-Generics in Return-Type)
+                let mut ret_type = target_rule.return_type.clone();
+                replace_type(&mut ret_type, &type_subst);
+
                 let combined_lexical = is_lexical || target_rule.is_lexical || target_rule.name == "WS";
-                let body = self.generate_variants_body(&inlined_variants, ret_type, combined_lexical, true);
+                let body = self.generate_variants_body(&inlined_variants, &ret_type, combined_lexical, true);
                 let err_type = quote_spanned! {span=> ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>> };
                 
                 return quote_spanned! {span=>
@@ -470,8 +544,8 @@ impl<'a> Codegen<'a> {
                 quote_spanned! {span=> #p.with_span().map(|(v, _)| v) }
             }
             ModelPattern::RuleCall {
-                rule_path, args, ..
-            } => self.generate_rule_call_parser(rule_path, args, is_lexical),
+                rule_path, generics, args, ..
+            } => self.generate_rule_call_parser(rule_path, generics, args, is_lexical),
             ModelPattern::Lit { lit, .. } => {
                 // Pure literal, no ws wrapping
                 match lit {
