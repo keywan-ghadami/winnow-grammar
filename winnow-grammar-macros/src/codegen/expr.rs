@@ -2,6 +2,53 @@ use super::Codegen;
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use syn_grammar_model::model::{Argument, ModelPattern};
+use std::collections::HashMap;
+
+pub(crate) fn substitute_pattern(pattern: &mut ModelPattern, subst: &HashMap<String, ModelPattern>) {
+    match pattern {
+        ModelPattern::RuleCall { rule_path, .. } => {
+            if let Some(ident) = rule_path.segments.last().map(|s| s.ident.to_string()) {
+                if let Some(new_pat) = subst.get(&ident) {
+                    *pattern = new_pat.clone();
+                    return;
+                }
+            }
+        }
+        ModelPattern::Group { alts, .. } => {
+            for (seq, _, _) in alts {
+                for p in seq {
+                    substitute_pattern(p, subst);
+                }
+            }
+        }
+        ModelPattern::Optional(inner, _)
+        | ModelPattern::Repeat(inner, _)
+        | ModelPattern::Plus(inner, _)
+        | ModelPattern::SpanBinding(inner, _, _)
+        | ModelPattern::Peek(inner, _)
+        | ModelPattern::Not(inner, _)
+        | ModelPattern::Count { pattern: inner, .. }
+        | ModelPattern::LexicalScope(inner, _)
+        | ModelPattern::SpacedScope(inner, _) => {
+            substitute_pattern(inner, subst);
+        }
+        ModelPattern::Parenthesized(inner, _)
+        | ModelPattern::Bracketed(inner, _)
+        | ModelPattern::Braced(inner, _) => {
+            for p in inner {
+                substitute_pattern(p, subst);
+            }
+        }
+        ModelPattern::Recover { body, sync, .. } => {
+            substitute_pattern(body, subst);
+            substitute_pattern(sync, subst);
+        }
+        ModelPattern::Until { pattern: inner, .. } => {
+            substitute_pattern(inner, subst);
+        }
+        ModelPattern::Lit { .. } | ModelPattern::Fail { .. } | ModelPattern::Cut(_) => {}
+    }
+}
 
 pub(crate) fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
     match pattern {
@@ -213,14 +260,75 @@ impl<'a> Codegen<'a> {
         let name_str = rule_name.to_string();
 
         if self.user_rules.contains(&name_str) {
+            // 1. Zielregel in der Grammatik finden
+            let target_rule = self.grammar.rules.iter().find(|r| r.name == name_str).unwrap();
+            
+            // 2. Prüfen, ob es sich um eine Template-Regel handelt
+            let is_template = target_rule.params.iter().any(|p| {
+                if let Some(syn::Type::Path(type_path)) = &p.ty {
+                    if let Some(segment) = type_path.path.segments.last() {
+                        return segment.ident == "Rule";
+                    }
+                }
+                false
+            });
+
+            if is_template {
+                // 3. Substitutions-Map aus den Parametern und Argumenten aufbauen
+                let mut subst = HashMap::new();
+                for (idx, param) in target_rule.params.iter().enumerate() {
+                    if let Some(arg) = args.get(idx) {
+                        let arg_pattern = match arg {
+                            Argument::Positional(p) => p.clone(),
+                            Argument::Named(_, p) => p.clone(),
+                        };
+                        subst.insert(param.name.to_string(), arg_pattern);
+                    }
+                }
+
+                // 4. AST der Regel klonen und Parameter ersetzen
+                let mut inlined_variants = target_rule.variants.clone();
+                for variant in &mut inlined_variants {
+                    for step in &mut variant.pattern {
+                        substitute_pattern(step, &subst);
+                    }
+                }
+
+                // 5. Inlined Parser-Body direkt kompilieren
+                let ret_type = &target_rule.return_type;
+                let combined_lexical = is_lexical || target_rule.is_lexical || target_rule.name == "WS";
+                let body = self.generate_variants_body(&inlined_variants, ret_type, combined_lexical, true);
+                let err_type = quote_spanned! {span=> ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>> };
+                
+                return quote_spanned! {span=>
+                    (|i: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
+                        let mut parser = (|i: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
+                            #body
+                        });
+                        ::winnow::Parser::parse_next(&mut parser, i)
+                    })
+                };
+            }
+
+            // --- Normaler Funktionsaufruf für NICHT-Template Regeln ---
             let fn_name = quote::format_ident!("parse_{}_inner", rule_name, span = span);
             if args.is_empty() {
                 return quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #fn_name(i)) };
             } else {
-                let arg_exprs = args
-                    .iter()
-                    .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                return quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #fn_name(i, #(#arg_exprs),*)) };
+                let mut bindings = Vec::new();
+                let mut arg_refs = Vec::new();
+                
+                for (idx, arg) in args.iter().enumerate() {
+                    let arg_expr = self.generate_argument_expr(arg, is_lexical);
+                    let ident = quote::format_ident!("arg_{}", idx, span = span);
+                    bindings.push(quote_spanned! {span=> let mut #ident = #arg_expr; });
+                    arg_refs.push(quote_spanned! {span=> &mut #ident });
+                }
+
+                return quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| {
+                    #(#bindings)*
+                    #fn_name(i, #(#arg_refs),*)
+                }) };
             }
         }
 
@@ -330,10 +438,20 @@ impl<'a> Codegen<'a> {
                 if args.is_empty() {
                     quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow::Parser::parse_next(&mut #rule_path, i)) }
                 } else {
-                    let arg_exprs = args
-                        .iter()
-                        .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #rule_path(i, #(#arg_exprs),*)) }
+                    let mut bindings = Vec::new();
+                    let mut arg_refs = Vec::new();
+                    
+                    for (idx, arg) in args.iter().enumerate() {
+                        let arg_expr = self.generate_argument_expr(arg, is_lexical);
+                        let ident = quote::format_ident!("arg_{}", idx, span = span);
+                        bindings.push(quote_spanned! {span=> let mut #ident = #arg_expr; });
+                        arg_refs.push(quote_spanned! {span=> &mut #ident });
+                    }
+
+                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| {
+                        #(#bindings)*
+                        #rule_path(i, #(#arg_refs),*)
+                    }) }
                 }
             }
         }
