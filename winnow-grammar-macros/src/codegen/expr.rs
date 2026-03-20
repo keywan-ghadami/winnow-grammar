@@ -373,13 +373,14 @@ impl<'a> Codegen<'a> {
                 let combined_lexical = is_lexical || target_rule.is_lexical || target_rule.name == "WS";
                 let body = self.generate_variants_body(&inlined_variants, &ret_type, combined_lexical, true);
                 let err_type = quote_spanned! {span=> ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>> };
+                let input_var = &self.input_ident; // <-- NEU: Beziehe den definierten Identifier
                 
                 return quote_spanned! {span=>
-                    (|i: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
-                        let mut parser = (|i: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
+                    (|#input_var: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
+                        let mut parser = (|#input_var: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
                             #body
                         });
-                        ::winnow::Parser::parse_next(&mut parser, i)
+                        ::winnow::Parser::parse_next(&mut parser, #input_var)
                     })
                 };
             }
