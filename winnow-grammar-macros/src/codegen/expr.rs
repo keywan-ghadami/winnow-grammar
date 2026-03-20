@@ -390,20 +390,10 @@ impl<'a> Codegen<'a> {
             if args.is_empty() {
                 return quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #fn_name(i)) };
             } else {
-                let mut bindings = Vec::new();
-                let mut arg_refs = Vec::new();
-                
-                for (idx, arg) in args.iter().enumerate() {
-                    let arg_expr = self.generate_argument_expr(arg, is_lexical);
-                    let ident = quote::format_ident!("arg_{}", idx, span = span);
-                    bindings.push(quote_spanned! {span=> let mut #ident = #arg_expr; });
-                    arg_refs.push(quote_spanned! {span=> &mut #ident });
-                }
-
-                return quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| {
-                    #(#bindings)*
-                    #fn_name(i, #(#arg_refs),*)
-                }) };
+                let arg_exprs = args
+                    .iter()
+                    .map(|arg| self.generate_argument_expr(arg, is_lexical));
+                return quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #fn_name(i, #(#arg_exprs),*)) };
             }
         }
 
@@ -513,20 +503,10 @@ impl<'a> Codegen<'a> {
                 if args.is_empty() {
                     quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow::Parser::parse_next(&mut #rule_path, i)) }
                 } else {
-                    let mut bindings = Vec::new();
-                    let mut arg_refs = Vec::new();
-                    
-                    for (idx, arg) in args.iter().enumerate() {
-                        let arg_expr = self.generate_argument_expr(arg, is_lexical);
-                        let ident = quote::format_ident!("arg_{}", idx, span = span);
-                        bindings.push(quote_spanned! {span=> let mut #ident = #arg_expr; });
-                        arg_refs.push(quote_spanned! {span=> &mut #ident });
-                    }
-
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| {
-                        #(#bindings)*
-                        #rule_path(i, #(#arg_refs),*)
-                    }) }
+                    let arg_exprs = args
+                        .iter()
+                        .map(|arg| self.generate_argument_expr(arg, is_lexical));
+                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #rule_path(i, #(#arg_exprs),*)) }
                 }
             }
         }
