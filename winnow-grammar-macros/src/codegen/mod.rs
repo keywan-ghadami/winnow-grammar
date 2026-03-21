@@ -52,7 +52,7 @@ impl<'a> Codegen<'a> {
                 #[allow(dead_code)]
                 fn WS<'a, S: std::fmt::Debug + Clone>(
                     #input: &mut ::winnow_grammar::ParseInput<'a, S>,
-                ) -> ::winnow::Result<(), ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>>> {
+                ) -> ::winnow::Result<(), ::winnow::error::ErrMode<::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>>>> {
                     use ::winnow::Parser;
                     ::winnow::ascii::multispace0.parse_next(#input).map(|_| ())
                 }

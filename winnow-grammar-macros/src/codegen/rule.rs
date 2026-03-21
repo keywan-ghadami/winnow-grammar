@@ -34,11 +34,13 @@ impl<'a> Codegen<'a> {
         let ret_type = &rule.return_type;
         let input = &self.input_ident;
         let err_type = quote_spanned! { span=> ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>> };
+        let inner_err_type = quote_spanned! { span=> ::winnow::error::ErrMode<#err_type> };
 
         let mut params_tokens = Vec::new();
         let mut inner_params_tokens = Vec::new();
         let mut arg_names = Vec::new();
         let mut extra_generics = Vec::<syn::Ident>::new();
+        let mut param_wrappers = Vec::new();
 
         for param in &rule.params {
             let name = &param.name;
@@ -61,8 +63,14 @@ impl<'a> Codegen<'a> {
                     }
                     params_tokens.push(quote! { mut #name: #actual_ty });
                     if is_parser {
-                        inner_params_tokens.push(quote! { #name: &mut #actual_ty });
-                        arg_names.push(quote! { &mut #name });
+                        let wrapper_name = format_ident!("{}_wrapper", name, span = span);
+                        param_wrappers.push(quote_spanned! {span=>
+                            let mut #wrapper_name = |i: &mut _| {
+                                ::winnow::Parser::parse_next(&mut #name, i).map_err(::winnow::error::ErrMode::Backtrack)
+                            };
+                        });
+                        inner_params_tokens.push(quote! { #wrapper_name: &mut impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, _, #inner_err_type> });
+                        arg_names.push(quote! { &mut #wrapper_name });
                     } else {
                         inner_params_tokens.push(quote! { #name: #actual_ty });
                         arg_names.push(quote! { #name.clone() });
@@ -74,8 +82,14 @@ impl<'a> Codegen<'a> {
                     let actual_ty = quote! { impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, #err_type> };
                     
                     params_tokens.push(quote! { mut #name: #actual_ty });
-                    inner_params_tokens.push(quote! { #name: &mut #actual_ty });
-                    arg_names.push(quote! { &mut #name });
+                    let wrapper_name = format_ident!("{}_wrapper", name, span = span);
+                    param_wrappers.push(quote_spanned! {span=>
+                        let mut #wrapper_name = |i: &mut _| {
+                            ::winnow::Parser::parse_next(&mut #name, i).map_err(::winnow::error::ErrMode::Backtrack)
+                        };
+                    });
+                    inner_params_tokens.push(quote! { #wrapper_name: &mut impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, #inner_err_type> });
+                    arg_names.push(quote! { &mut #wrapper_name });
                 }
             }
         }
@@ -142,7 +156,7 @@ impl<'a> Codegen<'a> {
         let ws_shadow = if is_ws_rule {
             quote_spanned! {span=>
                 #[allow(dead_code)]
-                fn WS<'a, S: std::fmt::Debug + Clone>(_: &mut ::winnow_grammar::ParseInput<'a, S>) -> ::winnow::Result<(), #err_type> {
+                fn WS<'a, S: std::fmt::Debug + Clone>(_: &mut ::winnow_grammar::ParseInput<'a, S>) -> ::winnow::Result<(), #inner_err_type> {
                     Ok(())
                 }
             }
@@ -152,7 +166,7 @@ impl<'a> Codegen<'a> {
 
         let inner_fn = quote_spanned! {span=>
             #[allow(dead_code)]
-            fn #inner_fn_name<#all_generics>(#input: &mut ::winnow_grammar::ParseInput<'a, S>, #(#inner_params_tokens),*) -> ::winnow::Result<#ret_type, #err_type>
+            fn #inner_fn_name<#all_generics>(#input: &mut ::winnow_grammar::ParseInput<'a, S>, #(#inner_params_tokens),*) -> ::winnow::Result<#ret_type, #inner_err_type>
             where
                 #where_preds
             {
@@ -160,7 +174,7 @@ impl<'a> Codegen<'a> {
 
                 #ws_shadow
 
-                let mut parser = (|#input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
+                let mut parser = (|#input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #inner_err_type> {
                     use ::winnow::prelude::*;
                     #body
                 })
@@ -189,17 +203,26 @@ impl<'a> Codegen<'a> {
 
         let outer_fn_body = quote! {
             move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
-                // Public API wrapper to handle whitespace and EOF
-                let _ = WS(input)?;
+                use ::winnow::error::ParserError;
+                
+                #(#param_wrappers)*
 
-                // Call inner rule
-                let result = #inner_fn_name(input, #(#arg_names),*)?;
+                // NEU: Inline-Fehlerbehandlung statt Closure, um Borrow-Kollisionen zu vermeiden.
+                macro_rules! unwrap_modal {
+                    ($res:expr) => {
+                        match $res {
+                            Ok(v) => v,
+                            Err(::winnow::error::ErrMode::Backtrack(err) | ::winnow::error::ErrMode::Cut(err)) => return Err(err),
+                            Err(::winnow::error::ErrMode::Incomplete(needed)) => return Err(<#err_type as ParserError<::winnow_grammar::ParseInput<'a, S>>>::incomplete(input, needed)),
+                        }
+                    };
+                }
 
-                let _ = WS(input)?;
+                unwrap_modal!(WS(input));
+                let result = unwrap_modal!(#inner_fn_name(input, #(#arg_names),*));
+                unwrap_modal!(WS(input));
 
-                // EOF check
-                ::winnow::combinator::eof.parse_next(input)?;
-
+                unwrap_modal!(::winnow::combinator::eof.parse_next(input));
                 Ok(result)
             }
         };

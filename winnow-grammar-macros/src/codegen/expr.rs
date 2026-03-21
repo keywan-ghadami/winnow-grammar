@@ -372,12 +372,12 @@ impl<'a> Codegen<'a> {
 
                 let combined_lexical = is_lexical || target_rule.is_lexical || target_rule.name == "WS";
                 let body = self.generate_variants_body(&inlined_variants, &ret_type, combined_lexical, true);
-                let err_type = quote_spanned! {span=> ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>> };
+                let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>>> };
                 let input_var = &self.input_ident; // <-- NEU: Beziehe den definierten Identifier
                 
                 return quote_spanned! {span=>
-                    (|#input_var: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
-                        let mut parser = (|#input_var: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
+                    (|#input_var: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #inner_err_type> {
+                        let mut parser = (|#input_var: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #inner_err_type> {
                             #body
                         });
                         ::winnow::Parser::parse_next(&mut parser, #input_var)
@@ -397,7 +397,7 @@ impl<'a> Codegen<'a> {
             }
         }
 
-        let err_type = quote_spanned! {span=> ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>> };
+        let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>>> };
         let input_type = quote_spanned! {span=> ::winnow_grammar::ParseInput<'a, S> };
 
         match name_str.as_str() {
@@ -436,24 +436,24 @@ impl<'a> Codegen<'a> {
                     '\''
                 )
             },
-            "any" => quote_spanned! {span=> ::winnow::token::any::<#input_type, #err_type> },
+            "any" => quote_spanned! {span=> ::winnow::token::any::<#input_type, #inner_err_type> },
             "alpha1" => {
-                quote_spanned! {span=> ::winnow::ascii::alpha1::<#input_type, #err_type> }
+                quote_spanned! {span=> ::winnow::ascii::alpha1::<#input_type, #inner_err_type> }
             }
             "digit1" => {
-                quote_spanned! {span=> ::winnow::ascii::digit1::<#input_type, #err_type> }
+                quote_spanned! {span=> ::winnow::ascii::digit1::<#input_type, #inner_err_type> }
             }
             "hex_digit0" => {
-                quote_spanned! {span=> ::winnow::ascii::hex_digit0::<#input_type, #err_type> }
+                quote_spanned! {span=> ::winnow::ascii::hex_digit0::<#input_type, #inner_err_type> }
             }
             "hex_digit1" => {
-                quote_spanned! {span=> ::winnow::ascii::hex_digit1::<#input_type, #err_type> }
+                quote_spanned! {span=> ::winnow::ascii::hex_digit1::<#input_type, #inner_err_type> }
             }
             "oct_digit0" => {
-                quote_spanned! {span=> ::winnow::ascii::oct_digit0::<#input_type, #err_type> }
+                quote_spanned! {span=> ::winnow::ascii::oct_digit0::<#input_type, #inner_err_type> }
             }
             "oct_digit1" => {
-                quote_spanned! {span=> ::winnow::ascii::oct_digit1::<#input_type, #err_type> }
+                quote_spanned! {span=> ::winnow::ascii::oct_digit1::<#input_type, #inner_err_type> }
             }
             "binary_digit0" => quote_spanned! {span=>
                 ::winnow::token::take_while(0.., |c| c == '0' || c == '1')
@@ -462,37 +462,37 @@ impl<'a> Codegen<'a> {
                 ::winnow::token::take_while(1.., |c| c == '0' || c == '1')
             },
             "space0" => {
-                quote_spanned! {span=> ::winnow::ascii::space0::<#input_type, #err_type> }
+                quote_spanned! {span=> ::winnow::ascii::space0::<#input_type, #inner_err_type> }
             }
             "space1" => {
-                quote_spanned! {span=> ::winnow::ascii::space1::<#input_type, #err_type> }
+                quote_spanned! {span=> ::winnow::ascii::space1::<#input_type, #inner_err_type> }
             }
             "multispace0" => {
-                quote_spanned! {span=> ::winnow::ascii::multispace0::<#input_type, #err_type> }
+                quote_spanned! {span=> ::winnow::ascii::multispace0::<#input_type, #inner_err_type> }
             }
             "multispace1" => {
-                quote_spanned! {span=> ::winnow::ascii::multispace1::<#input_type, #err_type> }
+                quote_spanned! {span=> ::winnow::ascii::multispace1::<#input_type, #inner_err_type> }
             }
             "line_ending" => {
-                quote_spanned! {span=> ::winnow::ascii::line_ending::<#input_type, #err_type> }
+                quote_spanned! {span=> ::winnow::ascii::line_ending::<#input_type, #inner_err_type> }
             }
             "empty" => quote_spanned! {span=> ::winnow::combinator::empty },
             "eof" => quote_spanned! {span=> ::winnow::combinator::eof },
 
-            "u8" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u8, #err_type> },
-            "u16" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u16, #err_type> },
-            "u32" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u32, #err_type> },
-            "u64" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u64, #err_type> },
-            "u128" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u128, #err_type> },
-            "usize" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, usize, #err_type> },
-            "i8" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i8, #err_type> },
-            "i16" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i16, #err_type> },
-            "i32" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i32, #err_type> },
-            "i64" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i64, #err_type> },
-            "i128" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i128, #err_type> },
-            "isize" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, isize, #err_type> },
-            "f32" => quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f32, #err_type> },
-            "f64" => quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f64, #err_type> },
+            "u8" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u8, #inner_err_type> },
+            "u16" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u16, #inner_err_type> },
+            "u32" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u32, #inner_err_type> },
+            "u64" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u64, #inner_err_type> },
+            "u128" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u128, #inner_err_type> },
+            "usize" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, usize, #inner_err_type> },
+            "i8" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i8, #inner_err_type> },
+            "i16" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i16, #inner_err_type> },
+            "i32" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i32, #inner_err_type> },
+            "i64" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i64, #inner_err_type> },
+            "i128" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i128, #inner_err_type> },
+            "isize" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, isize, #inner_err_type> },
+            "f32" => quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f32, #inner_err_type> },
+            "f64" => quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f64, #inner_err_type> },
             "bool" => quote_spanned! {span=>
                 ::winnow::combinator::alt((
                     ::winnow::token::literal("true").map(|_| true),
@@ -501,12 +501,12 @@ impl<'a> Codegen<'a> {
             },
             _ => {
                 if args.is_empty() {
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow::Parser::parse_next(&mut #rule_path, i)) }
+                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow::Parser::parse_next(&mut #rule_path, i).map_err(::winnow::error::ErrMode::Backtrack)) }
                 } else {
                     let arg_exprs = args
                         .iter()
                         .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #rule_path(i, #(#arg_exprs),*)) }
+                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #rule_path(i, #(#arg_exprs),*).map_err(::winnow::error::ErrMode::Backtrack)) }
                 }
             }
         }
