@@ -23,8 +23,7 @@ grammar! {
 #[test]
 fn test_explicit_span_injection() {
     let input = "  my_ident  ";
-    let input = LocatingSlice::new(input);
-    let result = ExplicitSpanTest::parse_custom_node().parse(input).unwrap();
+    let result = ExplicitSpanTest::parse_custom_node().parse_test(input).unwrap();
 
     assert_eq!(result.name, "my_ident");
     // "  my_ident  "
