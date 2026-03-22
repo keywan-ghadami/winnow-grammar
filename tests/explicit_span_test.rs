@@ -1,6 +1,6 @@
-use winnow::stream::LocatingSlice;
 use winnow::Parser;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 #[derive(Debug, PartialEq)]
 pub struct CustomNode {
