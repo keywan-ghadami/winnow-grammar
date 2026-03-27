@@ -52,7 +52,7 @@ impl<'a> Codegen<'a> {
             let final_expr = if use_with_span && !is_explicit {
                 // Implicit action -> use WithSpan
                 quote! {
-                    Ok(::grammar_kit::WithSpan::with_span({ #action }, _span))
+                    Ok(<#_ret_type as ::grammar_kit::WithSpan<_>>::with_span({ #action }, _span))
                 }
             } else {
                 // Explicit action (user handles _span if needed) OR no span requested
@@ -103,7 +103,7 @@ impl<'a> Codegen<'a> {
 
             let final_expr = if use_with_span && !is_explicit {
                 quote! {
-                    Ok(::grammar_kit::WithSpan::with_span({ #action }, _span))
+                    Ok(<#_ret_type as ::grammar_kit::WithSpan<_>>::with_span({ #action }, _span))
                 }
             } else {
                 quote! {
@@ -197,7 +197,7 @@ impl<'a> Codegen<'a> {
                      // We should pass full span.
 
                      let full_span = #lhs_ident.span.start .. end;
-                     Ok(::grammar_kit::WithSpan::with_span({ #action }, full_span))
+                     Ok(<#_ret_type as ::grammar_kit::WithSpan<_>>::with_span({ #action }, full_span))
                 }
             } else {
                 quote! {
