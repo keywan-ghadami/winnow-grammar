@@ -195,7 +195,7 @@ impl<'a> Codegen<'a> {
                 return self.generate_delimited_step(inner, "[", "]", in_cut, is_lexical)
             }
             ModelPattern::Braced(inner, _) => {
-                return self.generate_delimited_step(inner, "{", "}", in_cut, is_lexical)
+                return self.generate_delimited_step(inner, "{", "]", in_cut, is_lexical)
             }
             _ => {}
         }
@@ -372,7 +372,7 @@ impl<'a> Codegen<'a> {
 
                 let combined_lexical = is_lexical || target_rule.is_lexical || target_rule.name == "WS";
                 let body = self.generate_variants_body(&inlined_variants, &ret_type, combined_lexical, true);
-                let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::ContextError<::winnow_grammar::ParseInput<'a, S>>> };
+                let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::ContextError> };
                 let input_var = &self.input_ident; // <-- NEU: Beziehe den definierten Identifier
                 
                 return quote_spanned! {span=>
@@ -397,7 +397,7 @@ impl<'a> Codegen<'a> {
             }
         }
 
-        let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::ContextError<::winnow_grammar::ParseInput<'a, S>>> };
+        let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::ContextError> };
         let input_type = quote_spanned! {span=> ::winnow_grammar::ParseInput<'a, S> };
 
         match name_str.as_str() {

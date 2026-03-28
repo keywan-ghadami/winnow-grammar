@@ -1,5 +1,5 @@
 use winnow::Parser;
-use winnow::stream::LocatingSlice;
+use winnow::stream::{LocatingSlice, Stateful};
 use winnow_grammar::grammar;
 
 grammar! {
@@ -19,23 +19,23 @@ grammar! {
 }
 
 fn main() {
-    let input = LocatingSlice::new("literal");
-    let parsed = LiteralBindings::parse_literal_binding.parse(input).unwrap();
+    let input = Stateful { input: LocatingSlice::new("literal"), state: () };
+    let parsed = LiteralBindings::parse_literal_binding().parse(input).unwrap();
     assert_eq!(parsed, "literal");
 
-    let input = LocatingSlice::new("literal");
-    let parsed = LiteralBindings::parse_optional_literal_binding.parse(input).unwrap();
+    let input = Stateful { input: LocatingSlice::new("literal"), state: () };
+    let parsed = LiteralBindings::parse_optional_literal_binding().parse(input).unwrap();
     assert_eq!(parsed, Some("literal".to_string()));
 
-    let input = LocatingSlice::new("");
-    let parsed = LiteralBindings::parse_optional_literal_binding.parse(input).unwrap();
+    let input = Stateful { input: LocatingSlice::new(""), state: () };
+    let parsed = LiteralBindings::parse_optional_literal_binding().parse(input).unwrap();
     assert_eq!(parsed, None);
 
-    let input = LocatingSlice::new("literal");
-    let parsed = LiteralBindings::parse_literal_span_binding.parse(input).unwrap();
+    let input = Stateful { input: LocatingSlice::new("literal"), state: () };
+    let parsed = LiteralBindings::parse_literal_span_binding().parse(input).unwrap();
     assert_eq!(parsed, 7);
 
-    let input = LocatingSlice::new("literal");
-    let parsed = LiteralBindings::parse_literal_binding_with_span.parse(input).unwrap();
+    let input = Stateful { input: LocatingSlice::new("literal"), state: () };
+    let parsed = LiteralBindings::parse_literal_binding_with_span().parse(input).unwrap();
     assert_eq!(parsed, ("literal".to_string(), 7));
 }
