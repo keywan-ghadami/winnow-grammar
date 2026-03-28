@@ -1,5 +1,5 @@
 use crate::ParseInput;
-use winnow::error::InputError;
+use winnow::error::{ContextError};
 use winnow::stream::{LocatingSlice, Stateful};
 use winnow::Parser;
 
@@ -18,7 +18,7 @@ pub trait WinnowTestExt<'a, O> {
 // The `Debug` requirement on `S` comes from the `grammar!` macro itself.
 impl<'a, P, O> WinnowTestExt<'a, O> for P
 where
-    P: Parser<ParseInput<'a, ()>, O, InputError<ParseInput<'a, ()>>>,
+    P: Parser<ParseInput<'a, ()>, O, ContextError<ParseInput<'a, ()>>>,
     O: std::fmt::Debug,
 {
     fn parse_test(&mut self, input: &'a str) -> TestResult<O, String> {
@@ -30,7 +30,7 @@ where
             Ok(val) => TestResult::new(Ok(val)).with_source(input),
             Err(e) => {
                 // formatting the error simple for now
-                let msg = format!("{}", e);
+                let msg = format!("{:?}", e);
                 TestResult::new(Err(msg)).with_source(input)
             }
         }

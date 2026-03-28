@@ -33,7 +33,7 @@ impl<'a> Codegen<'a> {
         let inner_fn_name = format_ident!("parse_{}_inner", rule_name, span = span);
         let ret_type = &rule.return_type;
         let input = &self.input_ident;
-        let err_type = quote_spanned! { span=> ::winnow::error::InputError<::winnow_grammar::ParseInput<'a, S>> };
+        let err_type = quote_spanned! { span=> ::winnow::error::ContextError<::winnow_grammar::ParseInput<'a, S>> };
         let inner_err_type = quote_spanned! { span=> ::winnow::error::ErrMode<#err_type> };
 
         let mut params_tokens = Vec::new();
