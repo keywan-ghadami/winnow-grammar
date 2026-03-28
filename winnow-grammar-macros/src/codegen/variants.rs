@@ -7,7 +7,7 @@ impl<'a> Codegen<'a> {
     pub fn generate_variants_body(
         &self,
         variants: &[RuleVariant],
-        _ret_type: &syn::Type,
+        ret_type: &syn::Type,
         is_lexical: bool,
         is_rule_start: bool,
     ) -> TokenStream {
@@ -27,7 +27,7 @@ impl<'a> Codegen<'a> {
             // 2. Capture Start
             if use_with_span {
                 steps_code
-                    .extend(quote! { let start = ::winnow::stream::Location::location(#input); });
+                    .extend(quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; });
             }
 
             // 3. Parse Steps
@@ -37,7 +37,7 @@ impl<'a> Codegen<'a> {
             // 4. Capture End and Define _span
             if use_with_span {
                 steps_code
-                    .extend(quote! { let end = ::winnow::stream::Location::location(#input); });
+                    .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; });
                 steps_code.extend(quote! { #[allow(unused_variables)] let _span = start..end; });
             }
 
@@ -52,7 +52,7 @@ impl<'a> Codegen<'a> {
             let final_expr = if use_with_span && !is_explicit {
                 // Implicit action -> use WithSpan
                 quote! {
-                    Ok(<#_ret_type as ::grammar_kit::WithSpan<_>>::with_span({ #action }, _span))
+                    Ok(<#ret_type as ::grammar_kit::WithSpan<_>>::with_span({ #action }, _span))
                 }
             } else {
                 // Explicit action (user handles _span if needed) OR no span requested
@@ -82,14 +82,14 @@ impl<'a> Codegen<'a> {
 
             if use_with_span {
                 steps_code
-                    .extend(quote! { let start = ::winnow::stream::Location::location(#input); });
+                    .extend(quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; });
             }
 
             steps_code.extend(self.generate_sequence_steps(&v.pattern, false, is_lexical));
 
             if use_with_span {
                 steps_code
-                    .extend(quote! { let end = ::winnow::stream::Location::location(#input); });
+                    .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; });
                 steps_code.extend(quote! { #[allow(unused_variables)] let _span = start..end; });
             }
 
@@ -103,7 +103,7 @@ impl<'a> Codegen<'a> {
 
             let final_expr = if use_with_span && !is_explicit {
                 quote! {
-                    Ok(<#_ret_type as ::grammar_kit::WithSpan<_>>::with_span({ #action }, _span))
+                    Ok(<#ret_type as ::grammar_kit::WithSpan<_>>::with_span({ #action }, _span))
                 }
             } else {
                 quote! {
@@ -130,7 +130,7 @@ impl<'a> Codegen<'a> {
     pub fn generate_recursive_loop_body(
         &self,
         variants: &[RuleVariant],
-        _ret_type: &syn::Type,
+        ret_type: &syn::Type,
         lhs_ident: &syn::Ident,
         is_lexical: bool,
     ) -> TokenStream {
@@ -169,7 +169,7 @@ impl<'a> Codegen<'a> {
             // Capture end and define _span
             if use_with_span {
                 steps_code
-                    .extend(quote! { let end = ::winnow::stream::Location::location(#input); });
+                    .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; });
                 // For recursive steps, _span refers to the suffix extension.
                 steps_code.extend(quote! { #[allow(unused_variables)] let _span = start..end; });
             }
@@ -197,7 +197,7 @@ impl<'a> Codegen<'a> {
                      // We should pass full span.
 
                      let full_span = #lhs_ident.span.start .. end;
-                     Ok(<#_ret_type as ::grammar_kit::WithSpan<_>>::with_span({ #action }, full_span))
+                     Ok(<#ret_type as ::grammar_kit::WithSpan<_>>::with_span({ #action }, full_span))
                 }
             } else {
                 quote! {
@@ -208,7 +208,7 @@ impl<'a> Codegen<'a> {
             // Start capture needs to happen before steps_code
             // 'start' here refers to start of suffix
             let start_capture = if use_with_span {
-                quote! { let start = ::winnow::stream::Location::location(#input); }
+                 quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; }
             } else {
                 quote! {}
             };
