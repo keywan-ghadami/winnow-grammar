@@ -16,6 +16,10 @@ impl Backend for WinnowBackend {
         &[
             BuiltIn {
                 name: "ident",
+                return_type: "Symbol",
+            },
+            BuiltIn {
+                name: "raw_ident",
                 return_type: "&'a str",
             },
             BuiltIn {
