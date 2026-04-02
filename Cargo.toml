@@ -14,7 +14,7 @@ syn-grammar-model = { path = "../core/syn-grammar-model" }
 proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "extra-traits"] }
-lasso = { version = "0.7", features = ["threaded"] }
+lasso = { version = "0.7", features = ["multi-threaded"] }
 
 [dev-dependencies]
 trybuild = "1.0.116"

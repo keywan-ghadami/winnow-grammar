@@ -48,7 +48,7 @@ fn test_primitives() {
 
     Primitives::parse_test_f32()
         .parse_test("1.5")
-        .assert_success_with(|v| assert!((v - 1.5f32).abs() < 1e-6));
+        .assert_success_with(|v, _state| assert!((v - 1.5f32).abs() < 1e-6));
 
     Primitives::parse_test_bool()
         .parse_test("true")

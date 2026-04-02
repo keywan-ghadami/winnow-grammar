@@ -1,5 +1,5 @@
-use crate::ParseInput;
-use winnow::stream::{LocatingSlice, Stateful};
+use crate::{ParseContext, ParseInput};
+use winnow::stream::LocatingSlice;
 use winnow::Parser;
 
 pub use grammar_kit::testing::*;
@@ -8,31 +8,33 @@ pub use grammar_kit::testing::*;
 ///
 /// This trait allows writing tests similar to `syn::parse::Parser::parse_str`.
 /// It handles the creation of `ParseInput` and conversion of results into `TestResult`.
+/// This default trait implementation is fixed to the default state `S = ()`.
 pub trait WinnowTestExt<'a, O> {
-    fn parse_test(&mut self, input: &'a str) -> TestResult<O, String>;
+    fn parse_test(&mut self, input: &'a str) -> TestResult<O, String, ParseContext<()>>;
 }
 
-// NOTE: This impl is intentionally broad to support grammars that are generic over the state `S`.
-// It requires `S` to have a `Default` implementation to create an initial state for testing.
-// The `Debug` requirement on `S` comes from the `grammar!` macro itself.
+// This implementation is specifically for parsers that operate with the default empty state `()`.
+// This covers the vast majority of use cases and allows the compiler to infer the state type
+// without requiring explicit `::<()>` annotations (the "turbofish") at the call site.
 impl<'a, P, O> WinnowTestExt<'a, O> for P
 where
     P: Parser<ParseInput<'a, ()>, O, ::winnow::error::ContextError>,
     O: std::fmt::Debug,
 {
-    fn parse_test(&mut self, input: &'a str) -> TestResult<O, String> {
-        let stream = Stateful {
-            state: (),
+    fn parse_test(&mut self, input: &'a str) -> TestResult<O, String, ParseContext<()>> {
+        let state = ParseContext::<()>::default();
+        let mut stream = ParseInput {
             input: LocatingSlice::new(input),
+            state,
         };
-        match self.parse(stream) {
-            Ok(val) => TestResult::new(Ok(val)).with_source(input),
-            Err(e) => {
-                // formatting the error simple for now
-                let msg = e.to_string();
-                TestResult::new(Err(msg)).with_source(input)
-            }
-        }
+
+        let result = self.parse_next(&mut stream).map_err(|e| e.to_string());
+
+        let final_context = stream.state;
+
+        TestResult::new(result)
+            .with_source(input)
+            .with_state(final_context)
     }
 }
 
@@ -90,6 +92,8 @@ macro_rules! test_case_impl {
             use paste::paste;
             use $grammar_macro as grammar;
             use $test_trait;
+            // Import `ParseContext` so it's available in the user's `check` closure.
+            use $crate::ParseContext;
 
             paste! {
                 grammar! { grammar [<$name _grammar>] { $($grammar)* } }

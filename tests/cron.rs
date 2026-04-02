@@ -82,7 +82,7 @@ fn test_standard_cron() {
 fn test_complex_precedence() {
     Cron::parse_schedule()
         .parse_test("*/5 1-10/2 1,2,3 * * *")
-        .assert_success_with(|result| {
+        .assert_success_with(|result, _state| {
             match &result.second {
                 Field::Step(f, 5) => assert_eq!(**f, Field::Any),
                 _ => panic!("Expected */5"),
@@ -104,7 +104,7 @@ fn test_complex_precedence() {
 fn test_messy_whitespace() {
     Cron::parse_schedule()
         .parse_test(" 0   30\t9 * \n * 1-5")
-        .assert_success_with(|result| {
+        .assert_success_with(|result, _state| {
             assert_eq!(result.second, Field::Value(0));
             assert_eq!(result.minute, Field::Value(30));
         });

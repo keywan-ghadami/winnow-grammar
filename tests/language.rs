@@ -17,7 +17,7 @@ pub enum Expr {
 grammar! {
     grammar MiniLang {
         pub stmt -> Stmt =
-            "let" name:ident "=" e:expr ";" -> { Stmt::Let(name.to_string(), e) }
+            "let" name:raw_ident "=" e:expr ";" -> { Stmt::Let(name.to_string(), e) }
           | e:expr ";" -> { Stmt::Expr(e) }
 
         expr -> Expr =
@@ -26,7 +26,7 @@ grammar! {
 
         term -> Expr =
             n:u32 -> { Expr::Num(n) }
-          | i:ident -> { Expr::Var(i.to_string()) }
+          | i:raw_ident -> { Expr::Var(i.to_string()) }
           | "(" e:expr ")" -> { e }
 
         pub spanned_term -> (Expr, std::ops::Range<usize>) =
@@ -68,7 +68,7 @@ fn test_parens() {
 fn test_span() {
     MiniLang::parse_spanned_term()
         .parse_test(" 123")
-        .assert_success_with(|(expr, span)| {
+        .assert_success_with(|(expr, span), _state| {
             assert_eq!(expr, &Expr::Num(123));
             assert_eq!(span, &(1..4));
         });

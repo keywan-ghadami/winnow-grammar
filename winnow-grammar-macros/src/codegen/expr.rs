@@ -66,7 +66,7 @@ pub(crate) fn substitute_pattern(pattern: &mut ModelPattern, subst: &HashMap<Str
             if let Some(ident) = rule_path.segments.last().map(|s| s.ident.to_string()) {
                 if let Some(new_pat) = subst.get(&ident) {
                     let mut cloned = new_pat.clone();
-                    // Zuweisung ("elements:") beim Ersetzen auf das Argument übertragen!
+                    // Zuweisung (\"elements:\") beim Ersetzen auf das Argument übertragen!
                     if binding.is_some() {
                         set_binding(&mut cloned, binding.clone());
                     }
@@ -401,8 +401,15 @@ impl<'a> Codegen<'a> {
         let input_type = quote_spanned! {span=> ::winnow_grammar::ParseInput<'a, S> };
 
         match name_str.as_str() {
-            "ident" => quote_spanned! {span=>
+            "raw_ident" => quote_spanned! {span=>
                 ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_')
+            },
+            "ident" => quote_spanned! {span=>
+                (|input: &mut _| -> ::winnow::Result<_, ::winnow::error::ErrMode<::winnow::error::ContextError>> {
+                    let s: &str = ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_').parse_next(input)?;
+                    let symbol = input.state.interner.get_or_intern(s);
+                    Ok(symbol)
+                })
             },
             "string" => quote_spanned! {span=>
                  delimited(
@@ -426,7 +433,7 @@ impl<'a> Codegen<'a> {
                                 't' => '\t',
                                 '\\' => '\\',
                                 '\'' => '\'',
-                                '"' => '\"',
+                                '\"' => '\"',
                                 '0' => '\0',
                                 _ => c // fallback
                              }

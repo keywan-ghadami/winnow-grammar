@@ -1,12 +1,12 @@
 use winnow::stream::{LocatingSlice, Stateful};
 use winnow::Parser;
-use winnow_grammar::grammar;
+use winnow_grammar::{grammar, ParseContext};
 
 grammar! {
     grammar TestGrammar {
         // This rule should parse an identifier and return it as a string slice
         // with the same lifetime as the input string.
-        pub get_identifier -> &'a str = name:ident -> { name.as_ref() }
+        pub get_identifier -> &'a str = name:raw_ident -> { name }
     }
 }
 
@@ -15,9 +15,10 @@ fn test_ident_lifetime() {
     // Use a String to ensure the lifetime is not 'static, which is a more robust test
     let input_string = String::from("hello_world");
 
-    // The winnow parser expects a mutable Stateful stream as input for `parse_next`
+    // The winnow parser now expects a ParseContext for state management (e.g., interning),
+    // as required by ADR-11. We initialize the stream state accordingly.
     let mut stream = Stateful {
-        state: (),
+        state: ParseContext::<()>::default(),
         input: LocatingSlice::new(input_string.as_str()),
     };
 

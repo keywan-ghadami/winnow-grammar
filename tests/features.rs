@@ -75,7 +75,7 @@ pub struct Builtins {
 grammar! {
     grammar TestBuiltins {
         pub rule main -> Builtins =
-            s:string i:u32 id:ident -> { Builtins { s: s.to_string(), i, id: id.to_string() } }
+            s:string i:u32 id:raw_ident -> { Builtins { s: s.to_string(), i, id: id.to_string() } }
     }
 }
 

@@ -1,18 +1,15 @@
-use winnow_grammar::grammar;
-use winnow_grammar::testing::WinnowTestExt;
+use winnow_grammar::test_case;
 
-grammar! {
-    grammar CustomWs {
+test_case! {
+    custom_ws_repetition_test,
+    rule: list,
+    {
         // Override ws to match underscore OR nothing
         WS = ("_")?
 
         pub rule list -> Vec<u32> = l:u32+ -> { l }
-    }
-}
-
-#[test]
-fn test_custom_ws_repetition() {
-    CustomWs::parse_list()
-        .parse_test("1_2_3")
-        .assert_success_is(vec![1, 2, 3]);
+    },
+    [
+        ("1_2_3", val vec![1, 2, 3])
+    ]
 }

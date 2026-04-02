@@ -1,28 +1,16 @@
-use winnow_grammar::grammar;
-use winnow_grammar::testing::WinnowTestExt;
+use winnow_grammar::test_case;
 
-grammar! {
-    grammar CharParser {
+test_case! {
+    char_test,
+    rule: test_char,
+    {
         pub rule test_char -> char =
             c:char -> { c }
-    }
-}
-
-#[test]
-fn test_char_literal() {
-    CharParser::parse_test_char()
-        .parse_test("'a'")
-        .assert_success_is('a');
-
-    CharParser::parse_test_char()
-        .parse_test("'\\n'")
-        .assert_success_is('\n');
-
-    CharParser::parse_test_char()
-        .parse_test("'\\''")
-        .assert_success_is('\'');
-
-    CharParser::parse_test_char()
-        .parse_test("'\\\\'")
-        .assert_success_is('\\');
+    },
+    [
+        ("'a'", val 'a'),
+        ("'\\n'", val '\n'),
+        ("'\\\''", val '\''),
+        ("'\\\\'", val '\\')
+    ]
 }

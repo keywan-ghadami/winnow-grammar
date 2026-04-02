@@ -35,14 +35,14 @@ fn test_mixed_values() {
 
     Comprehensive::parse_value()
         .parse_test("123.456")
-        .assert_success_with(|v| match v {
+        .assert_success_with(|v, _state| match v {
             Value::Float(f) => assert!((f - 123.456).abs() < 1e-6),
             _ => panic!("Expected Float for 123.456, got {:?}", v),
         });
 
     Comprehensive::parse_value()
         .parse_test("123e2")
-        .assert_success_with(|v| match v {
+        .assert_success_with(|v, _state| match v {
             Value::Float(f) => assert!((f - 12300.0).abs() < 1e-6),
             _ => panic!("Expected Float for 123e2, got {:?}", v),
         });
@@ -53,7 +53,7 @@ fn test_mixed_values() {
 
     Comprehensive::parse_value()
         .parse_test("[1, \"two\", 3.0]")
-        .assert_success_with(|v| {
+        .assert_success_with(|v, _state| {
             if let Value::List(l) = v {
                 assert_eq!(l.len(), 3);
                 assert_eq!(l[0], Value::Int(1));
