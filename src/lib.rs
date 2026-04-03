@@ -10,12 +10,10 @@ pub use winnow_grammar_macros::grammar;
 // Re-export winnow so generated code has access to it
 pub use winnow;
 
-use std::sync::Arc;
-use lasso::{ThreadedRodeo, Spur};
+pub mod interner;
+pub mod testing;
 
-// Re-export the core types for the user.
-pub type Symbol = Spur;
-pub type InternerContext = ThreadedRodeo;
+pub use interner::{InternerContext, Symbol};
 
 /// The shared context that is passed as state to the parser.
 ///
@@ -23,7 +21,7 @@ pub type InternerContext = ThreadedRodeo;
 #[derive(Debug, Clone)]
 pub struct ParseContext<S = ()> {
     /// A thread-safe, shared string interner.
-    pub interner: Arc<InternerContext>,
+    pub interner: InternerContext,
     /// A placeholder for user-defined state.
     pub user_state: S,
 }
@@ -31,7 +29,7 @@ pub struct ParseContext<S = ()> {
 impl<S: Default> Default for ParseContext<S> {
     fn default() -> Self {
         Self {
-            interner: Arc::new(InternerContext::new()),
+            interner: InternerContext::new(),
             user_state: S::default(),
         }
     }
@@ -42,11 +40,6 @@ impl<S: Default> Default for ParseContext<S> {
 /// It combines the input string slice with the shared `ParseContext`.
 pub type ParseInput<'a, S = ()> = ::winnow::stream::Stateful<::winnow::stream::LocatingSlice<&'a str>, ParseContext<S>>;
 
-
-// Re-export testing utilities
-pub mod testing;
-
-/// Portable types for backend compatibility
 pub mod types {
     use proc_macro2::TokenStream;
     use quote::ToTokens;
