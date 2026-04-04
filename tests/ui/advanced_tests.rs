@@ -53,8 +53,8 @@ grammar! {
             i:raw_ident -> { i }
 
         pub rule two_interned_idents -> (Symbol, Symbol) =
-            i1:ident " " i2:ident -> { (i1, i2) }
-    }
+            i1:ident i2:ident -> { (i1, i2) }
+  }
 }
 
 fn main() {
@@ -90,10 +90,17 @@ fn main() {
     // Test: Span
     let state = ParseContext::<()>::default();
     let mut input = Stateful { input: LocatingSlice::new(" 123"), state };
+<<<<<<< HEAD
     let (remaining_input, (expr, span)) = AdvancedGrammar::parse_spanned_term().parse_next(&mut input).unwrap();
     assert_eq!(expr, Expr::Num(123));
     assert_eq!(span, 1..4);
     assert_eq!(remaining_input.input.fragment(), &"");
+=======
+    let (expr, span) = AdvancedGrammar::parse_spanned_term().parse_next(&mut input).unwrap();
+    assert_eq!(expr, Expr::Num(123));
+    assert_eq!(span, 1..4);
+    assert_eq!(*input.input, "");
+>>>>>>> 883176a (interning)
 
     // Test: Regular identifier (no interning)
     let state = ParseContext::<()>::default();

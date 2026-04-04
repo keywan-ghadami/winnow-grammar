@@ -6,7 +6,7 @@ grammar! {
     grammar InterningTest {
         // A rule that parses two identifiers and returns them as a tuple.
         // This allows us to get two symbols from the same parse run (and same interner).
-        pub two_idents -> (Symbol, Symbol) = i1:ident " " i2:ident -> { (i1, i2) }
+        pub two_idents -> (Symbol, Symbol) = i1:ident i2:ident -> { (i1, i2) }
     }
 }
 
