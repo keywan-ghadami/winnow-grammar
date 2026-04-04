@@ -9,11 +9,8 @@
 - **Modes:** 
   - `Syntactic` (`!is_lexical`): Implicit `ws` between steps.
   - `Lexical` (`is_lexical`): Strict, no implicit `ws`.
-- **Whitespace (`ws`):**
-  - Defaults to `multispace0`. Can be overridden by rule `ws`.
-  - **Wrapper:** Public rules get `parse_{name}` wrapper: `ws?` -> `inner` -> `ws?` -> `eof`.
-  - **Sequences:** `step1` -> `ws` -> `step2`.
-  - **Delimiters:** `open` -> `ws` -> `inner` -> `ws` -> `close`.
+- **Whitespace (`WS`):**
+  - Defaults to `multispace0`. Can be overridden by rule `WS`.
 
 
 ## spans & offsets
