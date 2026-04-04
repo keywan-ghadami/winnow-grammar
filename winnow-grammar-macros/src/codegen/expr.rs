@@ -405,9 +405,9 @@ impl<'a> Codegen<'a> {
                 ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_')
             },
             "ident" => quote_spanned! {span=>
-                (|input: &mut _| -> ::winnow::Result<_, ::winnow::error::ErrMode<::winnow::error::ContextError>> {
+                (|input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<_, ::winnow::error::ErrMode<::winnow::error::ContextError>> {
                     let s: &str = ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_').parse_next(input)?;
-                    let symbol = input.state.interner.get_or_intern(s);
+                    let symbol = input.state.interner.intern_string(s);
                     Ok(symbol)
                 })
             },
