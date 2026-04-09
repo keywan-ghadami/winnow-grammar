@@ -90,17 +90,17 @@ fn main() {
     // Test: Span
     let state = ParseContext::<()>::default();
     let mut input = Stateful { input: LocatingSlice::new(" 123"), state };
-<<<<<<< HEAD
-    let (remaining_input, (expr, span)) = AdvancedGrammar::parse_spanned_term().parse_next(&mut input).unwrap();
-    assert_eq!(expr, Expr::Num(123));
-    assert_eq!(span, 1..4);
-    assert_eq!(remaining_input.input.fragment(), &"");
-=======
+
+    //let (remaining_input, (expr, span)) = AdvancedGrammar::parse_spanned_term().parse_next(&mut input).unwrap();
+   // assert_eq!(expr, Expr::Num(123));
+   // assert_eq!(span, 1..4);
+  //  assert_eq!(remaining_input.input.fragment(), &"");
+
     let (expr, span) = AdvancedGrammar::parse_spanned_term().parse_next(&mut input).unwrap();
     assert_eq!(expr, Expr::Num(123));
     assert_eq!(span, 1..4);
     assert_eq!(*input.input, "");
->>>>>>> 883176a (interning)
+
 
     // Test: Regular identifier (no interning)
     let state = ParseContext::<()>::default();
