@@ -4,7 +4,7 @@
 //!
 //! **Herkunft:** Fork von `syn-grammar-model` aus
 //! <https://github.com/keywan-ghadami/syn-grammar>, abgezweigt bei Commit
-//! `64be1ef830e5996935ff6465b9552f2cdd060dff` (2026-08-31, Version 0.10.0).
+//! `64be1ef830e5996935ff6465b9552f2cdd060dff` (2026-08-31, Version 0.9.0-Entwurf).
 //! Ab hier entwickeln sich beide Fassungen unabhaengig weiter; fuer einen
 //! Abgleich ist der Fork-Punkt der Bezugspunkt. Gegenueber dem Original fehlt
 //! `model::types` (`Identifier`/`StringLiteral`/`SpannedValue`) - winnow bringt
