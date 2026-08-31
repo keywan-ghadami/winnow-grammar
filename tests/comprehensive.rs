@@ -1,6 +1,5 @@
-use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 #[derive(Debug, PartialEq)]
 pub enum Value {
@@ -16,7 +15,7 @@ grammar! {
         pub rule value -> Value =
             i:i32 not(".") not("e") not("E") -> { Value::Int(i) }
           | f:f64 -> { Value::Float(f) }
-          | s:string -> { Value::String(s) }
+          | s:string -> { Value::String(s.to_string()) }
           | "true" -> { Value::Bool(true) }
           | "false" -> { Value::Bool(false) }
           | "[" l:list_content "]" -> { Value::List(l) }
@@ -30,42 +29,44 @@ grammar! {
 
 #[test]
 fn test_mixed_values() {
-    let input = LocatingSlice::new("123");
-    let result = Comprehensive::parse_value.parse(input).unwrap();
-    assert_eq!(result, Value::Int(123));
+    Comprehensive::parse_value()
+        .parse_test("123")
+        .assert_success_is(Value::Int(123));
 
-    let input = LocatingSlice::new("123.456");
-    let result = Comprehensive::parse_value.parse(input).unwrap();
-    match result {
-        Value::Float(f) => assert!((f - 123.456).abs() < 1e-6),
-        _ => panic!("Expected Float for 123.456, got {:?}", result),
-    }
+    Comprehensive::parse_value()
+        .parse_test("123.456")
+        .assert_success_with(|v, _state| match v {
+            Value::Float(f) => assert!((f - 123.456).abs() < 1e-6),
+            _ => panic!("Expected Float for 123.456, got {:?}", v),
+        });
 
-    let input = LocatingSlice::new("123e2");
-    let result = Comprehensive::parse_value.parse(input).unwrap();
-    match result {
-        Value::Float(f) => assert!((f - 12300.0).abs() < 1e-6),
-        _ => panic!("Expected Float for 123e2, got {:?}", result),
-    }
+    Comprehensive::parse_value()
+        .parse_test("123e2")
+        .assert_success_with(|v, _state| match v {
+            Value::Float(f) => assert!((f - 12300.0).abs() < 1e-6),
+            _ => panic!("Expected Float for 123e2, got {:?}", v),
+        });
 
-    let input = LocatingSlice::new("\"hello\"");
-    let result = Comprehensive::parse_value.parse(input).unwrap();
-    assert_eq!(result, Value::String("hello".to_string()));
+    Comprehensive::parse_value()
+        .parse_test("\"hello\"")
+        .assert_success_is(Value::String("hello".to_string()));
 
-    let input = LocatingSlice::new("[1, \"two\", 3.0]");
-    let result = Comprehensive::parse_value.parse(input).unwrap();
-    if let Value::List(l) = result {
-        assert_eq!(l.len(), 3);
-        assert_eq!(l[0], Value::Int(1));
-        assert_eq!(l[1], Value::String("two".to_string()));
-        if let Value::Float(f) = l[2] {
-            assert!((f - 3.0).abs() < 1e-6);
-        } else {
-            panic!("Expected float at index 2, got {:?}", l[2]);
-        }
-    } else {
-        panic!("Expected list");
-    }
+    Comprehensive::parse_value()
+        .parse_test("[1, \"two\", 3.0]")
+        .assert_success_with(|v, _state| {
+            if let Value::List(l) = v {
+                assert_eq!(l.len(), 3);
+                assert_eq!(l[0], Value::Int(1));
+                assert_eq!(l[1], Value::String("two".to_string()));
+                if let Value::Float(f) = l[2] {
+                    assert!((f - 3.0).abs() < 1e-6);
+                } else {
+                    panic!("Expected float at index 2, got {:?}", l[2]);
+                }
+            } else {
+                panic!("Expected list");
+            }
+        });
 }
 
 // Test explicit type usage (generics in return type)
@@ -79,17 +80,13 @@ grammar! {
 
 #[test]
 fn test_generic_return() {
-    let input = LocatingSlice::new("42");
-    assert_eq!(
-        GenericReturn::parse_optional_int.parse(input).unwrap(),
-        Some(42)
-    );
+    GenericReturn::parse_optional_int()
+        .parse_test("42")
+        .assert_success_is(Some(42));
 
-    let input = LocatingSlice::new("none");
-    assert_eq!(
-        GenericReturn::parse_optional_int.parse(input).unwrap(),
-        None
-    );
+    GenericReturn::parse_optional_int()
+        .parse_test("none")
+        .assert_success_is(None);
 }
 
 // Test hex/oct/bin parsing manually
@@ -108,24 +105,17 @@ grammar! {
 
 #[test]
 fn test_num_formats() {
-    assert_eq!(
-        NumFormats::parse_hex
-            .parse(LocatingSlice::new("0x1A"))
-            .unwrap(),
-        26
-    );
-    assert_eq!(
-        NumFormats::parse_oct
-            .parse(LocatingSlice::new("0o12"))
-            .unwrap(),
-        10
-    );
-    assert_eq!(
-        NumFormats::parse_bin
-            .parse(LocatingSlice::new("0b1010"))
-            .unwrap(),
-        10
-    );
+    NumFormats::parse_hex()
+        .parse_test("0x1A")
+        .assert_success_is(26);
+
+    NumFormats::parse_oct()
+        .parse_test("0o12")
+        .assert_success_is(10);
+
+    NumFormats::parse_bin()
+        .parse_test("0b1010")
+        .assert_success_is(10);
 }
 
 // Test i64 parsing
@@ -138,6 +128,7 @@ grammar! {
 
 #[test]
 fn test_int64() {
-    let input = LocatingSlice::new("9223372036854775807");
-    assert_eq!(LargeInt::parse_int64.parse(input).unwrap(), i64::MAX);
+    LargeInt::parse_int64()
+        .parse_test("9223372036854775807")
+        .assert_success_is(i64::MAX);
 }

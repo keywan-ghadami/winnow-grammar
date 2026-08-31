@@ -1,52 +1,60 @@
-use winnow::{stream::LocatingSlice, Parser};
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar Primitives {
-        pub rule test_u8 -> u8 = n:u8 -> { n }
-        pub rule test_u16 -> u16 = n:u16 -> { n }
-        pub rule test_u32 -> u32 = n:u32 -> { n }
-        pub rule test_u64 -> u64 = n:u64 -> { n }
-        pub rule test_u128 -> u128 = n:u128 -> { n }
-        pub rule test_usize -> usize = n:usize -> { n }
+        pub test_u8 -> u8 = n:u8
+        pub test_u16 -> u16 = n:u16
+        pub test_u32 -> u32 = n:u32
+        pub test_u64 -> u64 = n:u64
+        pub test_u128 -> u128 = n:u128
+        pub test_usize -> usize = n:usize
 
-        pub rule test_i8 -> i8 = n:i8 -> { n }
-        pub rule test_i16 -> i16 = n:i16 -> { n }
-        pub rule test_i32 -> i32 = n:i32 -> { n }
-        pub rule test_i64 -> i64 = n:i64 -> { n }
-        pub rule test_i128 -> i128 = n:i128 -> { n }
-        pub rule test_isize -> isize = n:isize -> { n }
+        pub test_i8 -> i8 = n:i8
+        pub test_i16 -> i16 = n:i16
+        pub test_i32 -> i32 = n:i32
+        pub test_i64 -> i64 = n:i64
+        pub test_i128 -> i128 = n:i128
+        pub test_isize -> isize = n:isize
 
-        pub rule test_f32 -> f32 = n:f32 -> { n }
-        pub rule test_f64 -> f64 = n:f64 -> { n }
+        pub test_f32 -> f32 = n:f32
+        pub test_f64 -> f64 = n:f64
 
-        pub rule test_bool -> bool = b:bool -> { b }
+        pub test_bool -> bool = b:bool
     }
 }
 
 #[test]
 fn test_primitives() {
-    let input = LocatingSlice::new("255");
-    assert_eq!(Primitives::parse_test_u8.parse(input).unwrap(), 255);
+    Primitives::parse_test_u8()
+        .parse_test("255")
+        .assert_success_is(255);
 
-    let input = LocatingSlice::new("65535");
-    assert_eq!(Primitives::parse_test_u16.parse(input).unwrap(), 65535);
+    Primitives::parse_test_u16()
+        .parse_test("65535")
+        .assert_success_is(65535);
 
-    let input = LocatingSlice::new("18446744073709551615");
-    assert_eq!(Primitives::parse_test_u64.parse(input).unwrap(), u64::MAX);
+    Primitives::parse_test_u64()
+        .parse_test("18446744073709551615")
+        .assert_success_is(u64::MAX);
 
-    let input = LocatingSlice::new("-128");
-    assert_eq!(Primitives::parse_test_i8.parse(input).unwrap(), -128);
+    Primitives::parse_test_i8()
+        .parse_test("-128")
+        .assert_success_is(-128);
 
-    let input = LocatingSlice::new("-9223372036854775808");
-    assert_eq!(Primitives::parse_test_i64.parse(input).unwrap(), i64::MIN);
+    Primitives::parse_test_i64()
+        .parse_test("-9223372036854775808")
+        .assert_success_is(i64::MIN);
 
-    let input = LocatingSlice::new("1.5");
-    assert!((Primitives::parse_test_f32.parse(input).unwrap() - 1.5f32).abs() < 1e-6);
+    Primitives::parse_test_f32()
+        .parse_test("1.5")
+        .assert_success_with(|v, _state| assert!((v - 1.5f32).abs() < 1e-6));
 
-    let input = LocatingSlice::new("true");
-    assert_eq!(Primitives::parse_test_bool.parse(input).unwrap(), true);
+    Primitives::parse_test_bool()
+        .parse_test("true")
+        .assert_success_is(true);
 
-    let input = LocatingSlice::new("false");
-    assert_eq!(Primitives::parse_test_bool.parse(input).unwrap(), false);
+    Primitives::parse_test_bool()
+        .parse_test("false")
+        .assert_success_is(false);
 }

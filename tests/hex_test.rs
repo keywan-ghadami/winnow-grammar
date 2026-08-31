@@ -1,29 +1,26 @@
-use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar HexParser {
         pub rule test_hex -> String =
-            h:hex_digit1 -> { h }
+            h:hex_digit1 -> { h.to_string() }
     }
 }
 
 #[test]
 fn test_hex_literal() {
-    let input = LocatingSlice::new("1A2b");
-    let result = HexParser::parse_test_hex.parse(input).unwrap();
-    assert_eq!(result, "1A2b");
+    HexParser::parse_test_hex()
+        .parse_test("1A2b")
+        .assert_success_is("1A2b".to_string());
 
-    let input = LocatingSlice::new("0");
-    let result = HexParser::parse_test_hex.parse(input).unwrap();
-    assert_eq!(result, "0");
+    HexParser::parse_test_hex()
+        .parse_test("0")
+        .assert_success_is("0".to_string());
 
-    let input = LocatingSlice::new("F");
-    let result = HexParser::parse_test_hex.parse(input).unwrap();
-    assert_eq!(result, "F");
+    HexParser::parse_test_hex()
+        .parse_test("F")
+        .assert_success_is("F".to_string());
 
-    let input = LocatingSlice::new("g");
-    let result = HexParser::parse_test_hex.parse(input);
-    assert!(result.is_err());
+    HexParser::parse_test_hex().parse_test("g").assert_failure();
 }

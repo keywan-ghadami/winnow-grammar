@@ -1,20 +1,30 @@
 [workspace]
-members = ["winnow-grammar-macro"]
+members = ["winnow-grammar-macros", "winnow-grammar-model"]
 resolver = "2"
 
 [package]
 name = "winnow-grammar"
 version = "0.1.0"
 edition = "2021"
+description = "Ein Parser-Generator für winnow: Grammatiken als DSL, übersetzt zu winnow-Parsern."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/keywan-ghadami/winnow-grammar"
+
+[lib]
+path = "src/winnow_grammar.rs"
+
+[features]
+trace = ["winnow/debug"]
 
 [dependencies]
-winnow = "0.6"
-winnow-grammar-macro = { path = "winnow-grammar-macro" }
-syn-grammar = { git = "https://github.com/keywan-ghadami/syn-grammar", branch = "main" }
-syn-grammar-model = { git = "https://github.com/keywan-ghadami/syn-grammar", branch = "main" }
+winnow = "0.7"
+winnow-grammar-macros = { path = "winnow-grammar-macros", version = "0.1.0" }
 proc-macro2 = "1.0"
 quote = "1.0"
-syn = { version = "2.0", features = ["full", "extra-traits"] }
+lasso = { version = "0.7", features = ["multi-threaded"] }
+# Wird im Rumpf von `test_case_impl!` erzeugt (`src/testing.rs`), muss also auch
+# Nutzern des Makros zur Verfügung stehen - nicht nur den eigenen Tests.
+paste = "1.0"
 
 [dev-dependencies]
 trybuild = "1.0.116"

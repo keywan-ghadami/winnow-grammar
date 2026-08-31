@@ -1,6 +1,5 @@
-use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 #[derive(Debug, PartialEq)]
 pub enum Stmt {
@@ -17,70 +16,60 @@ pub enum Expr {
 
 grammar! {
     grammar MiniLang {
-        pub rule stmt -> Stmt =
-            "let" name:ident "=" e:expr ";" -> { Stmt::Let(name, e) }
+        pub stmt -> Stmt =
+            "let" name:raw_ident "=" e:expr ";" -> { Stmt::Let(name.to_string(), e) }
           | e:expr ";" -> { Stmt::Expr(e) }
 
-        rule expr -> Expr =
+        expr -> Expr =
             l:term "+" r:expr -> { Expr::Add(Box::new(l), Box::new(r)) }
           | t:term -> { t }
 
-        rule term -> Expr =
+        term -> Expr =
             n:u32 -> { Expr::Num(n) }
-          | i:ident -> { Expr::Var(i) }
+          | i:raw_ident -> { Expr::Var(i.to_string()) }
           | "(" e:expr ")" -> { e }
 
-        pub rule spanned_term -> (Expr, std::ops::Range<usize>) =
+        pub spanned_term -> (Expr, std::ops::Range<usize>) =
             t:term @ s -> { (t, s) }
     }
 }
 
 #[test]
 fn test_let_stmt() {
-    let input = "let x = 1 + 2;";
-    let input = LocatingSlice::new(input);
-    let result = MiniLang::parse_stmt.parse(input).unwrap();
-    assert_eq!(
-        result,
-        Stmt::Let(
+    MiniLang::parse_stmt()
+        .parse_test("let x = 1 + 2;")
+        .assert_success_is(Stmt::Let(
             "x".to_string(),
-            Expr::Add(Box::new(Expr::Num(1)), Box::new(Expr::Num(2)))
-        )
-    );
+            Expr::Add(Box::new(Expr::Num(1)), Box::new(Expr::Num(2))),
+        ));
 }
 
 #[test]
 fn test_expr_stmt() {
-    let input = "10 + x;";
-    let input = LocatingSlice::new(input);
-    let result = MiniLang::parse_stmt.parse(input).unwrap();
-    assert_eq!(
-        result,
-        Stmt::Expr(Expr::Add(
+    MiniLang::parse_stmt()
+        .parse_test("10 + x;")
+        .assert_success_is(Stmt::Expr(Expr::Add(
             Box::new(Expr::Num(10)),
-            Box::new(Expr::Var("x".to_string()))
-        ))
-    );
+            Box::new(Expr::Var("x".to_string())),
+        )));
 }
 
 #[test]
 fn test_parens() {
-    let input = "(1 + 2);";
-    let input = LocatingSlice::new(input);
-    let result = MiniLang::parse_stmt.parse(input).unwrap();
-    assert_eq!(
-        result,
-        Stmt::Expr(Expr::Add(Box::new(Expr::Num(1)), Box::new(Expr::Num(2))))
-    );
+    MiniLang::parse_stmt()
+        .parse_test("(1 + 2);")
+        .assert_success_is(Stmt::Expr(Expr::Add(
+            Box::new(Expr::Num(1)),
+            Box::new(Expr::Num(2)),
+        )));
 }
 
 #[test]
 fn test_span() {
-    let input = " 123";
-    let input = LocatingSlice::new(input);
-    let result = MiniLang::parse_spanned_term.parse(input).unwrap();
-    assert_eq!(result.0, Expr::Num(123));
-    // The built-in `term` calls `u32` (was uint).
-    // " 123" -> length 4.
-    assert_eq!(result.1, 0..4);
+    MiniLang::parse_spanned_term()
+        .parse_test(" 123")
+        .assert_success_with(|(expr, span), _state| {
+            assert_eq!(expr, &Expr::Num(123));
+            assert_eq!(span, &(1..4));
+        });
 }

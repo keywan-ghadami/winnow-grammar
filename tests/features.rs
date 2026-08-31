@@ -1,6 +1,5 @@
-use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 // -----------------------------------------------------------------------------
 // 1. Test Plus (+) Repetition
@@ -20,22 +19,17 @@ grammar! {
 
 #[test]
 fn test_plus_repetition() {
-    let input = LocatingSlice::new("1 2 3");
-    let result = TestPlus::parse_list.parse(input).unwrap();
-    assert_eq!(
-        result,
-        PlusList {
-            items: vec![1, 2, 3]
-        }
-    );
+    TestPlus::parse_list()
+        .parse_test("1 2 3")
+        .assert_success_is(PlusList {
+            items: vec![1, 2, 3],
+        });
 
-    let input = LocatingSlice::new("1");
-    let result = TestPlus::parse_list.parse(input).unwrap();
-    assert_eq!(result, PlusList { items: vec![1] });
+    TestPlus::parse_list()
+        .parse_test("1")
+        .assert_success_is(PlusList { items: vec![1] });
 
-    let input = LocatingSlice::new("");
-    let result = TestPlus::parse_list.parse(input);
-    assert!(result.is_err());
+    TestPlus::parse_list().parse_test("").assert_failure();
 }
 
 // -----------------------------------------------------------------------------
@@ -58,13 +52,13 @@ grammar! {
 
 #[test]
 fn test_grouping() {
-    let input = LocatingSlice::new("a 10");
-    let result = TestGroup::parse_main.parse(input).unwrap();
-    assert_eq!(result, GroupEnum::A(10));
+    TestGroup::parse_main()
+        .parse_test("a 10")
+        .assert_success_is(GroupEnum::A(10));
 
-    let input = LocatingSlice::new("b 20");
-    let result = TestGroup::parse_main.parse(input).unwrap();
-    assert_eq!(result, GroupEnum::B(20));
+    TestGroup::parse_main()
+        .parse_test("b 20")
+        .assert_success_is(GroupEnum::B(20));
 }
 
 // -----------------------------------------------------------------------------
@@ -81,22 +75,19 @@ pub struct Builtins {
 grammar! {
     grammar TestBuiltins {
         pub rule main -> Builtins =
-            s:string i:u32 id:ident -> { Builtins { s, i, id } }
+            s:string i:u32 id:raw_ident -> { Builtins { s: s.to_string(), i, id: id.to_string() } }
     }
 }
 
 #[test]
 fn test_builtins() {
-    let input = LocatingSlice::new(r#" "hello" 123 world"#);
-    let result = TestBuiltins::parse_main.parse(input).unwrap();
-    assert_eq!(
-        result,
-        Builtins {
+    TestBuiltins::parse_main()
+        .parse_test(r#" "hello" 123 world"#)
+        .assert_success_is(Builtins {
             s: "hello".to_string(),
             i: 123,
             id: "world".to_string(),
-        }
-    );
+        });
 }
 
 // -----------------------------------------------------------------------------
@@ -113,7 +104,5 @@ grammar! {
 
 #[test]
 fn test_use() {
-    let input = LocatingSlice::new("a");
-    let result = TestUse::parse_main.parse(input).unwrap();
-    assert_eq!(result, 'a');
+    TestUse::parse_main().parse_test("a").assert_success_is('a');
 }

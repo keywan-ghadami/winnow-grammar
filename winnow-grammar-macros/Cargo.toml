@@ -1,0 +1,16 @@
+[package]
+name = "winnow-grammar-macros"
+version = "0.1.0"
+edition = "2021"
+description = "Das `grammar!`-Makro für winnow-grammar."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/keywan-ghadami/winnow-grammar"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+winnow-grammar-model = { path = "../winnow-grammar-model", version = "0.1.0" }

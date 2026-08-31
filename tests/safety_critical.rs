@@ -1,6 +1,6 @@
 use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
 use winnow_grammar::grammar;
+use winnow_grammar::testing::WinnowTestExt;
 
 // 1. Cut Operator Safety: ensuring that once we commit to a path, we do NOT backtrack.
 // This is critical for preventing ambiguity and ensuring deterministic parsing.
@@ -18,9 +18,9 @@ grammar! {
 #[test]
 fn test_cut_operator_safety() {
     // Scenario 1: Successful commit
-    let input = LocatingSlice::new("commitsuccess");
-    let result = CutSafety::parse_deterministic_choice.parse(input).unwrap();
-    assert_eq!(result, "committed");
+    CutSafety::parse_deterministic_choice()
+        .parse_test("commitsuccess")
+        .assert_success_is("committed");
 
     // Scenario 2: Failure after commit
     // Input is "commitfail".
@@ -28,40 +28,34 @@ fn test_cut_operator_safety() {
     // "success" fails.
     // Because of cut, we must NOT try the second alternative "commit" "failure".
     // The parser should fail immediately.
-    let input = LocatingSlice::new("commitfailure");
-    let result = CutSafety::parse_deterministic_choice.parse(input);
-    assert!(result.is_err(), "Parser backtracked despite cut operator!");
+    CutSafety::parse_deterministic_choice()
+        .parse_test("commitfailure")
+        .assert_failure_contains("success"); // We expect it to be looking for "success"
 
     // Scenario 3: Alternative path
-    let input = LocatingSlice::new("other");
-    let result = CutSafety::parse_deterministic_choice.parse(input).unwrap();
-    assert_eq!(result, "other");
+    CutSafety::parse_deterministic_choice()
+        .parse_test("other")
+        .assert_success_is("other");
 }
 
 // 2. Strict Error Propagation
 // In safety-critical systems, we need to know exactly where parsing failed.
 grammar! {
     grammar ErrorProp {
-        pub rule main -> () =
-            "start" => inner_rule -> { () }
+        pub main =
+            "start" => inner_rule
 
-        rule inner_rule -> () =
-            "expecting_this" -> { () }
+        inner_rule = "expecting_this"
     }
 }
 
 #[test]
 fn test_error_propagation() {
-    let input = LocatingSlice::new("start wrong");
-    let err = ErrorProp::parse_main.parse(input).unwrap_err();
-
-    // We expect the error to point to the failure in `inner_rule`,
-    // and specifically expecting "expecting_this".
-    // The exact string representation depends on winnow's error formatting,
-    // but we verify we got an error.
-    let err_string = format!("{}", err);
-    // With cut, we expect the error to be preserved from the inner failure.
-    assert!(err.to_string().len() > 0);
+    // We verify that the error is propagated correctly and contains relevant info.
+    // winnow's default error messages for literals usually include what was expected.
+    ErrorProp::parse_main()
+        .parse_test("start wrong")
+        .assert_failure_contains("expecting_this");
 }
 
 // 3. Recursive Robustness (Stack Safety)
@@ -88,8 +82,9 @@ fn test_deep_recursion() {
         input.push(')');
     }
 
-    let result = DeepRecursion::parse_recursive.parse(LocatingSlice::new(input.as_str()));
-    assert_eq!(result.unwrap(), depth);
+    DeepRecursion::parse_recursive()
+        .parse_test(&input)
+        .assert_success_is(depth);
 }
 
 // 4. Input Boundary / Edge Cases
@@ -103,12 +98,12 @@ grammar! {
 #[test]
 fn test_numeric_boundaries() {
     // Test max limits
-    let input = LocatingSlice::new("255 127 340282366920938463463374607431768211455");
-    let result = Boundaries::parse_primitive_limits.parse(input).unwrap();
-    assert_eq!(result, (255, 127, u128::MAX));
+    Boundaries::parse_primitive_limits()
+        .parse_test("255 127 340282366920938463463374607431768211455")
+        .assert_success_is((255, 127, u128::MAX));
 
     // Test overflow behavior (should fail safely, not panic)
-    let input = LocatingSlice::new("256 0 0");
-    let result = Boundaries::parse_primitive_limits.parse(input);
-    assert!(result.is_err());
+    Boundaries::parse_primitive_limits()
+        .parse_test("256 0 0")
+        .assert_failure();
 }
