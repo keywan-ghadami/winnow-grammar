@@ -93,13 +93,13 @@ fn test_generic_return() {
 grammar! {
     grammar NumFormats {
         pub rule hex -> u32 =
-            "0x" h:hex_digit1 -> { u32::from_str_radix(&h, 16).unwrap() }
+            "0x" h:hex_digit1 -> { u32::from_str_radix(h, 16).unwrap() }
 
         pub rule oct -> u32 =
-            "0o" o:oct_digit1 -> { u32::from_str_radix(&o, 8).unwrap() }
+            "0o" o:oct_digit1 -> { u32::from_str_radix(o, 8).unwrap() }
 
         pub rule bin -> u32 =
-            "0b" b:binary_digit1 -> { u32::from_str_radix(&b, 2).unwrap() }
+            "0b" b:binary_digit1 -> { u32::from_str_radix(b, 2).unwrap() }
     }
 }
 

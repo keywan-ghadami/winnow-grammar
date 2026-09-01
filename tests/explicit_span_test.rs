@@ -23,7 +23,10 @@ grammar! {
 #[test]
 fn test_explicit_span_injection() {
     let input = "  my_ident  ";
-    let result = ExplicitSpanTest::parse_custom_node().parse_test(input).inner.unwrap();
+    let result = ExplicitSpanTest::parse_custom_node()
+        .parse_test(input)
+        .inner
+        .unwrap();
 
     assert_eq!(result.name, "my_ident");
     // "  my_ident  "

@@ -18,7 +18,10 @@ fn test_interning_equality() {
         .parse_test(input)
         .assert_success_with(|(s1, s2), _state| {
             // Within the same parse run, the same string should produce the same symbol.
-            assert_eq!(s1, s2, "The same identifier string should result in the same Symbol");
+            assert_eq!(
+                s1, s2,
+                "The same identifier string should result in the same Symbol"
+            );
         });
 }
 
@@ -29,6 +32,9 @@ fn test_interning_uniqueness() {
         .parse_test(input)
         .assert_success_with(|(s1, s2), _state| {
             // Different strings should produce different symbols.
-            assert_ne!(s1, s2, "Different identifier strings should result in different Symbols");
+            assert_ne!(
+                s1, s2,
+                "Different identifier strings should result in different Symbols"
+            );
         });
 }

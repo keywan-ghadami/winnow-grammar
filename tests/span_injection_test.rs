@@ -1,6 +1,6 @@
-use winnow_grammar::WithSpan;
 use winnow_grammar::grammar;
 use winnow_grammar::testing::WinnowTestExt;
+use winnow_grammar::WithSpan;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SpannedInt {
@@ -24,7 +24,10 @@ grammar! {
 #[test]
 fn test_span_injection() {
     let input = "  42  ";
-    let expected = SpannedInt { val: 42, span: 2..4 };
+    let expected = SpannedInt {
+        val: 42,
+        span: 2..4,
+    };
     SpanTest::parse_main()
         .parse_test(input)
         .assert_success_is(expected);
@@ -57,7 +60,11 @@ grammar! {
 #[test]
 fn test_span_injection_tuple() {
     let input = " 10 20 ";
-    let expected = SpannedTuple { a: 10, b: 20, span: 1..6 };
+    let expected = SpannedTuple {
+        a: 10,
+        b: 20,
+        span: 1..6,
+    };
     SpanTupleTest::parse_main()
         .parse_test(input)
         .assert_success_is(expected);

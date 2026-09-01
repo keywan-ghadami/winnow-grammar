@@ -35,9 +35,9 @@ winnow = "0.6"
 Here is a complete example of a Cron expression parser.
 
 ```rust
-use winnow_grammar::grammar;
+use winnow_grammar::{grammar, ParseContext};
 use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
+use winnow::stream::{LocatingSlice, Stateful};
 
 #[derive(Debug, PartialEq)]
 pub struct Schedule {
@@ -103,11 +103,16 @@ grammar! {
 }
 
 fn main() {
-    let input = "0 30 9 * * 1-5";
-    // We use LocatingSlice to support span tracking if needed.
-    let input = LocatingSlice::new(input);
-    
-    let result = Cron::parse_schedule.parse(input);
+    // Generated parsers run on a `Stateful` stream: `LocatingSlice` provides the
+    // spans, `ParseContext` carries the shared state (string interner, user
+    // state). `winnow_grammar::ParseInput<'_>` is an alias for exactly this.
+    let mut stream = Stateful {
+        state: ParseContext::<()>::default(),
+        input: LocatingSlice::new("0 30 9 * * 1-5"),
+    };
+
+    // `parse_schedule()` builds the parser; `.parse_next(&mut stream)` runs it.
+    let result = Cron::parse_schedule().parse_next(&mut stream);
     println!("{:?}", result);
 }
 ```
@@ -115,8 +120,11 @@ fn main() {
 ### What happens under the hood?
 
 The `grammar!` macro expands into a Rust module containing:
-- A function `parse_<rule_name>` for each rule.
-- These functions take a `&mut I` where `I` is a `winnow` stream (e.g., `&str`, `LocatingSlice<&str>`).
+- A function `parse_<rule_name>()` for each rule. It is a parser **factory**:
+  calling it returns an `impl Parser`, which you then drive with `.parse(input)`
+  or `.parse_next(&mut input)`.
+- The returned parser takes a `&mut I` where `I` is a `winnow` stream (e.g.,
+  `&str`, `LocatingSlice<&str>`).
 
 ## Backend Specifics
 
@@ -131,19 +139,24 @@ By default, `winnow-grammar` automatically skips whitespace between tokens in sy
 You can override this behavior by defining a special rule named `ws`. This is a powerful feature for handling more complex spacing, like comments. For example, to make your parser treat `//` style comments as whitespace:
 
 ```rust
-use winnow_grammar::grammar;
+use winnow_grammar::{grammar, ParseContext};
 use winnow::prelude::*;
-use winnow::stream::LocatingSlice;
+use winnow::stream::{LocatingSlice, Stateful};
 
 grammar! {
     grammar CommentAware {
         // Override 'ws' to skip spaces, newlines, and single-line comments.
         WSE = multispace1
-        WS = (WSE | comment)*
+        WS = (WSE | COMMENT)*
 
         // A rule that recognizes a single-line comment.
         // `line_ending` is a built-in parser. `until` consumes input up to it.
-        comment = "//" until(line_ending)
+        //
+        // The name is UPPERCASE on purpose: that makes it a *lexical* rule. A
+        // lowercase `comment` would be syntactic, so the generator would insert
+        // `WS` between its own tokens - and `WS` calls the comment rule. That
+        // cycle recurses until the stack is gone.
+        COMMENT = "//" until(line_ending)
 
         // This rule can now have comments between its tokens because it's a
         // syntactic rule (lowercase name).
@@ -158,10 +171,11 @@ grammar! {
 
 fn main() {
     // The parser will ignore the comment and the newline.
-    let input = "10 // add 20
- + 20";
-    let stream = LocatingSlice::new(input);
-    let result = CommentAware::parse_add.parse(stream).unwrap();
+    let mut stream = Stateful {
+        state: ParseContext::<()>::default(),
+        input: LocatingSlice::new("10 // add 20\n + 20"),
+    };
+    let result = CommentAware::parse_add().parse_next(&mut stream).unwrap();
     assert_eq!(result, 30);
 }
 ```

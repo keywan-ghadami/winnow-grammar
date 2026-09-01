@@ -62,8 +62,8 @@ Match a sequence of patterns. Use `name:pattern` to bind the result to a variabl
 # fn main() {
 #     grammar! {
 #         grammar Test {
- assignment -> (&str, i32) =
-    name:ident "=" val:i32 -> { (name, val) }
+ assignment -> (&'a str, i32) =
+    name:raw_ident "=" val:i32 -> { (name, val) }
 #         }
 #     }
 # }
@@ -189,8 +189,8 @@ The cut operator commits to the current alternative. If the pattern *before* the
 # fn main() {
 #     grammar! {
 #         grammar Test {
- stmt -> Stmt = 
-    "let" => name:ident "=" e:expr -> { Stmt::Let(name, Box::new(e)) }
+ stmt -> Stmt<'a> =
+    "let" => name:raw_ident "=" e:expr -> { Stmt::Let(name, Box::new(e)) }
   | e:expr -> { Stmt::Expr(Box::new(e)) }
 
 expr -> Expr = i32 -> { Expr }
@@ -223,10 +223,9 @@ check = "a" peek("b")
 # fn main() {
 #     grammar! {
 #         grammar Test {
-// FIXME: `alpha` primitive is not found in doc-tests
- word -> &str = lex(ident)
- CAST_OPERATOR = "as" spaced("<" T ">") 
-rule T -> &str = "bool"
+ word -> &'a str = lex(w:raw_ident) -> { w }
+ CAST_OPERATOR = "as" spaced("<" T ">")
+rule T = "bool"
 #         }
 #     }
 # }
@@ -260,33 +259,37 @@ value(offset: i32) -> i32 = i:i32 -> { i + offset }
 ### Generic Rules
 Define reusable rules with generic types and parser parameters.
 
+> **Not working yet.** A *parser* parameter (`item` below, passed as
+> `item=i32`) is not substituted into the rule body: the generated code refers
+> to `item` as a value and fails to compile with
+> ``cannot find value `item` in this scope``. Type parameters alone
+> (`list<T>` without a parser parameter) are unaffected. Tracked in
+> [`LIMITATIONS.md`](LIMITATIONS.md); the example below is therefore not
+> compiled.
+
 ```rust,ignore
-# use winnow_grammar::grammar;
-# fn main() {
-// FIXME: This example fails with a type inference error in the macro.
-#     grammar! {
-#         grammar Test {
-# list<T>(item) -> Vec<T> = items:item* -> { items }
-# integers -> Vec<i32> = l:list(item=i32) -> { l }
-#         }
-#     }
-# }
+use winnow_grammar::grammar;
+grammar! {
+    grammar Test {
+        list<T>(item) -> Vec<T> = items:item* -> { items }
+        integers -> Vec<i32> = l:list(item=i32) -> { l }
+    }
+}
 ```
 
 ### Left Recursion
 Direct left recursion is automatically detected and compiled into an iterative loop, making expression parsing natural.
 
-```rust,ignore
+```rust
 # use winnow_grammar::grammar;
 # fn main() {
-// FIXME: This example causes a stack overflow at runtime.
 #     grammar! {
 #         grammar Test {
-# expr -> i32 = 
-#    l:expr "+" r:term -> { l + r }
-#  | t:term            -> { t }
-#
-# term -> i32 = i:i32 -> {i}
+ expr -> i32 =
+    l:expr "+" r:term -> { l + r }
+  | t:term            -> { t }
+
+term -> i32 = i:i32 -> { i }
 #         }
 #     }
 # }

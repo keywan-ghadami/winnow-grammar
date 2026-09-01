@@ -1,6 +1,6 @@
+use lasso::{Key, Spur, ThreadedRodeo};
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use lasso::{ThreadedRodeo, Spur, Key};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -11,7 +11,7 @@ impl Symbol {
     pub fn from_spur(spur: lasso::Spur) -> Self {
         Self(spur.into_inner())
     }
-    
+
     #[doc(hidden)]
     pub fn into_spur(self) -> Spur {
         Spur::try_from_usize(self.0.get() as usize).expect("Invalid Symbol ID")

@@ -1,8 +1,8 @@
 use super::Codegen;
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
-use winnow_grammar_model::model::{Argument, ModelPattern};
 use std::collections::HashMap;
+use winnow_grammar_model::model::{Argument, ModelPattern};
 
 pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::Ident>) {
     match pattern {
@@ -12,18 +12,22 @@ pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::I
         ModelPattern::Recover { binding, .. } => *binding = new_binding,
         ModelPattern::Until { binding, .. } => *binding = new_binding,
         ModelPattern::Count { binding, .. } => *binding = new_binding,
-        ModelPattern::Optional(inner, _) |
-        ModelPattern::Repeat(inner, _) |
-        ModelPattern::Plus(inner, _) |
-        ModelPattern::SpanBinding(inner, _, _) |
-        ModelPattern::LexicalScope(inner, _) |
-        ModelPattern::SpacedScope(inner, _) |
-        ModelPattern::Peek(inner, _) |
-        ModelPattern::Not(inner, _) => set_binding(inner, new_binding),
-        ModelPattern::Parenthesized(inner, _) |
-        ModelPattern::Bracketed(inner, _) |
-        ModelPattern::Braced(inner, _) => {
-            if inner.len() == 1 { set_binding(&mut inner[0], new_binding); }
+        ModelPattern::Optional(inner, _)
+        | ModelPattern::Repeat(inner, _)
+        | ModelPattern::Plus(inner, _)
+        | ModelPattern::SpanBinding(inner, _, _)
+        | ModelPattern::LexicalScope(inner, _)
+        | ModelPattern::SpacedScope(inner, _)
+        | ModelPattern::Peek(inner, _)
+        | ModelPattern::Not(inner, _) => set_binding(inner, new_binding),
+        ModelPattern::Parenthesized(inner, _)
+        | ModelPattern::Bracketed(inner, _)
+        | ModelPattern::Braced(inner, _) => {
+            // Nur bei genau einem Element ist eindeutig, worauf sich die
+            // Bindung bezieht.
+            if let [single] = inner.as_mut_slice() {
+                set_binding(single, new_binding);
+            }
         }
         _ => {}
     }
@@ -51,7 +55,9 @@ pub(crate) fn replace_type(ty: &mut syn::Type, subst: &HashMap<String, syn::Type
         }
         syn::Type::Reference(type_ref) => replace_type(&mut type_ref.elem, subst),
         syn::Type::Tuple(type_tuple) => {
-            for elem in &mut type_tuple.elems { replace_type(elem, subst); }
+            for elem in &mut type_tuple.elems {
+                replace_type(elem, subst);
+            }
         }
         syn::Type::Array(type_arr) => replace_type(&mut type_arr.elem, subst),
         syn::Type::Slice(type_slice) => replace_type(&mut type_slice.elem, subst),
@@ -60,9 +66,14 @@ pub(crate) fn replace_type(ty: &mut syn::Type, subst: &HashMap<String, syn::Type
     }
 }
 
-pub(crate) fn substitute_pattern(pattern: &mut ModelPattern, subst: &HashMap<String, ModelPattern>) {
+pub(crate) fn substitute_pattern(
+    pattern: &mut ModelPattern,
+    subst: &HashMap<String, ModelPattern>,
+) {
     match pattern {
-        ModelPattern::RuleCall { rule_path, binding, .. } => {
+        ModelPattern::RuleCall {
+            rule_path, binding, ..
+        } => {
             if let Some(ident) = rule_path.segments.last().map(|s| s.ident.to_string()) {
                 if let Some(new_pat) = subst.get(&ident) {
                     let mut cloned = new_pat.clone();
@@ -71,7 +82,6 @@ pub(crate) fn substitute_pattern(pattern: &mut ModelPattern, subst: &HashMap<Str
                         set_binding(&mut cloned, binding.clone());
                     }
                     *pattern = cloned;
-                    return;
                 }
             }
         }
@@ -323,8 +333,13 @@ impl<'a> Codegen<'a> {
 
         if self.user_rules.contains(&name_str) {
             // 1. Zielregel in der Grammatik finden
-            let target_rule = self.grammar.rules.iter().find(|r| r.name == name_str).unwrap();
-            
+            let target_rule = self
+                .grammar
+                .rules
+                .iter()
+                .find(|r| r.name == name_str)
+                .unwrap();
+
             // 2. Prüfen, ob es sich um eine Template-Regel handelt
             let is_template = target_rule.params.iter().any(|p| {
                 if let Some(syn::Type::Path(type_path)) = &p.ty {
@@ -370,11 +385,17 @@ impl<'a> Codegen<'a> {
                 let mut ret_type = target_rule.return_type.clone();
                 replace_type(&mut ret_type, &type_subst);
 
-                let combined_lexical = is_lexical || target_rule.is_lexical || target_rule.name == "WS";
-                let body = self.generate_variants_body(&inlined_variants, &ret_type, combined_lexical, true);
+                let combined_lexical =
+                    is_lexical || target_rule.is_lexical || target_rule.name == "WS";
+                let body = self.generate_variants_body(
+                    &inlined_variants,
+                    &ret_type,
+                    combined_lexical,
+                    true,
+                );
                 let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::ContextError> };
                 let input_var = &self.input_ident; // <-- NEU: Beziehe den definierten Identifier
-                
+
                 return quote_spanned! {span=>
                     (|#input_var: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #inner_err_type> {
                         let mut parser = (|#input_var: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #inner_err_type> {
@@ -397,7 +418,8 @@ impl<'a> Codegen<'a> {
             }
         }
 
-        let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::ContextError> };
+        let inner_err_type =
+            quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::ContextError> };
         let input_type = quote_spanned! {span=> ::winnow_grammar::ParseInput<'a, S> };
 
         match name_str.as_str() {
@@ -486,20 +508,48 @@ impl<'a> Codegen<'a> {
             "empty" => quote_spanned! {span=> ::winnow::combinator::empty },
             "eof" => quote_spanned! {span=> ::winnow::combinator::eof },
 
-            "u8" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u8, #inner_err_type> },
-            "u16" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u16, #inner_err_type> },
-            "u32" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u32, #inner_err_type> },
-            "u64" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u64, #inner_err_type> },
-            "u128" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u128, #inner_err_type> },
-            "usize" => quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, usize, #inner_err_type> },
-            "i8" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i8, #inner_err_type> },
-            "i16" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i16, #inner_err_type> },
-            "i32" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i32, #inner_err_type> },
-            "i64" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i64, #inner_err_type> },
-            "i128" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i128, #inner_err_type> },
-            "isize" => quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, isize, #inner_err_type> },
-            "f32" => quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f32, #inner_err_type> },
-            "f64" => quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f64, #inner_err_type> },
+            "u8" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u8, #inner_err_type> }
+            }
+            "u16" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u16, #inner_err_type> }
+            }
+            "u32" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u32, #inner_err_type> }
+            }
+            "u64" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u64, #inner_err_type> }
+            }
+            "u128" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u128, #inner_err_type> }
+            }
+            "usize" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, usize, #inner_err_type> }
+            }
+            "i8" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i8, #inner_err_type> }
+            }
+            "i16" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i16, #inner_err_type> }
+            }
+            "i32" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i32, #inner_err_type> }
+            }
+            "i64" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i64, #inner_err_type> }
+            }
+            "i128" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i128, #inner_err_type> }
+            }
+            "isize" => {
+                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, isize, #inner_err_type> }
+            }
+            "f32" => {
+                quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f32, #inner_err_type> }
+            }
+            "f64" => {
+                quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f64, #inner_err_type> }
+            }
             "bool" => quote_spanned! {span=>
                 ::winnow::combinator::alt((
                     ::winnow::token::literal("true").map(|_| true),
@@ -532,7 +582,10 @@ impl<'a> Codegen<'a> {
                 quote_spanned! {span=> #p.with_span().map(|(v, _)| v) }
             }
             ModelPattern::RuleCall {
-                rule_path, generics, args, ..
+                rule_path,
+                generics,
+                args,
+                ..
             } => self.generate_rule_call_parser(rule_path, generics, args, is_lexical),
             ModelPattern::Lit { lit, .. } => {
                 // Pure literal, no ws wrapping
@@ -687,7 +740,9 @@ impl<'a> Codegen<'a> {
 
             // Infix WS
             if i > 0 && !is_lexical {
-                parsers.push(quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i)) });
+                parsers.push(
+                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i)) },
+                );
             }
 
             let p_expr = self.generate_parser_expr(p, is_lexical, false);

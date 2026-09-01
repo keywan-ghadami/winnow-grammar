@@ -1,11 +1,11 @@
 use super::Codegen;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
+use syn;
 use winnow_grammar_model::{
     analysis,
     model::{Rule, RuleVariant},
 };
-use syn;
 
 impl<'a> Codegen<'a> {
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
@@ -54,7 +54,8 @@ impl<'a> Codegen<'a> {
                         if let Some(segment) = type_path.path.segments.last() {
                             if segment.ident == "Rule" {
                                 is_parser = true;
-                                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+                                {
                                     let inner_args = &args.args;
                                     actual_ty = quote! { impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #inner_args, #err_type> };
                                 }
@@ -80,7 +81,7 @@ impl<'a> Codegen<'a> {
                     let output_type = format_ident!("Output_{}", name, span = Span::mixed_site());
                     extra_generics.push(output_type.clone());
                     let actual_ty = quote! { impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, #err_type> };
-                    
+
                     params_tokens.push(quote! { mut #name: #actual_ty });
                     let wrapper_name = format_ident!("{}_wrapper", name, span = span);
                     param_wrappers.push(quote_spanned! {span=>
@@ -200,11 +201,10 @@ impl<'a> Codegen<'a> {
             outer_generics.extend(quote! {, #gen_params});
         }
 
-
         let outer_fn_body = quote! {
             move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
                 use ::winnow::error::ParserError;
-                
+
                 #(#param_wrappers)*
 
                 // NEU: Inline-Fehlerbehandlung statt Closure, um Borrow-Kollisionen zu vermeiden.
