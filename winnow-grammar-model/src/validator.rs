@@ -62,11 +62,31 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<()> {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(" -> ");
+
+            // Ein Zyklus ueber `WS` ist keine Linksrekursion des Nutzers,
+            // sondern eine syntaktische Regel im Leerraum: sie ruft an ihrem
+            // Anfang `WS`, und `WS` ruft sie. Das sagt die Meldung - und zeigt
+            // auf die Regel, die zu aendern ist, nicht auf `WS`.
+            if let Some(schuldig) = cycle.iter().find(|n| *n != "WS") {
+                if cycle.iter().any(|n| n == "WS") {
+                    let rule = grammar.rules.iter().find(|r| r.name == *schuldig).unwrap();
+                    let msg = format!(
+                        "rule `{name}` is used by `WS` but is syntactic (lowercase): \
+                         a syntactic rule skips whitespace at its start by calling `WS`, \
+                         so `{cycle}` recurses without consuming input. \
+                         Rules used for whitespace must be lexical - name it `{upper}`.",
+                        name = schuldig,
+                        cycle = cycle_str,
+                        upper = schuldig.to_uppercase(),
+                    );
+                    return Err(syn::Error::new(rule.name.span(), msg));
+                }
+            }
+
             let msg = format!(
                 "Indirect left recursion detected (unsupported): {}",
                 cycle_str
             );
-
             let rule_name = &cycle[0];
             let rule = grammar.rules.iter().find(|r| r.name == *rule_name).unwrap();
             return Err(syn::Error::new(rule.name.span(), msg));

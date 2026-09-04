@@ -106,8 +106,17 @@ impl<'a> Codegen<'a> {
                     Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, _span))
                 }
             } else {
-                quote! {
-                    Ok(#action)
+                // Eine vom Nutzer geschriebene Aktion liegt ohne ihre Klammern
+                // vor und darf Anweisungen enthalten (`-> { let x = …; x }`);
+                // sie bekommt die Klammern hier zurueck - vorher landeten ihre
+                // Tokens in Ausdrucksposition ("expected expression, found
+                // `let` statement"). Eine vom Parser synthetisierte Aktion ist
+                // immer ein einzelner Ausdruck (`()`, eine Bindung, ein Tupel)
+                // und bleibt ungeklammert - `{ () }` waere ein Clippy-Befund.
+                if v.is_explicit {
+                    quote! { Ok({ #action }) }
+                } else {
+                    quote! { Ok(#action) }
                 }
             };
 
@@ -200,8 +209,17 @@ impl<'a> Codegen<'a> {
                      Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, full_span))
                 }
             } else {
-                quote! {
-                    Ok(#action)
+                // Eine vom Nutzer geschriebene Aktion liegt ohne ihre Klammern
+                // vor und darf Anweisungen enthalten (`-> { let x = …; x }`);
+                // sie bekommt die Klammern hier zurueck - vorher landeten ihre
+                // Tokens in Ausdrucksposition ("expected expression, found
+                // `let` statement"). Eine vom Parser synthetisierte Aktion ist
+                // immer ein einzelner Ausdruck (`()`, eine Bindung, ein Tupel)
+                // und bleibt ungeklammert - `{ () }` waere ein Clippy-Befund.
+                if v.is_explicit {
+                    quote! { Ok({ #action }) }
+                } else {
+                    quote! { Ok(#action) }
                 }
             };
 

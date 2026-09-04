@@ -259,23 +259,27 @@ value(offset: i32) -> i32 = i:i32 -> { i + offset }
 ### Generic Rules
 Define reusable rules with generic types and parser parameters.
 
-> **Not working yet.** A *parser* parameter (`item` below, passed as
-> `item=i32`) is not substituted into the rule body: the generated code refers
-> to `item` as a value and fails to compile with
-> ``cannot find value `item` in this scope``. Type parameters alone
-> (`list<T>` without a parser parameter) are unaffected. Tracked in
-> [`LIMITATIONS.md`](LIMITATIONS.md); the example below is therefore not
-> compiled.
+A rule can take **type** parameters (`<T>`) and **parser** parameters
+(`(item)`). Parser parameters are substituted at each call site; the rule is a
+template and is not compiled on its own. A type parameter is taken from the
+call (`list<u32>(…)`) or, if omitted, inferred from the argument in the same
+position (`list(item=u32)` gives `T = u32`).
 
-```rust,ignore
-use winnow_grammar::grammar;
-grammar! {
-    grammar Test {
-        list<T>(item) -> Vec<T> = items:item* -> { items }
-        integers -> Vec<i32> = l:list(item=i32) -> { l }
-    }
-}
+```rust
+# use winnow_grammar::grammar;
+# fn main() {
+#     grammar! {
+#         grammar Test {
+list<T>(item) -> Vec<T> = items:item* -> { items }
+integers -> Vec<i32> = l:list(item=i32) -> { l }
+explicit -> Vec<i32> = l:list<i32>(item=i32) -> { l }
+#         }
+#     }
+# }
 ```
+
+Declaring the parameter as `item: Rule<T>` ties its result type to `T`
+explicitly; both spellings are equivalent.
 
 ### Left Recursion
 Direct left recursion is automatically detected and compiled into an iterative loop, making expression parsing natural.

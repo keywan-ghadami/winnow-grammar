@@ -10,7 +10,6 @@ This crate is built on top of `syn-grammar-model` but targets the `winnow` parse
 
 ## Documentation
 
-- **[Extending Guide](../EXTENDING.md)**: Guide for library authors on how to build custom backends.
 
 ## Features
 

@@ -7,6 +7,32 @@ use quote::{format_ident, quote_spanned};
 use std::collections::HashSet;
 use winnow_grammar_model::model::GrammarDefinition;
 
+/// Ist die Regel eine Vorlage, die nicht als eigene Funktion erzeugt, sondern
+/// an jeder Aufrufstelle eingesetzt wird?
+///
+/// Das ist sie, sobald sie einen *Parser*-Parameter hat - in einer der beiden
+/// Schreibweisen:
+///
+/// * `list<T>(item: Rule<T>)` - der Parameter ist als Regel deklariert und sein
+///   Ergebnistyp an `T` gebunden;
+/// * `list<T>(item)` - ohne Typ. `T` wird dann aus dem Argument abgeleitet
+///   (siehe `Codegen::leite_typ_ab`).
+///
+/// Vorher galt nur die erste Form als Vorlage. Die zweite lief in den Pfad fuer
+/// Laufzeitparameter, dessen innere Funktion den Parameter `item_wrapper`
+/// nennt, waehrend der Rumpf `item` sagt - daher ``cannot find value `item` ``.
+pub(crate) fn ist_vorlage(rule: &winnow_grammar_model::model::Rule) -> bool {
+    rule.params.iter().any(|p| match &p.ty {
+        None => true,
+        Some(syn::Type::Path(type_path)) => type_path
+            .path
+            .segments
+            .last()
+            .is_some_and(|seg| seg.ident == "Rule"),
+        Some(_) => false,
+    })
+}
+
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let mut codegen = Codegen::new(&grammar);
     codegen.generate()

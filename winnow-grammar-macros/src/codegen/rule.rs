@@ -9,17 +9,7 @@ use winnow_grammar_model::{
 
 impl<'a> Codegen<'a> {
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
-        // --- NEU: Template-Erkennung ---
-        let is_template = rule.params.iter().any(|p| {
-            if let Some(syn::Type::Path(type_path)) = &p.ty {
-                if let Some(segment) = type_path.path.segments.last() {
-                    return segment.ident == "Rule";
-                }
-            }
-            false
-        });
-
-        if is_template {
+        if super::ist_vorlage(rule) {
             // Template-Regeln werden nicht als eigene Funktionen kompiliert.
             // Sie werden in expr.rs beim Aufruf durch AST-Substitution direkt ge-inlined.
             return quote! {};

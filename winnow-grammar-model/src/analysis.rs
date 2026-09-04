@@ -562,11 +562,23 @@ fn is_pattern_nullable_precise(pattern: &ModelPattern, nullable_rules: &HashSet<
 }
 
 fn find_cycles(grammar: &GrammarDefinition, nullable_rules: &HashSet<String>) -> Vec<Vec<String>> {
+    // Hat der Nutzer `WS` selbst definiert, ruft jede syntaktische Regel es an
+    // ihrem Anfang auf, bevor sie ein Zeichen liest - eine implizite Kante,
+    // die im Muster nicht steht. Ruft `WS` seinerseits eine syntaktische Regel
+    // (etwa ein kleingeschriebenes `comment`), schliesst sich der Kreis
+    // `WS -> comment -> WS` ohne jeden Fortschritt; zur Laufzeit ist das ein
+    // Stack-Overflow ohne Diagnose. Mit der Kante im Graphen findet ihn die
+    // Zyklussuche wie jede andere Linksrekursion.
+    let user_ws = grammar.rules.iter().any(|r| r.name == "WS");
+
     let mut adj = HashMap::new();
     for rule in &grammar.rules {
         let mut deps = HashSet::new();
         for variant in &rule.variants {
             collect_nullable_deps(&variant.pattern, nullable_rules, &mut deps);
+        }
+        if user_ws && !rule.is_lexical && rule.name != "WS" {
+            deps.insert("WS".to_string());
         }
         adj.insert(rule.name.to_string(), deps);
     }

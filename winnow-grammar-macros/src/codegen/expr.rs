@@ -33,6 +33,16 @@ pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::I
     }
 }
 
+/// Ersetzt Typparameter in einem Aktionsblock (`Vec::<T>::new()`).
+struct TypSubst<'a>(&'a HashMap<String, syn::Type>);
+
+impl syn::visit_mut::VisitMut for TypSubst<'_> {
+    fn visit_type_mut(&mut self, ty: &mut syn::Type) {
+        replace_type(ty, self.0);
+        syn::visit_mut::visit_type_mut(self, ty);
+    }
+}
+
 pub(crate) fn replace_type(ty: &mut syn::Type, subst: &HashMap<String, syn::Type>) {
     match ty {
         syn::Type::Path(type_path) => {
@@ -66,29 +76,49 @@ pub(crate) fn replace_type(ty: &mut syn::Type, subst: &HashMap<String, syn::Type
     }
 }
 
+/// Setzt in einer Vorlage die Parser-Parameter (`subst`) und die Typparameter
+/// (`type_subst`) ein. Eine Traversierung fuer beides.
 pub(crate) fn substitute_pattern(
     pattern: &mut ModelPattern,
     subst: &HashMap<String, ModelPattern>,
+    type_subst: &HashMap<String, syn::Type>,
 ) {
     match pattern {
         ModelPattern::RuleCall {
-            rule_path, binding, ..
+            rule_path,
+            binding,
+            generics,
+            args,
         } => {
             if let Some(ident) = rule_path.segments.last().map(|s| s.ident.to_string()) {
                 if let Some(new_pat) = subst.get(&ident) {
                     let mut cloned = new_pat.clone();
-                    // Zuweisung (\"elements:\") beim Ersetzen auf das Argument übertragen!
+                    // Zuweisung ("elements:") beim Ersetzen auf das Argument uebertragen.
                     if binding.is_some() {
                         set_binding(&mut cloned, binding.clone());
                     }
                     *pattern = cloned;
+                    return;
+                }
+            }
+            // Kein Parameter: dann ein gewoehnlicher Aufruf, dessen eigene
+            // Generics und Argumente die Vorlagenparameter enthalten koennen
+            // (`inner<T>(x=item)`).
+            for ty in generics.iter_mut() {
+                replace_type(ty, type_subst);
+            }
+            for arg in args.iter_mut() {
+                match arg {
+                    Argument::Positional(p) | Argument::Named(_, p) => {
+                        substitute_pattern(p, subst, type_subst);
+                    }
                 }
             }
         }
         ModelPattern::Group { alts, .. } => {
             for (seq, _, _) in alts {
                 for p in seq {
-                    substitute_pattern(p, subst);
+                    substitute_pattern(p, subst, type_subst);
                 }
             }
         }
@@ -101,21 +131,21 @@ pub(crate) fn substitute_pattern(
         | ModelPattern::Count { pattern: inner, .. }
         | ModelPattern::LexicalScope(inner, _)
         | ModelPattern::SpacedScope(inner, _) => {
-            substitute_pattern(inner, subst);
+            substitute_pattern(inner, subst, type_subst);
         }
         ModelPattern::Parenthesized(inner, _)
         | ModelPattern::Bracketed(inner, _)
         | ModelPattern::Braced(inner, _) => {
             for p in inner {
-                substitute_pattern(p, subst);
+                substitute_pattern(p, subst, type_subst);
             }
         }
         ModelPattern::Recover { body, sync, .. } => {
-            substitute_pattern(body, subst);
-            substitute_pattern(sync, subst);
+            substitute_pattern(body, subst, type_subst);
+            substitute_pattern(sync, subst, type_subst);
         }
         ModelPattern::Until { pattern: inner, .. } => {
-            substitute_pattern(inner, subst);
+            substitute_pattern(inner, subst, type_subst);
         }
         ModelPattern::Lit { .. } | ModelPattern::Fail { .. } | ModelPattern::Cut(_) => {}
     }
@@ -320,6 +350,31 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// Der Ergebnistyp eines Argumentmusters - fuer die Ableitung fehlender
+    /// Typparameter einer Vorlage.
+    ///
+    /// Ein Literal liefert `()`, eine Nutzerregel ihren deklarierten
+    /// Rueckgabetyp, ein Builtin den Typ aus seiner Deklaration. Alles andere
+    /// (Gruppen, Wiederholungen) bleibt offen - dann muss der Aufrufer die
+    /// Generics ausschreiben.
+    fn leite_typ_ab(&self, pattern: &ModelPattern) -> Option<syn::Type> {
+        use winnow_grammar_model::Backend;
+        match pattern {
+            ModelPattern::Lit { .. } => Some(syn::parse_quote!(())),
+            ModelPattern::RuleCall { rule_path, .. } => {
+                let name = rule_path.segments.last()?.ident.to_string();
+                if let Some(rule) = self.grammar.rules.iter().find(|r| r.name == name) {
+                    return Some(rule.return_type.clone());
+                }
+                crate::WinnowBackend::get_builtins()
+                    .iter()
+                    .find(|b| b.name == name)
+                    .and_then(|b| syn::parse_str::<syn::Type>(b.return_type).ok())
+            }
+            _ => None,
+        }
+    }
+
     pub fn generate_rule_call_parser(
         &self,
         rule_path: &syn::Path,
@@ -340,44 +395,57 @@ impl<'a> Codegen<'a> {
                 .find(|r| r.name == name_str)
                 .unwrap();
 
-            // 2. Prüfen, ob es sich um eine Template-Regel handelt
-            let is_template = target_rule.params.iter().any(|p| {
-                if let Some(syn::Type::Path(type_path)) = &p.ty {
-                    if let Some(segment) = type_path.path.segments.last() {
-                        return segment.ident == "Rule";
-                    }
-                }
-                false
-            });
-
-            if is_template {
-                // 3a. Typ-Generics Substitutions-Map aufbauen (z.B. T -> u32)
-                let mut type_subst = HashMap::new();
-                for (idx, gen_param) in target_rule.generics.params.iter().enumerate() {
-                    if let syn::GenericParam::Type(ty_param) = gen_param {
-                        if let Some(call_ty) = call_generics.get(idx) {
-                            type_subst.insert(ty_param.ident.to_string(), call_ty.clone());
-                        }
-                    }
-                }
-
-                // 3b. Substitutions-Map aus den Parametern und Argumenten aufbauen
+            if super::ist_vorlage(target_rule) {
+                // 3b. Parser-Parameter -> Argumentmuster
+                let arg_patterns: Vec<ModelPattern> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
+                    })
+                    .collect();
                 let mut subst = HashMap::new();
-                for (idx, param) in target_rule.params.iter().enumerate() {
-                    if let Some(arg) = args.get(idx) {
-                        let arg_pattern = match arg {
-                            Argument::Positional(p) => p.clone(),
-                            Argument::Named(_, p) => p.clone(),
-                        };
-                        subst.insert(param.name.to_string(), arg_pattern);
+                for (param, arg_pattern) in target_rule.params.iter().zip(&arg_patterns) {
+                    subst.insert(param.name.to_string(), arg_pattern.clone());
+                }
+
+                // 3a. Typparameter -> Typ. Explizit angegebene (`list<u32>(…)`)
+                // gewinnen; fehlende werden aus dem Argument an derselben
+                // Position abgeleitet (`list(item=u32)` -> T = u32). Dieselbe
+                // Konvention wie syn-grammars Monomorphizer: der i-te
+                // Typparameter gehoert zum i-ten Parser-Parameter.
+                let mut type_subst = HashMap::new();
+                let type_params = target_rule.generics.params.iter().filter_map(|g| match g {
+                    syn::GenericParam::Type(t) => Some(t.ident.to_string()),
+                    _ => None,
+                });
+                for (idx, name) in type_params.enumerate() {
+                    if let Some(call_ty) = call_generics.get(idx) {
+                        type_subst.insert(name, call_ty.clone());
+                    } else if let Some(ty) =
+                        arg_patterns.get(idx).and_then(|p| self.leite_typ_ab(p))
+                    {
+                        type_subst.insert(name, ty);
                     }
                 }
 
-                // 4. AST der Regel klonen und Parameter ersetzen
+                // 4. AST der Regel klonen, Parameter und Typen ersetzen -
+                //    in Mustern UND in den Aktionsbloecken (`Vec::<T>::new()`).
                 let mut inlined_variants = target_rule.variants.clone();
                 for variant in &mut inlined_variants {
                     for step in &mut variant.pattern {
-                        substitute_pattern(step, &subst);
+                        substitute_pattern(step, &subst, &type_subst);
+                    }
+                    // Der Aktionsblock liegt ohne seine Klammern vor; fuer die
+                    // Typersetzung wird er als Block geparst und mit Klammern
+                    // zurueckgeschrieben - ein Block in Ausdrucksposition ist
+                    // ueberall gueltig, wo die Tokens vorher standen.
+                    let action = &variant.action;
+                    if let Ok(mut block) = syn::parse2::<syn::Block>(quote::quote!({ #action })) {
+                        syn::visit_mut::VisitMut::visit_block_mut(
+                            &mut TypSubst(&type_subst),
+                            &mut block,
+                        );
+                        variant.action = quote::quote!(#block);
                     }
                 }
 
