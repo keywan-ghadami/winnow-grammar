@@ -1,9 +1,9 @@
-//! Laufzeithelfer fuer den erzeugten Code - die Stellen, an denen die
-//! Diagnose-Engine ([`crate::ParseError`]) eingreift.
+//! Runtime helpers for the generated code - the places where the
+//! diagnostics engine ([`crate::ParseError`]) steps in.
 //!
-//! Alles hier arbeitet konkret auf [`ParseInput`], weil es den Zustand
-//! (`input.state`) braucht: dort liegt die weiteste Fehlschlagstelle, die ein
-//! erfolgreiches Zuruecksetzen sonst verwerfen wuerde.
+//! Everything here works concretely on [`ParseInput`] because it needs the
+//! state (`input.state`): that is where the furthest failure position lives,
+//! which a successful backtrack would otherwise discard.
 
 use crate::error::{ParseError, PRIO_LABELED, PRIO_STRUCTURAL};
 use crate::ParseInput;
@@ -13,9 +13,9 @@ use winnow::Parser;
 
 type Fehler = ErrMode<ParseError>;
 
-/// `x?` - hoechstens einmal. Ein gescheiterter Versuch wird **gemerkt**, nicht
-/// weggeworfen: scheitert die Regel spaeter an flacherer Stelle oder bleibt
-/// Eingabe uebrig, ist er die bessere Meldung.
+/// `x?` - at most once. A failed attempt is **recorded**, not thrown away:
+/// if the rule later fails at a shallower position or input is left over, it
+/// is the better message.
 pub fn opt_merkend<'a, S: Clone + std::fmt::Debug, O, P>(
     mut p: P,
 ) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Option<O>, Fehler>
@@ -36,9 +36,9 @@ where
     }
 }
 
-/// `x*` / `x+` - Wiederholung mit Mindestanzahl. Der Grund, warum es nicht
-/// weiterging, wird gemerkt und traegt den Index des versuchten Elements
-/// (`in item 3`). Unter der Mindestanzahl ist er der Fehler selbst.
+/// `x*` / `x+` - repetition with a minimum count. The reason why it did not
+/// continue is recorded and carries the index of the attempted element
+/// (`in item 3`). Below the minimum count it is the error itself.
 pub fn repeat_merkend<'a, S: Clone + std::fmt::Debug, O, P>(
     min: usize,
     mut p: P,
@@ -53,8 +53,8 @@ where
             let start = input.current_token_start();
             match p.parse_next(input) {
                 Ok(v) => {
-                    // Zero-Progress-Schutz: sonst dreht sich die Schleife ewig,
-                    // wenn das Element ohne Verbrauch passt.
+                    // Zero-progress guard: otherwise the loop spins forever
+                    // when the element matches without consuming anything.
                     if input.current_token_start() == start {
                         input.reset(&cp);
                         break;
@@ -77,10 +77,10 @@ where
     }
 }
 
-/// Eine benannte Alternative (`# "…"`). Scheitert sie an ihrer Anfangsstelle,
-/// zaehlt ihr Name als Erwartung statt der internen Meldung: aus
-/// ``expected `(` `` wird `expected function argument`. Kam sie voran, ist ihre
-/// eigene Meldung die aussagekraeftigere und bleibt.
+/// A labelled alternative (`# "…"`). If it fails at its starting position,
+/// its name counts as the expectation instead of the internal message:
+/// ``expected `(` `` becomes `expected function argument`. If it made
+/// progress, its own message is the more informative one and stays.
 pub fn beschriftet<'a, S: Clone + std::fmt::Debug, O, P>(
     label: &'static str,
     mut p: P,
@@ -103,9 +103,8 @@ where
     }
 }
 
-/// Gibt einem Builtin eine Erwartung (`identifier`, `integer literal`), falls
-/// es ohne eine gescheitert ist - winnows eigene Primitiven melden nur die
-/// Stelle.
+/// Gives a builtin an expectation (`identifier`, `integer literal`) if it
+/// failed without one - winnow's own primitives only report the position.
 pub fn erwartet<'a, S: Clone + std::fmt::Debug, O, P>(
     was: &'static str,
     mut p: P,
@@ -126,8 +125,8 @@ where
     }
 }
 
-/// `fail("…")`: Meldung wortwoertlich, hochprior - aber nicht fatal. Ein
-/// weiter gekommener Fehler gewinnt trotzdem (Fortschritt vor Prioritaet).
+/// `fail("…")`: verbatim message, high priority - but not fatal. An error
+/// that got further still wins (progress before priority).
 pub fn fail<'a, S: Clone + std::fmt::Debug, O>(
     meldung: &'static str,
 ) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, Fehler> {
@@ -140,13 +139,12 @@ pub fn fail<'a, S: Clone + std::fmt::Debug, O>(
     }
 }
 
-/// Schliesst einen Aufruf der oeffentlichen `parse_<regel>()` ab.
+/// Finishes a call of the public `parse_<rule>()`.
 ///
-/// Der zurueckgegebene Fehler ist nicht zwingend der aussagekraeftigste - ein
-/// weiter gekommener kann unterwegs von einem erfolgreichen Zuruecksetzen
-/// ueberdeckt worden sein. Und ist die Regel aufgegangen, ohne alles zu
-/// verbrauchen, ist der gemerkte Grund die Antwort - sonst bliebe nur
-/// "expected end of input".
+/// The returned error is not necessarily the most informative one - one that
+/// got further may have been hidden along the way by a successful backtrack.
+/// And if the rule succeeded without consuming everything, the recorded
+/// reason is the answer - otherwise only "expected end of input" would remain.
 pub fn abschluss<'a, S: Clone + std::fmt::Debug, O>(
     input: &mut ParseInput<'a, S>,
     ergebnis: Result<O, Fehler>,

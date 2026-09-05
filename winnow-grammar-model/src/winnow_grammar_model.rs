@@ -1,14 +1,14 @@
 //! # winnow-grammar-model
 //!
-//! Parser, Modell und Validator der Grammatik-DSL.
+//! Parser, model and validator of the grammar DSL.
 //!
-//! **Herkunft:** Fork von `syn-grammar-model` aus
-//! <https://github.com/keywan-ghadami/syn-grammar>, abgezweigt bei Commit
-//! `64be1ef830e5996935ff6465b9552f2cdd060dff` (2026-08-31, Version 0.9.0-Entwurf).
-//! Ab hier entwickeln sich beide Fassungen unabhaengig weiter; fuer einen
-//! Abgleich ist der Fork-Punkt der Bezugspunkt. Gegenueber dem Original fehlt
-//! `model::types` (`Identifier`/`StringLiteral`/`SpannedValue`) - winnow bringt
-//! eigene Laufzeittypen mit.
+//! **Origin:** fork of `syn-grammar-model` from
+//! <https://github.com/keywan-ghadami/syn-grammar>, branched off at commit
+//! `64be1ef830e5996935ff6465b9552f2cdd060dff` (2026-08-31, version 0.9.0 draft).
+//! From here on both versions evolve independently; for a comparison the fork
+//! point is the reference. Compared to the original, `model::types`
+//! (`Identifier`/`StringLiteral`/`SpannedValue`) is missing - winnow brings its
+//! own runtime types.
 //!
 //! This library contains the shared logic for parsing, validating, and analyzing
 //! grammar definitions. It is intended to be used by procedural macros

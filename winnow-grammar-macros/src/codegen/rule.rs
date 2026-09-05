@@ -10,8 +10,8 @@ use winnow_grammar_model::{
 impl<'a> Codegen<'a> {
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
         if super::ist_vorlage(rule) {
-            // Template-Regeln werden nicht als eigene Funktionen kompiliert.
-            // Sie werden in expr.rs beim Aufruf durch AST-Substitution direkt ge-inlined.
+            // Template rules are not compiled as functions of their own.
+            // They are inlined directly at the call site in expr.rs via AST substitution.
             return quote! {};
         }
 
@@ -171,9 +171,9 @@ impl<'a> Codegen<'a> {
                 })
                 .context(::winnow::error::StrContext::Label(#rule_name_str));
 
-                // Der Regelname liegt waehrend des Rumpfs auf dem lebenden
-                // Stapel, damit ein unterwegs GEMERKTER Fehler ihn mitbekommt.
-                // Herausgereichte Fehler sammeln ihn ueber `.context(Label)`.
+                // The rule name sits on the live stack for the duration of the
+                // body, so that an error RECORDED along the way picks it up.
+                // Errors passed out collect it via `.context(Label)`.
                 #input.state.regeln.push(#rule_name_str);
                 let ergebnis = {
                     #[cfg(feature = "trace")]
@@ -202,7 +202,7 @@ impl<'a> Codegen<'a> {
             move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
                 #(#param_wrappers)*
 
-                // Einstiegspunkt: die Merkstelle gehoert zu DIESEM Lauf.
+                // Entry point: the recorded error belongs to THIS run.
                 input.state.furthest = None;
 
                 let ergebnis: ::winnow::Result<#ret_type, ::winnow::error::ErrMode<#err_type>> = (|| {
@@ -212,8 +212,8 @@ impl<'a> Codegen<'a> {
                     Ok(result)
                 })();
 
-                // Fehlerauswahl gegen die Merkstelle und Pruefung auf Resteingabe -
-                // siehe `rt::abschluss`.
+                // Error selection against the recorded error and check for
+                // leftover input - see `rt::abschluss`.
                 ::winnow_grammar::rt::abschluss(input, ergebnis)
             }
         };

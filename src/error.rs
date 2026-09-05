@@ -1,38 +1,38 @@
-//! Der Fehlertyp der erzeugten Parser - die Diagnose-Engine.
+//! The error type of the generated parsers - the diagnostics engine.
 //!
-//! Vertrag: `docs/adr/adr15-diagnostics.md`. Die Auswahl zwischen
-//! konkurrierenden Fehlern folgt derselben Rangfolge wie in syn-grammar
-//! (ADR 13 dort): **Fortschritt, dann Prioritaet, dann Zusammenfassung**.
-//! Im Text ist der Fortschritt ein Byte-Offset - `LocatingSlice` liefert ihn
-//! umsonst, ein Cursor-Kunstgriff wie in syn-grammar ist nicht noetig.
+//! Contract: `docs/adr/adr15-diagnostics.md`. The choice between competing
+//! errors follows the same ranking as in syn-grammar (ADR 13 there):
+//! **progress, then priority, then aggregation**. In text, progress is a
+//! byte offset - `LocatingSlice` provides it for free, so a cursor trick
+//! like the one in syn-grammar is not needed.
 //!
-//! winnow reicht Fehler ueber `ParserError::or` durch `alt` - deshalb
-//! genuegt es, die Auswahl dort zu implementieren, und jede Alternative
-//! im erzeugten Code bekommt sie geschenkt. Was `alt` nicht sieht, sind
-//! Fehler, die ein *erfolgreiches* Zuruecksetzen verwirft (`x?`, `x*`);
-//! dafuer fuehrt [`crate::ParseContext`] die weiteste Fehlschlagstelle mit.
+//! winnow passes errors through `alt` via `ParserError::or` - so it is
+//! enough to implement the selection there, and every alternative in the
+//! generated code gets it for free. What `alt` does not see are errors
+//! discarded by a *successful* backtrack (`x?`, `x*`); for those,
+//! [`crate::ParseContext`] carries the furthest failure position along.
 
 use std::fmt;
 use winnow::error::{AddContext, FromExternalError, ParserError, StrContext};
 use winnow::stream::{AsBStr, Location, Stream};
 
-/// Gewoehnlicher Parsefehler.
+/// Ordinary parse error.
 pub const PRIO_NORMAL: u8 = 0;
-/// Eine benannte Alternative (`# "…"`) ist an ihrer Grenze gescheitert.
+/// A labelled alternative (`# "…"`) failed at its boundary.
 pub const PRIO_LABELED: u8 = 10;
-/// Zusammengefasste Erwartungen mehrerer Alternativen (`expected one of: …`).
+/// Aggregated expectations of several alternatives (`expected one of: …`).
 pub const PRIO_AGGREGATED: u8 = 20;
-/// `fail("…")`: schlaegt an derselben Stelle alles andere.
+/// `fail("…")`: beats everything else at the same position.
 pub const PRIO_STRUCTURAL: u8 = 50;
 
-/// Ein Parsefehler mit allem, was Auswahl und Anzeige brauchen.
+/// A parse error with everything that selection and display need.
 ///
-/// Zeigergross: der Inhalt liegt in einem [`Kern`] auf dem Heap, die Felder
-/// sind per `Deref` erreichbar (`e.expected`, `e.offset`). Ein Fehler ist der
-/// seltene Pfad, der Erfolg der haeufige - und jede Closure-Ebene des
-/// erzeugten Parsers haelt ein `Result<_, ErrMode<ParseError>>` auf dem
-/// Stack. Mit dem Inhalt inline (rund 130 Byte) lief eine 500-fach
-/// verschachtelte Regel im Debug-Build in den Stack-Overflow.
+/// Pointer-sized: the content lives in a [`Kern`] on the heap, the fields
+/// are reachable via `Deref` (`e.expected`, `e.offset`). An error is the
+/// rare path, success the common one - and every closure level of the
+/// generated parser holds a `Result<_, ErrMode<ParseError>>` on the stack.
+/// With the content inline (around 130 bytes), a 500-fold nested rule ran
+/// into a stack overflow in the debug build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError(Box<Kern>);
 
@@ -49,29 +49,29 @@ impl std::ops::DerefMut for ParseError {
     }
 }
 
-/// Der Inhalt eines [`ParseError`].
+/// The content of a [`ParseError`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Kern {
-    /// Fuer die AUSWAHL: Byte-Offset, an dem es schiefging. Wer weiter kam,
-    /// war naeher an der gemeinten Ableitung.
+    /// For SELECTION: byte offset at which things went wrong. Whoever got
+    /// further was closer to the intended derivation.
     pub offset: usize,
-    /// Was an dieser Stelle erwartet wurde, in Anzeigeform (``"`;`"``,
-    /// `"identifier"`, `"function argument"`). Dedupliziert.
+    /// What was expected at this position, in display form (``"`;`"``,
+    /// `"identifier"`, `"function argument"`). Deduplicated.
     pub expected: Vec<String>,
-    /// Eine wortwoertliche Meldung (`fail("…")`, externe Fehler wie
-    /// "number too large"). Ersetzt die `expected`-Zeile.
+    /// A verbatim message (`fail("…")`, external errors such as
+    /// "number too large"). Replaces the `expected` line.
     pub message: Option<String>,
-    /// Was tatsaechlich dastand: das naechste Wort bzw. Zeichen. `None` am
-    /// Ende der Eingabe.
+    /// What was actually there: the next word or character. `None` at the
+    /// end of input.
     pub found: Option<String>,
-    /// Die Regeln, in denen der Fehler auftrat, innerste zuerst. Nur Anzeige.
+    /// The rules in which the error occurred, innermost first. Display only.
     pub rule_stack: Vec<String>,
-    /// Rang bei GLEICHER Stelle. Siehe die `PRIO_*`-Konstanten.
+    /// Rank at the SAME position. See the `PRIO_*` constants.
     pub priority: u8,
 }
 
 impl ParseError {
-    /// Fehler an der aktuellen Position des Stroms.
+    /// Error at the current position of the stream.
     pub fn from_stream<I: Stream + Location + AsBStr>(input: &I) -> Self {
         ParseError(Box::new(Kern {
             offset: input.current_token_start(),
@@ -83,7 +83,7 @@ impl ParseError {
         }))
     }
 
-    /// Haengt eine Erwartung an, falls sie noch nicht dasteht.
+    /// Appends an expectation unless it is already present.
     pub fn erwarte(mut self, was: impl Into<String>) -> Self {
         let was = was.into();
         if !self.expected.contains(&was) {
@@ -92,35 +92,34 @@ impl ParseError {
         self
     }
 
-    /// Setzt eine wortwoertliche Meldung.
+    /// Sets a verbatim message.
     pub fn mit_meldung(mut self, meldung: impl Into<String>) -> Self {
         self.message = Some(meldung.into());
         self
     }
 
-    /// Setzt die Prioritaet.
+    /// Sets the priority.
     pub fn mit_prioritaet(mut self, prio: u8) -> Self {
         self.priority = prio;
         self
     }
 
-    /// Haengt einen Regelnamen an den Stapel - auf dem Rueckgabepfad, wenn eine
-    /// aeussere Regel den Fehler herausreicht. Direkte Wiederholungen werden
-    /// verschluckt.
+    /// Pushes a rule name onto the stack - on the return path, when an outer
+    /// rule passes the error on. Immediate repetitions are swallowed.
     pub fn push_rule(&mut self, rule: &str) {
         if self.rule_stack.last().map(String::as_str) != Some(rule) {
             self.rule_stack.push(rule.to_string());
         }
     }
 
-    /// Waehlt aus zwei konkurrierenden Fehlern den aussagekraeftigeren.
+    /// Chooses the more informative of two competing errors.
     ///
-    /// 1. **Fortschritt**: wer weiter im Input kam, gewinnt - auch gegen ein
-    ///    `fail(..)`, das frueher stand.
-    /// 2. **Prioritaet** bei gleicher Stelle: `fail` > Zusammenfassung > Label >
-    ///    Standard.
-    /// 3. Bei Gleichstand werden die Erwartungen **vereinigt**: aus zwei
-    ///    Alternativen an derselben Stelle wird `expected one of: …`.
+    /// 1. **Progress**: whoever got further in the input wins - even against a
+    ///    `fail(..)` that came earlier.
+    /// 2. **Priority** at the same position: `fail` > aggregation > label >
+    ///    default.
+    /// 3. On a tie, the expectations are **merged**: two alternatives at the
+    ///    same position become `expected one of: …`.
     pub fn merge(mut self, other: Self) -> Self {
         use std::cmp::Ordering::*;
         match self.offset.cmp(&other.offset) {
@@ -142,8 +141,8 @@ impl ParseError {
         if self.message.is_none() {
             self.message = other.message;
         }
-        // Der spaetere Zweig bestimmt den Stapel - wie in syn-grammar gewinnt
-        // bei Gleichstand der zuletzt gemerkte.
+        // The later branch determines the stack - as in syn-grammar, on a tie
+        // the most recently recorded one wins.
         if !other.rule_stack.is_empty() {
             self.rule_stack = other.rule_stack;
         }
@@ -153,7 +152,7 @@ impl ParseError {
         self
     }
 
-    /// Die erste Zeile der Meldung - ohne Position und Regelstapel.
+    /// The first line of the message - without position and rule stack.
     pub fn kopf(&self) -> String {
         if let Some(m) = &self.message {
             return m.clone();
@@ -174,7 +173,7 @@ impl ParseError {
         }
     }
 
-    /// Zeile und Spalte (1-basiert) von [`Kern::offset`] in `source`.
+    /// Line and column (1-based) of [`Kern::offset`] in `source`.
     pub fn zeile_spalte(&self, source: &str) -> (usize, usize) {
         let bis = self.offset.min(source.len());
         let vor = &source[..bis];
@@ -183,11 +182,11 @@ impl ParseError {
         (zeile, spalte)
     }
 
-    /// Die vollstaendige Meldung mit Position, wie sie ein Nutzer sehen soll.
+    /// The complete message with position, as a user should see it.
     ///
-    /// `Display` laesst die Position weg, weil winnows eigener `ParseError`
-    /// (aus `Parser::parse`) sie samt Quellzeile voranstellt; wer ueber
-    /// `parse_next` geht, hat die Quelle selbst und ruft dies hier.
+    /// `Display` leaves out the position because winnow's own `ParseError`
+    /// (from `Parser::parse`) prepends it along with the source line; whoever
+    /// goes through `parse_next` has the source themselves and calls this.
     pub fn render(&self, source: &str) -> String {
         let (zeile, spalte) = self.zeile_spalte(source);
         let mut s = format!("{} at line {}, column {}", self.kopf(), zeile, spalte);
@@ -199,7 +198,7 @@ impl ParseError {
     }
 }
 
-/// Das naechste Wort (Buchstaben, Ziffern, `_`) oder das naechste Zeichen.
+/// The next word (letters, digits, `_`) or the next character.
 fn naechstes_wort(rest: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(&rest[..rest.len().min(64)]);
     let erstes = text.chars().next()?;
@@ -235,8 +234,8 @@ impl<I: Stream + Location + AsBStr> ParserError<I> for ParseError {
         Self::from_stream(input)
     }
 
-    /// `alt` reicht die Fehler seiner Zweige hier durch - das ist die
-    /// Fehlerauswahl fuer jede Alternative im erzeugten Code.
+    /// `alt` passes the errors of its branches through here - this is the
+    /// error selection for every alternative in the generated code.
     fn or(self, other: Self) -> Self {
         self.merge(other)
     }

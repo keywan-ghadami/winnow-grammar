@@ -22,10 +22,10 @@
 - `u32`, `i32` etc map to `winnow::ascii::dec_uint/int`.
 - `ident`, `string`, `char` have custom winnow implementations in codegen.
 
-## Wichtige Hinweise für KI-Agenten
+## Important notes for AI agents
 
-1.  **Antworte auf Fragen, handle nicht voreilig:** Wenn eine Ja/Nein-Frage gestellt wird, gib eine direkte Ja- oder Nein-Antwort. Interpretiere die Frage nicht als implizite Aufforderung, eine Aktion auszuführen.
-2.  **Erfinde keine Syntax:** Das `grammar!`-Makro hat eine sehr spezifische, nicht-generische Syntax. Versuche nicht, Generics (z.B. `<'a>`), `where`-Klauseln oder andere Syntax hinzuzufügen, die nicht explizit von der Definition des Makros unterstützt wird. Das Makro ist kein Standard-Rust-Makro und hat seine eigene domänenspezifische Sprache (DSL).
-3.  **Analysiere, bevor du handelst:** Bevor du versuchst, ein Problem zu beheben, analysiere den vorhandenen Code, insbesondere die Makros und Testmuster, um den richtigen Ansatz zu verstehen. Mache keine Annahmen darüber, wie die Dinge funktionieren *sollten*.
-4.  **Bestätigung einholen:** Bevor du komplexe Aktionen oder Änderungen am Code vornimmst, präsentiere den Plan dem Benutzer zur Genehmigung.
-5.  **Benutze `cargo expand`, um die Makro-DSL zu verstehen:** Das `grammar!`-Makro ist eine domänenspezifische Sprache (DSL). Um ihre korrekte Syntax für komplexere Anwendungsfälle (z.B. manuelle Tests ohne das `test_case!`-Makro) zu verstehen, **rate nicht**. Verwende stattdessen den Befehl `cargo expand --test <test_name>` (z.B. `cargo expand --test char_test`) für eine funktionierende Testdatei. Analysiere den expandierten Code, um die exakte Struktur zu verstehen, die das Makro erzeugt, und wende dieses Wissen an, um neuen Code zu schreiben.
+1.  **Answer questions, do not act prematurely:** When a yes/no question is asked, give a direct yes or no answer. Do not interpret the question as an implicit request to perform an action.
+2.  **Do not invent syntax:** The `grammar!` macro has a very specific, non-generic syntax. Do not try to add generics (e.g. `<'a>`), `where` clauses or other syntax that is not explicitly supported by the macro's definition. The macro is not a standard Rust macro and has its own domain-specific language (DSL).
+3.  **Analyse before you act:** Before trying to fix a problem, analyse the existing code, in particular the macros and test patterns, to understand the right approach. Do not make assumptions about how things *should* work.
+4.  **Get confirmation:** Before making complex actions or changes to the code, present the plan to the user for approval.
+5.  **Use `cargo expand` to understand the macro DSL:** The `grammar!` macro is a domain-specific language (DSL). To understand its correct syntax for more complex use cases (e.g. manual tests without the `test_case!` macro), **do not guess**. Instead, run `cargo expand --test <test_name>` (e.g. `cargo expand --test char_test`) on a working test file. Analyse the expanded code to understand the exact structure the macro generates, and apply that knowledge to write new code.

@@ -28,9 +28,9 @@ where
             state,
         };
 
-        // Mit Position: `parse_next` liefert den nackten Fehler, die Quelle
-        // liegt hier vor - also wird sie eingerechnet, damit Tests auf
-        // `at line 1, column 8` pruefen koennen.
+        // With position: `parse_next` yields the bare error, the source is
+        // available here - so it is factored in, so that tests can check for
+        // `at line 1, column 8`.
         let result = self.parse_next(&mut stream).map_err(|e| e.render(input));
 
         let final_context = stream.state;

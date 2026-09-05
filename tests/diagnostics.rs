@@ -1,5 +1,5 @@
-//! Der Vertrag fuer Fehlermeldungen - ein Test je Punkt von ADR 15
-//! (`docs/adr/adr15-diagnostics.md`). Bei Widerspruch gilt das ADR.
+//! The contract for error messages - one test per point of ADR 15
+//! (`docs/adr/adr15-diagnostics.md`). In case of conflict, the ADR wins.
 
 use winnow::prelude::*;
 use winnow::stream::{LocatingSlice, Stateful};
@@ -12,15 +12,15 @@ grammar! {
         arg -> String = n:raw_ident ":" t:typ ","? -> { format!("{n}:{t}") }
         typ -> String = t:raw_ident -> { t.to_string() } | "&" t:raw_ident -> { format!("&{t}") }
 
-        // Benannte Alternativen: an ihrer Grenze zaehlt der Name als Erwartung.
+        // Labelled alternatives: at their boundary, the name counts as the expectation.
         pub assign -> String = "let" v:value ";" -> { v }
         value -> String = n:u32 # "number" -> { n.to_string() } | s:string # "string" -> { s.to_string() }
 
-        // fail: hochprior, aber nicht fatal - Fortschritt geht vor.
+        // fail: high priority, but not fatal - progress takes precedence.
         pub guarded -> u32 = "a" fail("custom failure here") -> { 0 } | "a" "b" "c" -> { 1 }
 
-        // Eine eigene Bezeichnerregel, die keine Ziffer am Anfang zulaesst -
-        // heute schon moeglich, ohne Aenderung an `ident`.
+        // A custom identifier rule that does not allow a leading digit -
+        // already possible today, without changing `ident`.
         IDENT -> &'a str = not(digit1) s:raw_ident # "identifier" -> { s }
         pub named -> String = "fn" n:IDENT ";" -> { n.to_string() }
     }
@@ -33,8 +33,8 @@ fn fehler(q: &str) -> String {
     }
 }
 
-/// Punkt 1: Alternativen an derselben Stelle werden zusammengefasst - und
-/// was tatsaechlich dastand, wird genannt.
+/// Point 1: alternatives at the same position are aggregated - and what was
+/// actually there is named.
 #[test]
 fn p01_alternativen_zusammengefasst_mit_fund() {
     let e = fehler("fn f(a: );");
@@ -44,7 +44,7 @@ fn p01_alternativen_zusammengefasst_mit_fund() {
     );
 }
 
-/// Punkt 2: Position als Zeile und Spalte, 1-basiert, auch ueber Zeilen hinweg.
+/// Point 2: position as line and column, 1-based, also across lines.
 #[test]
 fn p02_position_zeile_und_spalte() {
     assert!(
@@ -56,16 +56,16 @@ fn p02_position_zeile_und_spalte() {
     assert!(e.contains(" at line 2, column 8"), "{e}");
 }
 
-/// Punkt 3: der Regelstapel, innerste zuerst - auch fuer einen Fehler, den
-/// ein erfolgreiches Zuruecksetzen (`arg*`) verworfen hat. Die aeussere Regel
-/// `decl` kommt vom lebenden Stapel.
+/// Point 3: the rule stack, innermost first - also for an error that a
+/// successful backtrack (`arg*`) discarded. The outer rule `decl` comes from
+/// the live stack.
 #[test]
 fn p03_regelstapel_innerste_zuerst() {
     let e = fehler("fn f(a: );");
     assert!(e.ends_with("\nin typ\nin arg\nin item 1\nin decl"), "{e}");
 }
 
-/// Punkt 4: am Ende der Eingabe heisst es so.
+/// Point 4: at the end of input it is worded like this.
 #[test]
 fn p04_ende_der_eingabe() {
     let e = fehler("fn f(a: i32)");
@@ -75,7 +75,7 @@ fn p04_ende_der_eingabe() {
     );
 }
 
-/// Punkt 5: bleibt Eingabe uebrig, nennt die Meldung den Grund, nicht nur
+/// Point 5: if input is left over, the message names the reason, not just
 /// "expected end of input".
 #[test]
 fn p05_resteingabe_nennt_den_grund() {
@@ -86,8 +86,8 @@ fn p05_resteingabe_nennt_den_grund() {
     );
 }
 
-/// Punkt 6: eine benannte Alternative (`# "…"`), die an ihrer Grenze scheitert,
-/// steuert ihren Namen als Erwartung bei - nicht ihre interne Meldung.
+/// Point 6: a labelled alternative (`# "…"`) that fails at its boundary
+/// contributes its name as the expectation - not its internal message.
 #[test]
 fn p06_label_als_erwartung() {
     let e = Diag::parse_assign().parse_test("let ?;").inner.unwrap_err();
@@ -97,7 +97,7 @@ fn p06_label_als_erwartung() {
     );
 }
 
-/// Punkt 7: kam die benannte Alternative voran, bleibt ihre eigene Meldung.
+/// Point 7: if the labelled alternative made progress, its own message stays.
 #[test]
 fn p07_label_nur_ohne_fortschritt() {
     let e = Diag::parse_assign()
@@ -108,17 +108,17 @@ fn p07_label_nur_ohne_fortschritt() {
     assert!(e.contains("expected `\"`"), "{e}");
 }
 
-/// Punkt 8: an derselben Stelle gewinnt `fail(..)` durch seine Prioritaet.
+/// Point 8: at the same position, `fail(..)` wins through its priority.
 #[test]
 fn p08_fail_gewinnt_bei_gleichstand() {
     let e = Diag::parse_guarded().parse_test("a").inner.unwrap_err();
     assert!(e.starts_with("custom failure here"), "{e}");
 }
 
-/// Punkt 9: ... aber Fortschritt schlaegt Prioritaet - ein weiter gekommener
-/// Fehler gewinnt auch gegen ein `fail(..)`, das frueher stand. (Bei `a c`
-/// scheitern beide Zweige an derselben Stelle, dort gewinnt `fail` zu Recht -
-/// siehe Punkt 8. Hier kommt der zweite Zweig ueber `b` hinaus.)
+/// Point 9: ... but progress beats priority - an error that got further also
+/// wins against a `fail(..)` that came earlier. (With `a c` both branches fail
+/// at the same position, where `fail` rightly wins - see point 8. Here the
+/// second branch gets past `b`.)
 #[test]
 fn p09_fortschritt_schlaegt_fail() {
     let e = Diag::parse_guarded().parse_test("a b x").inner.unwrap_err();
@@ -129,15 +129,15 @@ fn p09_fortschritt_schlaegt_fail() {
     assert!(!e.contains("custom failure"), "{e}");
 }
 
-/// Punkt 10: Listenelemente tragen ihren Index, 1-basiert.
+/// Point 10: list elements carry their index, 1-based.
 #[test]
 fn p10_listenindex() {
     let e = fehler("fn f(a: i32, 123);");
     assert!(e.contains("\nin item 2\n"), "{e}");
 }
 
-/// Punkt 11: `Display` traegt keine Position (winnows `Parser::parse` stellt
-/// sie samt Quellzeile selbst voran); `render(source)` traegt sie.
+/// Point 11: `Display` carries no position (winnow's `Parser::parse` prepends
+/// it itself along with the source line); `render(source)` carries it.
 #[test]
 fn p11_display_ohne_position_render_mit() {
     let mut s = Stateful {
@@ -150,8 +150,8 @@ fn p11_display_ohne_position_render_mit() {
     assert_eq!(e.offset, 8);
 }
 
-/// Punkt 12: der Fehler ist ein Wert mit Feldern - Werkzeuge koennen ihn
-/// auswerten, statt Text zu parsen.
+/// Point 12: the error is a value with fields - tools can evaluate it instead
+/// of parsing text.
 #[test]
 fn p12_fehler_ist_strukturiert() {
     let mut s = Stateful {
@@ -167,7 +167,7 @@ fn p12_fehler_ist_strukturiert() {
     assert_eq!(e.rule_stack, vec!["typ", "arg", "item 1", "decl"]);
 }
 
-/// Eine eigene Bezeichnerregel ohne fuehrende Ziffer geht heute schon.
+/// A custom identifier rule without a leading digit already works today.
 #[test]
 fn eigene_ident_regel_ohne_fuehrende_ziffer() {
     Diag::parse_named()

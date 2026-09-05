@@ -2,7 +2,7 @@
 name = "winnow-grammar-macros"
 version = "0.1.0"
 edition = "2021"
-description = "Das `grammar!`-Makro für winnow-grammar."
+description = "The `grammar!` macro for winnow-grammar."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/keywan-ghadami/winnow-grammar"
 

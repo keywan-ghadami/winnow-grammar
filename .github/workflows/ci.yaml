@@ -1,7 +1,7 @@
 name: Rust CI
 
 on:
-  # Bewusst ohne Branch-Filter: auf Arbeitsbranches lief sonst gar keine CI.
+  # Deliberately without a branch filter: otherwise no CI ran on working branches.
   push:
   pull_request:
   workflow_dispatch:
@@ -17,11 +17,10 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Gepinnt, nicht `stable`. `-D warnings` auf einer gleitenden Toolchain
-      # heisst: die CI kann rot werden, ohne dass sich eine Zeile aendert -
-      # sobald eine Rust-Veroeffentlichung einen Lint ergaenzt. Der Job
-      # `lint-vorschau` unten laeuft weiter auf `stable` und meldet neue Lints,
-      # ohne zu blockieren.
+      # Pinned, not `stable`. `-D warnings` on a moving toolchain means the CI
+      # can turn red without a single line changing - as soon as a Rust
+      # release adds a lint. The `lint-preview` job below keeps running on
+      # `stable` and reports new lints without blocking.
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@1.98.0
         with:
@@ -34,9 +33,9 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Linting (Clippy)
-        # `--workspace --all-targets` deckt auch die Makro-Crates, Tests und
-        # Beispiele ab. Ohne das lief Clippy nur ueber lib und bins des
-        # Wurzel-Crates - genau dort, wo die Warnungen NICHT waren.
+        # `--workspace --all-targets` also covers the macro crates, tests and
+        # examples. Without it, Clippy only ran over lib and bins of the root
+        # crate - exactly where the warnings were NOT.
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build
@@ -51,11 +50,11 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --document-private-items
 
-  lint-vorschau:
-    name: Lint-Vorschau (stable, nicht blockierend)
+  lint-preview:
+    name: Lint preview (stable, non-blocking)
     runs-on: ubuntu-latest
-    # Meldet Lints einer neueren Toolchain, bevor das Anheben der gepinnten
-    # Version faellig wird. Ein Fehlschlag hier ist eine Vorwarnung, kein Stopp.
+    # Reports lints of a newer toolchain before raising the pinned version
+    # becomes due. A failure here is an early warning, not a stop.
     continue-on-error: true
     steps:
       - name: Checkout Code
@@ -69,7 +68,7 @@ jobs:
       - name: Cache Cargo Registry
         uses: Swatinem/rust-cache@v2
         with:
-          key: lint-vorschau
+          key: lint-preview
 
       - name: Check Formatting
         run: cargo fmt --all -- --check

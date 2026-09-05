@@ -68,9 +68,9 @@ impl<'a> Codegen<'a> {
                     #final_expr
                 }
             };
-            // `# "…"`: scheitert die Alternative an ihrer Anfangsstelle, zaehlt
-            // ihr Name als Erwartung. Das Label wurde bisher geparst und
-            // verworfen.
+            // `# "…"`: if the alternative fails at its starting position, its
+            // name counts as the expectation. Until now the label was parsed
+            // and discarded.
             match &v.label {
                 Some(label) => quote_spanned! {span=> ::winnow_grammar::rt::beschriftet(#label, #closure) },
                 None => closure,
@@ -113,13 +113,13 @@ impl<'a> Codegen<'a> {
                     Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, _span))
                 }
             } else {
-                // Eine vom Nutzer geschriebene Aktion liegt ohne ihre Klammern
-                // vor und darf Anweisungen enthalten (`-> { let x = …; x }`);
-                // sie bekommt die Klammern hier zurueck - vorher landeten ihre
-                // Tokens in Ausdrucksposition ("expected expression, found
-                // `let` statement"). Eine vom Parser synthetisierte Aktion ist
-                // immer ein einzelner Ausdruck (`()`, eine Bindung, ein Tupel)
-                // und bleibt ungeklammert - `{ () }` waere ein Clippy-Befund.
+                // An action written by the user comes without its braces and
+                // may contain statements (`-> { let x = …; x }`); it gets the
+                // braces back here - previously its tokens ended up in
+                // expression position ("expected expression, found `let`
+                // statement"). An action synthesized by the parser is always a
+                // single expression (`()`, a binding, a tuple) and stays
+                // unbraced - `{ () }` would be a Clippy finding.
                 if v.is_explicit {
                     quote! { Ok({ #action }) }
                 } else {
@@ -134,8 +134,8 @@ impl<'a> Codegen<'a> {
                     #final_expr
                 }
             };
-            // Auch eine einvariantige Regel darf beschriftet sein (`# "…"`):
-            // scheitert sie an ihrer Anfangsstelle, ist ihr Name die Erwartung.
+            // A single-variant rule may be labelled too (`# "…"`): if it fails
+            // at its starting position, its name is the expectation.
             match &v.label {
                 Some(label) => quote_spanned! {span=>
                     {
@@ -230,13 +230,13 @@ impl<'a> Codegen<'a> {
                      Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, full_span))
                 }
             } else {
-                // Eine vom Nutzer geschriebene Aktion liegt ohne ihre Klammern
-                // vor und darf Anweisungen enthalten (`-> { let x = …; x }`);
-                // sie bekommt die Klammern hier zurueck - vorher landeten ihre
-                // Tokens in Ausdrucksposition ("expected expression, found
-                // `let` statement"). Eine vom Parser synthetisierte Aktion ist
-                // immer ein einzelner Ausdruck (`()`, eine Bindung, ein Tupel)
-                // und bleibt ungeklammert - `{ () }` waere ein Clippy-Befund.
+                // An action written by the user comes without its braces and
+                // may contain statements (`-> { let x = …; x }`); it gets the
+                // braces back here - previously its tokens ended up in
+                // expression position ("expected expression, found `let`
+                // statement"). An action synthesized by the parser is always a
+                // single expression (`()`, a binding, a tuple) and stays
+                // unbraced - `{ () }` would be a Clippy finding.
                 if v.is_explicit {
                     quote! { Ok({ #action }) }
                 } else {

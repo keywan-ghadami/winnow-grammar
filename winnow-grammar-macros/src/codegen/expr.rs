@@ -23,8 +23,8 @@ pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::I
         ModelPattern::Parenthesized(inner, _)
         | ModelPattern::Bracketed(inner, _)
         | ModelPattern::Braced(inner, _) => {
-            // Nur bei genau einem Element ist eindeutig, worauf sich die
-            // Bindung bezieht.
+            // Only with exactly one element is it unambiguous what the
+            // binding refers to.
             if let [single] = inner.as_mut_slice() {
                 set_binding(single, new_binding);
             }
@@ -33,7 +33,7 @@ pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::I
     }
 }
 
-/// Ersetzt Typparameter in einem Aktionsblock (`Vec::<T>::new()`).
+/// Substitutes type parameters in an action block (`Vec::<T>::new()`).
 struct TypSubst<'a>(&'a HashMap<String, syn::Type>);
 
 impl syn::visit_mut::VisitMut for TypSubst<'_> {
@@ -76,9 +76,9 @@ pub(crate) fn replace_type(ty: &mut syn::Type, subst: &HashMap<String, syn::Type
     }
 }
 
-/// Setzt in einer Vorlage die Parser-Parameter (`subst`) und die Typparameter
-/// (`type_subst`) ein. Eine Traversierung fuer beides.
-/// Was ein Builtin erwartet - der Text hinter `expected …`.
+/// Substitutes the parser parameters (`subst`) and the type parameters
+/// (`type_subst`) in a template. One traversal for both.
+/// What a builtin expects - the text after `expected …`.
 fn builtin_erwartung(name: &str) -> Option<&'static str> {
     Some(match name {
         "ident" | "raw_ident" => "identifier",
@@ -116,7 +116,7 @@ pub(crate) fn substitute_pattern(
             if let Some(ident) = rule_path.segments.last().map(|s| s.ident.to_string()) {
                 if let Some(new_pat) = subst.get(&ident) {
                     let mut cloned = new_pat.clone();
-                    // Zuweisung ("elements:") beim Ersetzen auf das Argument uebertragen.
+                    // Carry the binding ("elements:") over to the argument when substituting.
                     if binding.is_some() {
                         set_binding(&mut cloned, binding.clone());
                     }
@@ -124,8 +124,8 @@ pub(crate) fn substitute_pattern(
                     return;
                 }
             }
-            // Kein Parameter: dann ein gewoehnlicher Aufruf, dessen eigene
-            // Generics und Argumente die Vorlagenparameter enthalten koennen
+            // Not a parameter: then an ordinary call whose own generics and
+            // arguments may contain the template parameters
             // (`inner<T>(x=item)`).
             for ty in generics.iter_mut() {
                 replace_type(ty, type_subst);
@@ -373,13 +373,12 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    /// Der Ergebnistyp eines Argumentmusters - fuer die Ableitung fehlender
-    /// Typparameter einer Vorlage.
+    /// The result type of an argument pattern - for inferring missing type
+    /// parameters of a template.
     ///
-    /// Ein Literal liefert `()`, eine Nutzerregel ihren deklarierten
-    /// Rueckgabetyp, ein Builtin den Typ aus seiner Deklaration. Alles andere
-    /// (Gruppen, Wiederholungen) bleibt offen - dann muss der Aufrufer die
-    /// Generics ausschreiben.
+    /// A literal yields `()`, a user rule its declared return type, a builtin
+    /// the type from its declaration. Everything else (groups, repetitions)
+    /// remains open - then the caller has to spell out the generics.
     fn leite_typ_ab(&self, pattern: &ModelPattern) -> Option<syn::Type> {
         use winnow_grammar_model::Backend;
         match pattern {
@@ -410,7 +409,7 @@ impl<'a> Codegen<'a> {
         let name_str = rule_name.to_string();
 
         if self.user_rules.contains(&name_str) {
-            // 1. Zielregel in der Grammatik finden
+            // 1. Find the target rule in the grammar
             let target_rule = self
                 .grammar
                 .rules
@@ -419,7 +418,7 @@ impl<'a> Codegen<'a> {
                 .unwrap();
 
             if super::ist_vorlage(target_rule) {
-                // 3b. Parser-Parameter -> Argumentmuster
+                // 3b. Parser parameters -> argument patterns
                 let arg_patterns: Vec<ModelPattern> = args
                     .iter()
                     .map(|arg| match arg {
@@ -431,11 +430,11 @@ impl<'a> Codegen<'a> {
                     subst.insert(param.name.to_string(), arg_pattern.clone());
                 }
 
-                // 3a. Typparameter -> Typ. Explizit angegebene (`list<u32>(…)`)
-                // gewinnen; fehlende werden aus dem Argument an derselben
-                // Position abgeleitet (`list(item=u32)` -> T = u32). Dieselbe
-                // Konvention wie syn-grammars Monomorphizer: der i-te
-                // Typparameter gehoert zum i-ten Parser-Parameter.
+                // 3a. Type parameters -> type. Explicitly given ones
+                // (`list<u32>(…)`) win; missing ones are inferred from the
+                // argument at the same position (`list(item=u32)` -> T = u32).
+                // The same convention as syn-grammar's monomorphizer: the i-th
+                // type parameter belongs to the i-th parser parameter.
                 let mut type_subst = HashMap::new();
                 let type_params = target_rule.generics.params.iter().filter_map(|g| match g {
                     syn::GenericParam::Type(t) => Some(t.ident.to_string()),
@@ -451,17 +450,17 @@ impl<'a> Codegen<'a> {
                     }
                 }
 
-                // 4. AST der Regel klonen, Parameter und Typen ersetzen -
-                //    in Mustern UND in den Aktionsbloecken (`Vec::<T>::new()`).
+                // 4. Clone the rule's AST, substitute parameters and types -
+                //    in patterns AND in the action blocks (`Vec::<T>::new()`).
                 let mut inlined_variants = target_rule.variants.clone();
                 for variant in &mut inlined_variants {
                     for step in &mut variant.pattern {
                         substitute_pattern(step, &subst, &type_subst);
                     }
-                    // Der Aktionsblock liegt ohne seine Klammern vor; fuer die
-                    // Typersetzung wird er als Block geparst und mit Klammern
-                    // zurueckgeschrieben - ein Block in Ausdrucksposition ist
-                    // ueberall gueltig, wo die Tokens vorher standen.
+                    // The action block comes without its braces; for the type
+                    // substitution it is parsed as a block and written back
+                    // with braces - a block in expression position is valid
+                    // everywhere the tokens were before.
                     let action = &variant.action;
                     if let Ok(mut block) = syn::parse2::<syn::Block>(quote::quote!({ #action })) {
                         syn::visit_mut::VisitMut::visit_block_mut(
@@ -472,7 +471,7 @@ impl<'a> Codegen<'a> {
                     }
                 }
 
-                // 5. Inlined Parser-Body direkt kompilieren (inkl. Typ-Generics in Return-Type)
+                // 5. Compile the inlined parser body directly (incl. type generics in the return type)
                 let mut ret_type = target_rule.return_type.clone();
                 replace_type(&mut ret_type, &type_subst);
 
@@ -486,7 +485,7 @@ impl<'a> Codegen<'a> {
                 );
                 let inner_err_type =
                     quote_spanned! {span=> ::winnow::error::ErrMode<::winnow_grammar::ParseError> };
-                let input_var = &self.input_ident; // <-- NEU: Beziehe den definierten Identifier
+                let input_var = &self.input_ident; // <-- NEW: use the defined identifier
 
                 return quote_spanned! {span=>
                     (|#input_var: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #inner_err_type> {
@@ -498,7 +497,7 @@ impl<'a> Codegen<'a> {
                 };
             }
 
-            // --- Normaler Funktionsaufruf für NICHT-Template Regeln ---
+            // --- Normal function call for NON-template rules ---
             let fn_name = quote::format_ident!("parse_{}_inner", rule_name, span = span);
             if args.is_empty() {
                 return quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #fn_name(i)) };
@@ -660,9 +659,9 @@ impl<'a> Codegen<'a> {
             }
         };
 
-        // winnows Primitiven melden nur die Stelle. Die Erwartung kommt von
-        // hier - sonst stuende in `expected one of: …` von einem `ident`-Zweig
-        // gar nichts.
+        // winnow's primitives only report the position. The expectation comes
+        // from here - otherwise an `ident` branch would contribute nothing at
+        // all to `expected one of: …`.
         match builtin_erwartung(&name_str) {
             Some(was) => quote_spanned! {span=> ::winnow_grammar::rt::erwartet(#was, #p) },
             None => p,

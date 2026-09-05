@@ -10,10 +10,10 @@ pub use winnow_grammar_macros::grammar;
 // Re-export winnow so generated code has access to it
 pub use winnow;
 
-/// Der Fehlertyp der erzeugten Parser und die Auswahl zwischen Fehlern.
+/// The error type of the generated parsers and the selection between errors.
 pub mod error;
 pub mod interner;
-/// Laufzeithelfer fuer den erzeugten Code.
+/// Runtime helpers for the generated code.
 pub mod rt;
 pub mod test_result;
 pub mod testing;
@@ -31,14 +31,14 @@ pub struct ParseContext<S = ()> {
     pub interner: InternerContext,
     /// A placeholder for user-defined state.
     pub user_state: S,
-    /// Die weiteste Fehlschlagstelle, die ein erfolgreiches Zuruecksetzen
-    /// (`x?`, `x*`) verworfen hat. Wird am Ende gegen den zurueckgegebenen
-    /// Fehler gehalten - siehe [`crate::rt::abschluss`].
+    /// The furthest failure position that a successful backtrack (`x?`, `x*`)
+    /// discarded. Compared against the returned error at the end - see
+    /// [`crate::rt::abschluss`].
     pub furthest: Option<ParseError>,
-    /// Der **lebende** Regelstapel: die Regeln, die gerade laufen, aeusserste
-    /// zuerst. Ein Fehler, der herausgereicht wird, sammelt seine Regeln auf
-    /// dem Rueckweg selbst; ein Fehler, der unterwegs *gemerkt* wird, kommt
-    /// dort nie vorbei - er bekommt die aeusseren Regeln von hier.
+    /// The **live** rule stack: the rules currently running, outermost first.
+    /// An error that is passed out collects its rules itself on the way back;
+    /// an error that is *recorded* along the way never gets there - it
+    /// receives the outer rules from here.
     pub regeln: Vec<&'static str>,
 }
 
@@ -54,7 +54,7 @@ impl<S: Default> Default for ParseContext<S> {
 }
 
 impl<S> ParseContext<S> {
-    /// Merkt einen verworfenen Fehler - nach derselben Rangfolge wie
+    /// Records a discarded error - following the same ranking as
     /// [`ParseError::merge`].
     pub fn merke(&mut self, e: &ParseError) {
         let mut e = e.clone();
@@ -67,7 +67,7 @@ impl<S> ParseContext<S> {
         });
     }
 
-    /// Der bessere aus zurueckgegebenem Fehler und Merkstelle.
+    /// The better of the returned error and the recorded one.
     pub fn beste(&self, e: ParseError) -> ParseError {
         match &self.furthest {
             Some(f) => f.clone().merge(e),
@@ -90,14 +90,14 @@ pub mod types {
 
     pub use proc_macro2::Span;
 
-    /// Konstruiert einen Wert aus geparsten Daten und der Stelle, an der sie standen.
+    /// Constructs a value from parsed data and the position where it was found.
     ///
-    /// Wird vom Attributmakro [`with_span`](winnow_grammar_macros::with_span)
-    /// implementiert. Frueher aus `grammar-kit` bezogen; beim Auszug aus dem
-    /// syn-grammar-Monorepo hierher uebernommen, damit `winnow-grammar` keine
-    /// Abhaengigkeit auf die syn-seitige Laufzeit mehr braucht.
+    /// Implemented by the attribute macro [`with_span`](winnow_grammar_macros::with_span).
+    /// Formerly obtained from `grammar-kit`; moved here during the move out of
+    /// the syn-grammar monorepo so that `winnow-grammar` no longer needs a
+    /// dependency on the syn-side runtime.
     pub trait WithSpan<ParsedData> {
-        /// Baut `Self` aus `parsed_data` und dem Byte-Bereich `span`.
+        /// Builds `Self` from `parsed_data` and the byte range `span`.
         fn with_span(parsed_data: ParsedData, span: std::ops::Range<usize>) -> Self;
     }
 

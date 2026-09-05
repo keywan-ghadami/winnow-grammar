@@ -3,21 +3,21 @@ use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar Generics {
-        // Form 1: der Parameter ist als Regel deklariert, sein Ergebnistyp an T gebunden.
+        // Form 1: the parameter is declared as a rule, its result type bound to T.
         list<T>(item: Rule<T>) -> Vec<T> =
             elements:item* -> { elements }
         pub main -> Vec<u32> = l:list<u32>(item=u32) -> { l }
 
-        // Form 2: Parameter ohne Typ, Typparameter explizit am Aufruf.
+        // Form 2: parameter without type, type parameter explicit at the call site.
         liste<T>(item) -> Vec<T> = items:item* -> { items }
         pub explizit -> Vec<u32> = l:liste<u32>(item=u32) -> { l }
 
-        // Form 3: Parameter ohne Typ, Typparameter aus dem Argument abgeleitet -
-        // die Form aus SYNTAX.md. Vorher: "cannot find value `item`".
+        // Form 3: parameter without type, type parameter inferred from the argument -
+        // the form from SYNTAX.md. Previously: "cannot find value `item`".
         pub abgeleitet -> Vec<u32> = l:liste(item=u32) -> { l }
 
-        // Typparameter auch im Aktionsblock: muss mit ersetzt werden. Der Block
-        // enthaelt Anweisungen - das ging vorher an keiner Stelle
+        // Type parameter also in the action block: must be substituted too. The
+        // block contains statements - previously that did not work anywhere
         // ("expected expression, found `let` statement").
         gesammelt<T>(item) -> Vec<T> = items:item* -> { let mut v: Vec<T> = Vec::new(); v.extend(items); v }
         pub im_aktionsblock -> Vec<u32> = l:gesammelt(item=u32) -> { l }

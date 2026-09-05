@@ -7,20 +7,20 @@ use quote::{format_ident, quote_spanned};
 use std::collections::HashSet;
 use winnow_grammar_model::model::GrammarDefinition;
 
-/// Ist die Regel eine Vorlage, die nicht als eigene Funktion erzeugt, sondern
-/// an jeder Aufrufstelle eingesetzt wird?
+/// Is the rule a template that is not generated as a function of its own but
+/// inlined at every call site?
 ///
-/// Das ist sie, sobald sie einen *Parser*-Parameter hat - in einer der beiden
-/// Schreibweisen:
+/// It is, as soon as it has a *parser* parameter - in either of the two
+/// notations:
 ///
-/// * `list<T>(item: Rule<T>)` - der Parameter ist als Regel deklariert und sein
-///   Ergebnistyp an `T` gebunden;
-/// * `list<T>(item)` - ohne Typ. `T` wird dann aus dem Argument abgeleitet
-///   (siehe `Codegen::leite_typ_ab`).
+/// * `list<T>(item: Rule<T>)` - the parameter is declared as a rule and its
+///   result type bound to `T`;
+/// * `list<T>(item)` - without a type. `T` is then inferred from the argument
+///   (see `Codegen::leite_typ_ab`).
 ///
-/// Vorher galt nur die erste Form als Vorlage. Die zweite lief in den Pfad fuer
-/// Laufzeitparameter, dessen innere Funktion den Parameter `item_wrapper`
-/// nennt, waehrend der Rumpf `item` sagt - daher ``cannot find value `item` ``.
+/// Previously only the first form counted as a template. The second went down
+/// the path for runtime parameters, whose inner function names the parameter
+/// `item_wrapper` while the body says `item` - hence ``cannot find value `item` ``.
 pub(crate) fn ist_vorlage(rule: &winnow_grammar_model::model::Rule) -> bool {
     rule.params.iter().any(|p| match &p.ty {
         None => true,

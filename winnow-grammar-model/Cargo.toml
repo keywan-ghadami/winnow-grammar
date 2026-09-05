@@ -2,7 +2,7 @@
 name = "winnow-grammar-model"
 version = "0.1.0"
 edition = "2021"
-description = "Parser, Modell und Validator der Grammatik-DSL für winnow-grammar."
+description = "Parser, model and validator of the grammar DSL for winnow-grammar."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/keywan-ghadami/winnow-grammar"
 
