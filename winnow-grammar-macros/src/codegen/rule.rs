@@ -9,19 +9,9 @@ use winnow_grammar_model::{
 
 impl<'a> Codegen<'a> {
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
-        // --- NEU: Template-Erkennung ---
-        let is_template = rule.params.iter().any(|p| {
-            if let Some(syn::Type::Path(type_path)) = &p.ty {
-                if let Some(segment) = type_path.path.segments.last() {
-                    return segment.ident == "Rule";
-                }
-            }
-            false
-        });
-
-        if is_template {
-            // Template-Regeln werden nicht als eigene Funktionen kompiliert.
-            // Sie werden in expr.rs beim Aufruf durch AST-Substitution direkt ge-inlined.
+        if super::is_template(rule) {
+            // Template rules are not compiled as functions of their own.
+            // They are inlined directly at the call site in expr.rs via AST substitution.
             return quote! {};
         }
 
@@ -33,7 +23,7 @@ impl<'a> Codegen<'a> {
         let inner_fn_name = format_ident!("parse_{}_inner", rule_name, span = span);
         let ret_type = &rule.return_type;
         let input = &self.input_ident;
-        let err_type = quote_spanned! { span=> ::winnow::error::ContextError };
+        let err_type = quote_spanned! { span=> ::winnow_grammar::ParseError };
         let inner_err_type = quote_spanned! { span=> ::winnow::error::ErrMode<#err_type> };
 
         let mut params_tokens = Vec::new();
@@ -181,15 +171,22 @@ impl<'a> Codegen<'a> {
                 })
                 .context(::winnow::error::StrContext::Label(#rule_name_str));
 
-                #[cfg(feature = "trace")]
-                {
-                    ::winnow::combinator::trace(#rule_name_str, parser).parse_next(#input)
-                }
-
-                #[cfg(not(feature = "trace"))]
-                {
-                    parser.parse_next(#input)
-                }
+                // The rule name sits on the live stack for the duration of the
+                // body, so that an error RECORDED along the way picks it up.
+                // Errors passed out collect it via `.context(Label)`.
+                #input.state.rules.push(#rule_name_str);
+                let result = {
+                    #[cfg(feature = "trace")]
+                    {
+                        ::winnow::combinator::trace(#rule_name_str, parser).parse_next(#input)
+                    }
+                    #[cfg(not(feature = "trace"))]
+                    {
+                        parser.parse_next(#input)
+                    }
+                };
+                #input.state.rules.pop();
+                result
             }
         };
 
@@ -203,27 +200,21 @@ impl<'a> Codegen<'a> {
 
         let outer_fn_body = quote! {
             move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
-                use ::winnow::error::ParserError;
-
                 #(#param_wrappers)*
 
-                // NEU: Inline-Fehlerbehandlung statt Closure, um Borrow-Kollisionen zu vermeiden.
-                macro_rules! unwrap_modal {
-                    ($res:expr) => {
-                        match $res {
-                            Ok(v) => v,
-                            Err(::winnow::error::ErrMode::Backtrack(err) | ::winnow::error::ErrMode::Cut(err)) => return Err(err),
-                            Err(::winnow::error::ErrMode::Incomplete(needed)) => return Err(<#err_type as ParserError<::winnow_grammar::ParseInput<'a, S>>>::incomplete(input, needed)),
-                        }
-                    };
-                }
+                // Entry point: the recorded error belongs to THIS run.
+                input.state.furthest = None;
 
-                unwrap_modal!(WS(input));
-                let result = unwrap_modal!(#inner_fn_name(input, #(#arg_names),*));
-                unwrap_modal!(WS(input));
+                let result: ::winnow::Result<#ret_type, ::winnow::error::ErrMode<#err_type>> = (|| {
+                    WS(input)?;
+                    let result = #inner_fn_name(input, #(#arg_names),*)?;
+                    WS(input)?;
+                    Ok(result)
+                })();
 
-                unwrap_modal!(::winnow::combinator::eof.parse_next(input));
-                Ok(result)
+                // Error selection against the recorded error and check for
+                // leftover input - see `rt::finish`.
+                ::winnow_grammar::rt::finish(input, result)
             }
         };
 

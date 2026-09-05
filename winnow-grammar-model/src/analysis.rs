@@ -562,11 +562,23 @@ fn is_pattern_nullable_precise(pattern: &ModelPattern, nullable_rules: &HashSet<
 }
 
 fn find_cycles(grammar: &GrammarDefinition, nullable_rules: &HashSet<String>) -> Vec<Vec<String>> {
+    // If the user defined `WS` themselves, every syntactic rule calls it at
+    // its start before reading a character - an implicit edge that is not in
+    // the pattern. If `WS` in turn calls a syntactic rule (e.g. a lowercase
+    // `comment`), the circle `WS -> comment -> WS` closes without any
+    // progress; at runtime that is a stack overflow without a diagnostic.
+    // With the edge in the graph, the cycle search finds it like any other
+    // left recursion.
+    let user_ws = grammar.rules.iter().any(|r| r.name == "WS");
+
     let mut adj = HashMap::new();
     for rule in &grammar.rules {
         let mut deps = HashSet::new();
         for variant in &rule.variants {
             collect_nullable_deps(&variant.pattern, nullable_rules, &mut deps);
+        }
+        if user_ws && !rule.is_lexical && rule.name != "WS" {
+            deps.insert("WS".to_string());
         }
         adj.insert(rule.name.to_string(), deps);
     }

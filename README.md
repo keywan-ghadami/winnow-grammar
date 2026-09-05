@@ -10,7 +10,6 @@ This crate is built on top of `syn-grammar-model` but targets the `winnow` parse
 
 ## Documentation
 
-- **[Extending Guide](../EXTENDING.md)**: Guide for library authors on how to build custom backends.
 
 ## Features
 
@@ -115,6 +114,18 @@ fn main() {
     let result = Cron::parse_schedule().parse_next(&mut stream);
     println!("{:?}", result);
 }
+```
+
+### Error messages
+
+Failures come back as `winnow_grammar::ParseError` with the expectation, what
+was found, the position and the rule stack — see *Error Messages* in
+[SYNTAX.md](SYNTAX.md):
+
+```text
+expected one of: `&`, identifier; found unexpected token `)` at line 1, column 9
+in ty
+in arg
 ```
 
 ### What happens under the hood?

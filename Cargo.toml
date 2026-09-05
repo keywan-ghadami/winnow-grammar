@@ -6,7 +6,7 @@ resolver = "2"
 name = "winnow-grammar"
 version = "0.1.0"
 edition = "2021"
-description = "Ein Parser-Generator für winnow: Grammatiken als DSL, übersetzt zu winnow-Parsern."
+description = "A parser generator for winnow: grammars as a DSL, compiled to winnow parsers."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/keywan-ghadami/winnow-grammar"
 
@@ -22,8 +22,8 @@ winnow-grammar-macros = { path = "winnow-grammar-macros", version = "0.1.0" }
 proc-macro2 = "1.0"
 quote = "1.0"
 lasso = { version = "0.7", features = ["multi-threaded"] }
-# Wird im Rumpf von `test_case_impl!` erzeugt (`src/testing.rs`), muss also auch
-# Nutzern des Makros zur Verfügung stehen - nicht nur den eigenen Tests.
+# Emitted in the body of `test_case_impl!` (`src/testing.rs`), so it must be
+# available to users of the macro as well - not only to our own tests.
 paste = "1.0"
 
 [dev-dependencies]

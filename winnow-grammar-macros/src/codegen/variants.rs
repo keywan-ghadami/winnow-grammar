@@ -61,12 +61,19 @@ impl<'a> Codegen<'a> {
                 }
             };
 
-            quote_spanned! {span=>
+            let closure = quote_spanned! {span=>
                 |#input: &mut ::winnow_grammar::ParseInput<'a, S>| {
                     #steps_code
                     #state_injection
                     #final_expr
                 }
+            };
+            // `# "…"`: if the alternative fails at its starting position, its
+            // name counts as the expectation. Until now the label was parsed
+            // and discarded.
+            match &v.label {
+                Some(label) => quote_spanned! {span=> ::winnow_grammar::rt::labelled(#label, #closure) },
+                None => closure,
             }
         });
 
@@ -106,17 +113,40 @@ impl<'a> Codegen<'a> {
                     Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, _span))
                 }
             } else {
-                quote! {
-                    Ok(#action)
+                // An action written by the user comes without its braces and
+                // may contain statements (`-> { let x = …; x }`); it gets the
+                // braces back here - previously its tokens ended up in
+                // expression position ("expected expression, found `let`
+                // statement"). An action synthesized by the parser is always a
+                // single expression (`()`, a binding, a tuple) and stays
+                // unbraced - `{ () }` would be a Clippy finding.
+                if v.is_explicit {
+                    quote! { Ok({ #action }) }
+                } else {
+                    quote! { Ok(#action) }
                 }
             };
 
-            quote_spanned! {span=>
+            let body = quote_spanned! {span=>
                 {
                     #steps_code
                     #state_injection
                     #final_expr
                 }
+            };
+            // A single-variant rule may be labelled too (`# "…"`): if it fails
+            // at its starting position, its name is the expectation.
+            match &v.label {
+                Some(label) => quote_spanned! {span=>
+                    {
+                        let mut __labelled = ::winnow_grammar::rt::labelled(
+                            #label,
+                            |#input: &mut ::winnow_grammar::ParseInput<'a, S>| #body,
+                        );
+                        ::winnow::Parser::parse_next(&mut __labelled, #input)
+                    }
+                },
+                None => body,
             }
         } else {
             quote_spanned! {span=>
@@ -200,8 +230,17 @@ impl<'a> Codegen<'a> {
                      Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, full_span))
                 }
             } else {
-                quote! {
-                    Ok(#action)
+                // An action written by the user comes without its braces and
+                // may contain statements (`-> { let x = …; x }`); it gets the
+                // braces back here - previously its tokens ended up in
+                // expression position ("expected expression, found `let`
+                // statement"). An action synthesized by the parser is always a
+                // single expression (`()`, a binding, a tuple) and stays
+                // unbraced - `{ () }` would be a Clippy finding.
+                if v.is_explicit {
+                    quote! { Ok({ #action }) }
+                } else {
+                    quote! { Ok(#action) }
                 }
             };
 

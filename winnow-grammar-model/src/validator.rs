@@ -33,13 +33,13 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<()> {
         .chain(builtin_names.iter().cloned())
         .collect();
 
-    // Nur ein Glob-Import (`use ...::*;`) kann unbekannte Regelnamen in die
-    // Grammatik tragen - insbesondere die Vererbung, die auf
-    // `use super::Base::*;` abgebildet wird (siehe `model.rs`). Ein benannter
-    // Import bringt genau einen bekannten Namen mit und darf die Pruefung nicht
-    // abschalten: sonst verliert jede Grammatik mit einem gewoehnlichen `use`
-    // die "Undefined rule"-Meldung, und ein Tippfehler im Regelnamen schlaegt
-    // erst als Folgefehler im generierten Code durch.
+    // Only a glob import (`use ...::*;`) can bring unknown rule names into
+    // the grammar - in particular inheritance, which is mapped to
+    // `use super::Base::*;` (see `model.rs`). A named import brings exactly
+    // one known name and must not switch off the check: otherwise every
+    // grammar with an ordinary `use` loses the "Undefined rule" message, and
+    // a typo in a rule name only shows up as a follow-up error in the
+    // generated code.
     let should_validate_rule_calls = !grammar.uses.iter().any(|u| use_tree_has_glob(&u.tree));
 
     if should_validate_rule_calls {
@@ -62,11 +62,31 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<()> {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(" -> ");
+
+            // A cycle through `WS` is not left recursion by the user but a
+            // syntactic rule inside the whitespace: it calls `WS` at its
+            // start, and `WS` calls it. That is what the message says - and it
+            // points at the rule to change, not at `WS`.
+            if let Some(culprit) = cycle.iter().find(|n| *n != "WS") {
+                if cycle.iter().any(|n| n == "WS") {
+                    let rule = grammar.rules.iter().find(|r| r.name == *culprit).unwrap();
+                    let msg = format!(
+                        "rule `{name}` is used by `WS` but is syntactic (lowercase): \
+                         a syntactic rule skips whitespace at its start by calling `WS`, \
+                         so `{cycle}` recurses without consuming input. \
+                         Rules used for whitespace must be lexical - name it `{upper}`.",
+                        name = culprit,
+                        cycle = cycle_str,
+                        upper = culprit.to_uppercase(),
+                    );
+                    return Err(syn::Error::new(rule.name.span(), msg));
+                }
+            }
+
             let msg = format!(
                 "Indirect left recursion detected (unsupported): {}",
                 cycle_str
             );
-
             let rule_name = &cycle[0];
             let rule = grammar.rules.iter().find(|r| r.name == *rule_name).unwrap();
             return Err(syn::Error::new(rule.name.span(), msg));
@@ -385,10 +405,10 @@ fn validate_args_recursive(
     Ok(())
 }
 
-/// Traegt dieser `use`-Baum irgendwo einen Glob (`::*`)?
+/// Does this `use` tree carry a glob (`::*`) anywhere?
 ///
-/// Rekursiv, weil der Glob in einem Pfad (`a::b::*`) oder in einer Gruppe
-/// (`a::{b, c::*}`) stecken kann.
+/// Recursive, because the glob can sit in a path (`a::b::*`) or in a group
+/// (`a::{b, c::*}`).
 fn use_tree_has_glob(tree: &syn::UseTree) -> bool {
     match tree {
         syn::UseTree::Glob(_) => true,

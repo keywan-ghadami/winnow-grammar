@@ -18,7 +18,7 @@ pub trait WinnowTestExt<'a, O> {
 // without requiring explicit `::<()>` annotations (the "turbofish") at the call site.
 impl<'a, P, O> WinnowTestExt<'a, O> for P
 where
-    P: Parser<ParseInput<'a, ()>, O, ::winnow::error::ContextError>,
+    P: Parser<ParseInput<'a, ()>, O, crate::ParseError>,
     O: std::fmt::Debug,
 {
     fn parse_test(&mut self, input: &'a str) -> TestResult<O, String, ParseContext<()>> {
@@ -28,7 +28,10 @@ where
             state,
         };
 
-        let result = self.parse_next(&mut stream).map_err(|e| e.to_string());
+        // With position: `parse_next` yields the bare error, the source is
+        // available here - so it is factored in, so that tests can check for
+        // `at line 1, column 8`.
+        let result = self.parse_next(&mut stream).map_err(|e| e.render(input));
 
         let final_context = stream.state;
 

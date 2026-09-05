@@ -1,4 +1,3 @@
-use winnow::Parser;
 use winnow_grammar::grammar;
 use winnow_grammar::Symbol;
 

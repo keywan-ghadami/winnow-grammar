@@ -1,0 +1,5 @@
+error: rule `comment` is used by `WS` but is syntactic (lowercase): a syntactic rule skips whitespace at its start by calling `WS`, so `WS -> comment -> WS` recurses without consuming input. Rules used for whitespace must be lexical - name it `COMMENT`.
+  --> tests/ui/ws_cycle.rs:10:9
+   |
+10 |         comment = "//" until(line_ending)
+   |         ^^^^^^^

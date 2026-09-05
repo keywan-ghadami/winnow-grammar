@@ -186,11 +186,10 @@ fn grammar_impl(input: TokenStream) -> TokenStream {
 
 // --- `with_span` ---
 //
-// Uebernommen aus `grammar-kit-macros` beim Auszug aus dem syn-grammar-Monorepo
-// (Fork-Punkt `64be1ef`, 2026-08-31). Das Makro ist backend-neutral; es hier zu
-// fuehren erspart `winnow-grammar` eine Abhaengigkeit auf die syn-seitige Laufzeit.
-// Muss im Crate-Wurzelmodul stehen - Prozedurmakro-Einstiegspunkte sind dort
-// verlangt.
+// Taken over from `grammar-kit-macros` when moving out of the syn-grammar
+// monorepo (fork point `64be1ef`, 2026-08-31). The macro is backend-neutral;
+// keeping it here spares `winnow-grammar` a dependency on the syn-side runtime.
+// Must be in the crate root - procedural macro entry points are required there.
 
 use quote::quote;
 use syn::parse::Parser as _;

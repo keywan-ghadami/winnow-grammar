@@ -15,6 +15,6 @@ test_case! {
     [
         ("\n", val "\n".to_string()),
         ("\r\n", val "\r\n".to_string()),
-        ("a", err "invalid test_line_ending")
+        ("a", err "expected line ending; found unexpected token `a`")
     ]
 }

@@ -7,6 +7,32 @@ use quote::{format_ident, quote_spanned};
 use std::collections::HashSet;
 use winnow_grammar_model::model::GrammarDefinition;
 
+/// Is the rule a template that is not generated as a function of its own but
+/// inlined at every call site?
+///
+/// It is, as soon as it has a *parser* parameter - in either of the two
+/// notations:
+///
+/// * `list<T>(item: Rule<T>)` - the parameter is declared as a rule and its
+///   result type bound to `T`;
+/// * `list<T>(item)` - without a type. `T` is then inferred from the argument
+///   (see `Codegen::infer_type`).
+///
+/// Previously only the first form counted as a template. The second went down
+/// the path for runtime parameters, whose inner function names the parameter
+/// `item_wrapper` while the body says `item` - hence ``cannot find value `item` ``.
+pub(crate) fn is_template(rule: &winnow_grammar_model::model::Rule) -> bool {
+    rule.params.iter().any(|p| match &p.ty {
+        None => true,
+        Some(syn::Type::Path(type_path)) => type_path
+            .path
+            .segments
+            .last()
+            .is_some_and(|seg| seg.ident == "Rule"),
+        Some(_) => false,
+    })
+}
+
 pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
     let mut codegen = Codegen::new(&grammar);
     codegen.generate()
@@ -52,7 +78,7 @@ impl<'a> Codegen<'a> {
                 #[allow(dead_code)]
                 fn WS<'a, S: std::fmt::Debug + Clone>(
                     #input: &mut ::winnow_grammar::ParseInput<'a, S>,
-                ) -> ::winnow::Result<(), ::winnow::error::ErrMode<::winnow::error::ContextError>> {
+                ) -> ::winnow::Result<(), ::winnow::error::ErrMode<::winnow_grammar::ParseError>> {
                     use ::winnow::Parser;
                     ::winnow::ascii::multispace0.parse_next(#input).map(|_| ())
                 }
