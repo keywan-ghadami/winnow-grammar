@@ -1,83 +1,87 @@
-# ADR 15: Der Vertrag für Fehlermeldungen
+# ADR 15: The Error Message Contract
 
-**Status:** Accepted. **Datum:** 2026-09-01.
-**Tests:** `tests/diagnostics.rs`, ein Test je Punkt. Bei Widerspruch gilt dieses ADR.
+**Status:** Accepted. **Date:** 2026-09-01.
+**Tests:** `tests/diagnostics.rs`, one test per point. Where the two disagree, this ADR wins.
 
 ## Context
 
-winnow-grammar soll das Frontend für Transpiler nach Rust sein. Dort ist die
-Fehlermeldung das Produkt: wer eine fremde Sprache übersetzt, bekommt Fehler in
-*ihr* und muss sie ohne Kenntnis der Grammatik verstehen.
+winnow-grammar is meant to be the front end for transpilers to Rust. There the
+error message *is* the product: whoever translates a foreign language gets
+errors in *that* language and has to understand them without knowing the
+grammar.
 
-Bis hierher kam der Fehlertyp von winnow (`ContextError`). Gemessen an
-`fn f(a: );` mit `typ = ident | "&" ident`:
+Until now the error type came from winnow (`ContextError`). Measured on
+`fn f(a: );` with `typ = ident | "&" ident`:
 
 ```
 invalid typ
 expected `&`
 ```
 
-Vier strukturelle Lücken: `ContextError::or` liefert schlicht den *späteren*
-Fehler, also gewann die letzte Alternative (`&`) und `ident` verschwand; nur ein
-Label (das innerste), kein Regelstapel; kein Blick über ein erfolgreiches
-Zurücksetzen hinweg (`x?`, `x*` verwarfen ihren Grund); und was tatsächlich
-dastand, wurde nicht genannt. Varianten-Labels (`# "…"`) wurden geparst und vom
-Codegenerator ignoriert.
+Four structural gaps: `ContextError::or` simply returns the *later* error, so
+the last alternative (`&`) won and `ident` vanished; only one label (the
+innermost), no rule stack; no view past a successful backtrack (`x?` and `x*`
+threw their reason away); and what was actually found was never named.
+Variant labels (`# "…"`) were parsed and then ignored by the code generator.
 
-syn-grammar hat dafür eine Engine (ADR 13 dort). Sie liess sich hier
-**einfacher** bauen: Fortschritt ist im Text ein Byte-Offset, den
-`LocatingSlice` umsonst liefert — der Cursor-Kunstgriff entfällt.
+syn-grammar has an engine for this (ADR 13 there). It was **easier** to build
+here: in text, progress is a byte offset that `LocatingSlice` provides for
+free — the cursor trick is not needed.
 
 ## Decision
 
-Ein eigener Fehlertyp `winnow_grammar::ParseError` mit `offset`, `expected`,
-`message`, `found`, `rule_stack`, `priority`. Er implementiert winnows
-`ParserError`, sodass `alt` ihn durch `or` reicht — und `or` **ist** die
-Fehlerauswahl:
+A dedicated error type, `winnow_grammar::ParseError`, with `offset`,
+`expected`, `message`, `found`, `rule_stack` and `priority`. It implements
+winnow's `ParserError`, so `alt` passes it through `or` — and `or` **is** the
+selection:
 
-1. **Fortschritt**: der Fehler mit dem grösseren Offset gewinnt — auch gegen ein
-   `fail(..)`, das früher stand.
-2. **Priorität** bei gleicher Stelle: `fail` (50) > Zusammenfassung (20) >
-   Label (10) > Standard (0).
-3. **Zusammenfassung** bei Gleichstand: die Erwartungen werden vereinigt.
+1. **Progress**: the error with the larger offset wins — even against a
+   `fail(..)` that stood earlier.
+2. **Priority** at the same position: `fail` (50) > aggregation (20) >
+   label (10) > default (0).
+3. **Aggregation** on a tie: the expectations are merged.
 
-Was `alt` nicht sieht — Fehler, die `x?` und `x*` bei einem *erfolgreichen*
-Zurücksetzen verwerfen — merkt `ParseContext::furthest`; `rt::abschluss` hält
-ihn am Ende gegen den zurückgegebenen Fehler. Ein gemerkter Fehler bekommt die
-äusseren Regeln vom **lebenden** Regelstapel (`ParseContext::regeln`), weil er
-den Rückweg nie geht.
+What `alt` never sees — errors that `x?` and `x*` discard on a *successful*
+backtrack — is remembered in `ParseContext::furthest`; `rt::abschluss` weighs
+it against the returned error at the end. A remembered error gets its outer
+rules from the **live** rule stack (`ParseContext::regeln`), because it never
+travels the return path where rules are normally collected.
 
-## Der Vertrag
+The error is boxed (`ParseError(Box<Kern>)`, fields reachable through `Deref`):
+every closure level of a generated parser holds a `Result<_, ErrMode<ParseError>>`
+on the stack, and with the payload inline (about 130 bytes instead of 32) a rule
+nested 500 deep overflowed the stack in a debug build.
 
-| # | Zusage | Beispiel |
+## The contract
+
+| # | Promise | Example |
 |---|---|---|
-| 1 | Alternativen an derselben Stelle werden zusammengefasst, und der Fund wird genannt | ``expected one of: `&`, identifier; found unexpected token `)` `` |
-| 2 | Position als Zeile und Spalte, 1-basiert | `at line 2, column 8` |
-| 3 | Regelstapel, innerste zuerst — auch für gemerkte Fehler | `in typ / in arg / in item 1 / in decl` |
-| 4 | Ende der Eingabe wird als solches benannt | ``unexpected end of input, expected `;` `` |
-| 5 | Resteingabe nennt den Grund, nicht nur "expected end of input" | ``expected `;`; found unexpected token `extra` `` |
-| 6 | Eine benannte Alternative (`# "…"`) steuert an ihrer Grenze ihren Namen bei | `expected one of: number, string` |
-| 7 | … aber nur ohne Fortschritt; sonst bleibt ihre eigene Meldung | ``expected `"` `` |
-| 8 | `fail("…")` gewinnt bei gleicher Stelle | `custom failure here` |
-| 9 | Fortschritt schlägt `fail` | ``expected `b` `` statt der `fail`-Meldung |
-| 10 | Listenelemente tragen ihren Index | `in item 2` |
-| 11 | `Display` ohne Position, `render(source)` mit | winnows `Parser::parse` stellt die Position selbst voran |
-| 12 | Der Fehler ist ein Wert mit Feldern | `e.expected`, `e.found`, `e.rule_stack`, `e.offset` |
+| 1 | Alternatives failing at the same position are merged, and what was found is named | ``expected one of: `&`, identifier; found unexpected token `)` `` |
+| 2 | Position as line and column, 1-based | `at line 2, column 8` |
+| 3 | Rule stack, innermost first — also for remembered errors | `in typ / in arg / in item 1 / in decl` |
+| 4 | End of input is called by name | ``unexpected end of input, expected `;` `` |
+| 5 | Trailing input reports the reason, not just "expected end of input" | ``expected `;`; found unexpected token `extra` `` |
+| 6 | A labelled alternative (`# "…"`) contributes its name at its boundary | `expected one of: number, string` |
+| 7 | … but only without progress; otherwise its own message stays | ``expected `"` `` |
+| 8 | `fail("…")` wins at the same position | `custom failure here` |
+| 9 | Progress beats `fail` | ``expected `b` `` instead of the `fail` text |
+| 10 | List items carry their index | `in item 2` |
+| 11 | `Display` without position, `render(source)` with it | winnow's `Parser::parse` prints the position itself |
+| 12 | The error is a value with fields | `e.expected`, `e.found`, `e.rule_stack`, `e.offset` |
 
-Builtins bekommen eine Erwartung (`identifier`, `integer literal`, …), weil
-winnows Primitiven nur die Stelle melden.
+Built-ins get an expectation (`identifier`, `integer literal`, …) because
+winnow's primitives only report the position.
 
 ## Consequences
 
-* **Breaking:** `parse_<regel>()` liefert `winnow_grammar::ParseError` statt
-  `ContextError`. Der Meldungstext ändert sich: aus `invalid X` wird
-  ``expected …; found unexpected token `…` `` plus `in X`. Handgeschriebene
-  Parser, die in eine Grammatik eingehängt werden, müssen `ErrMode<ParseError>`
-  liefern; `ParseError` implementiert `FromExternalError` für `parse_to()` und
-  `AddContext<StrContext>`, sodass winnow-Kombinatoren unverändert
-  funktionieren.
-* `ParseContext` hat zwei neue Felder (`furthest`, `regeln`). Wer ihn per
-  `Default` baut, merkt nichts.
-* Was noch fehlt, gegenüber syn-grammar: `recover(..)` meldet den
-  übersprungenen Fehler nicht (er wird verworfen, nicht gemerkt), und `until`
-  hat keine Erwartung. Beides sind Ergänzungen, keine Umbauten.
+* **Breaking:** `parse_<rule>()` returns `winnow_grammar::ParseError` instead
+  of `ContextError`. The message text changes: `invalid X` becomes
+  ``expected …; found unexpected token `…` `` plus `in X` lines. Hand-written
+  parsers plugged into a grammar must return `ErrMode<ParseError>`;
+  `ParseError` implements `FromExternalError` for `parse_to()` and
+  `AddContext<StrContext>`, so winnow combinators keep working unchanged.
+* `ParseContext` has two new fields (`furthest`, `regeln`). Code that builds it
+  through `Default` is unaffected.
+* Still missing compared to syn-grammar: `recover(..)` does not report the
+  error it skipped over (it is discarded, not remembered), and `until` has no
+  expectation. Both are additions, not rebuilds.
