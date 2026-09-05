@@ -188,6 +188,9 @@ fn validate_pattern(
         ModelPattern::Count { pattern: inner, .. } => {
             validate_pattern(inner, all_defs, params)?;
         }
+        ModelPattern::Fold { pattern: inner, .. } => {
+            validate_pattern(inner, all_defs, params)?;
+        }
         ModelPattern::Not(inner, _) => {
             validate_pattern(inner, all_defs, params)?;
         }
@@ -288,6 +291,10 @@ fn validate_no_bindings(pattern: &ModelPattern) -> syn::Result<()> {
         }
         ModelPattern::Count { .. } => {
             // Count hides bindings, so it's safe in until
+        }
+        ModelPattern::Fold { .. } => {
+            // The element's bindings are consumed by `step` and never escape,
+            // so a fold is safe inside `until` for the same reason `count` is.
         }
         ModelPattern::LexicalScope(pattern, _) | ModelPattern::SpacedScope(pattern, _) => {
             validate_no_bindings(pattern)?;

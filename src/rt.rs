@@ -77,6 +77,59 @@ where
     }
 }
 
+/// `fold(pattern, init, step)` - a repetition that threads an accumulator
+/// instead of collecting.
+///
+/// Identical to [`repeat_recording`] in how it handles progress, backtracking
+/// and error recording; the difference is that nothing is ever pushed into a
+/// `Vec`. That matters when the number of items is large enough that the
+/// collection, not the parse, is the memory cost - a log or data file with
+/// millions of records is summarised in constant space.
+pub fn fold_recording<'a, S, O, Acc, P, I, F>(
+    min: usize,
+    mut p: P,
+    mut init: I,
+    mut step: F,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, RtError>
+where
+    S: Clone + std::fmt::Debug,
+    P: Parser<ParseInput<'a, S>, O, RtError>,
+    I: FnMut() -> Acc,
+    F: FnMut(Acc, O) -> Acc,
+{
+    move |input| {
+        let mut acc = init();
+        let mut seen = 0usize;
+        loop {
+            let cp = input.checkpoint();
+            let start = input.current_token_start();
+            match p.parse_next(input) {
+                Ok(v) => {
+                    // Zero-progress guard: otherwise the loop spins forever
+                    // when the element matches without consuming anything.
+                    if input.current_token_start() == start {
+                        input.reset(&cp);
+                        break;
+                    }
+                    acc = step(acc, v);
+                    seen += 1;
+                }
+                Err(ErrMode::Backtrack(mut e)) => {
+                    e.push_rule(&format!("item {}", seen + 1));
+                    if seen < min {
+                        return Err(ErrMode::Backtrack(e));
+                    }
+                    input.state.record(&e);
+                    input.reset(&cp);
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(acc)
+    }
+}
+
 /// A labelled alternative (`# "…"`). If it fails at its starting position,
 /// its name counts as the expectation instead of the internal message:
 /// ``expected `(` `` becomes `expected function argument`. If it made

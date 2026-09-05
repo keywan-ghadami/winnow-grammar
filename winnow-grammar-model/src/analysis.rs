@@ -446,6 +446,9 @@ pub fn is_nullable(pattern: &ModelPattern) -> bool {
         | ModelPattern::Parenthesized(_, _) => false,
         ModelPattern::Optional(_, _) => true,
         ModelPattern::Repeat(_, _) => true,
+        // `fold` is a zero-or-more repetition: it succeeds on empty input,
+        // returning the initial accumulator.
+        ModelPattern::Fold { .. } => true,
         ModelPattern::Plus(inner, _) => is_nullable(inner),
         ModelPattern::SpanBinding(inner, _, _) => is_nullable(inner),
         ModelPattern::Recover { .. } => true,
@@ -542,6 +545,7 @@ fn is_pattern_nullable_precise(pattern: &ModelPattern, nullable_rules: &HashSet<
             .any(|(seq, _, _)| is_sequence_nullable(seq, nullable_rules)),
         ModelPattern::Optional(_, _)
         | ModelPattern::Repeat(_, _)
+        | ModelPattern::Fold { .. }
         | ModelPattern::Recover { .. }
         | ModelPattern::Peek(_, _)
         | ModelPattern::Not(_, _)
@@ -661,6 +665,9 @@ fn collect_nullable_deps(
             }
             ModelPattern::Optional(inner, _) | ModelPattern::Repeat(inner, _) => {
                 collect_nullable_deps(std::slice::from_ref(inner), nullable_rules, deps);
+            }
+            ModelPattern::Fold { pattern, .. } => {
+                collect_nullable_deps(std::slice::from_ref(pattern), nullable_rules, deps);
             }
             ModelPattern::Plus(inner, _) => {
                 collect_nullable_deps(std::slice::from_ref(inner), nullable_rules, deps);

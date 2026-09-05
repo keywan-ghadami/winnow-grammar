@@ -37,6 +37,14 @@
 - Action blocks may contain statements (`-> { let x = …; x }`).
 
 ### Added
+
+- **`fold(rule, init, step)`** — a repetition that threads an accumulator rather
+  than collecting into a `Vec`. `repeat`/`*` must materialise every item, which
+  makes the collection, not the parse, the memory cost on large inputs; a fold
+  reduces as it goes and runs in constant space. It shares `repeat`'s handling of
+  progress, backtracking and error recording (`rt::fold_recording`), and like
+  `rule*` it matches zero occurrences, so empty input yields the initial
+  accumulator. Documented in `SYNTAX.md`; tests in `tests/fold_test.rs`.
 - **Variant labels take effect.** `# "…"` used to be parsed and dropped; now the
   name becomes the expectation when the alternative fails at its boundary.
 - **Built-ins name their expectation** (`identifier`, `integer literal`, …).

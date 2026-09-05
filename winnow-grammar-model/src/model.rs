@@ -99,6 +99,15 @@ pub enum ModelPattern {
         pattern: Box<ModelPattern>,
         span: proc_macro2::Span,
     },
+    /// `fold(pattern, init, step)` - a repetition that threads an accumulator
+    /// instead of collecting into a `Vec`.
+    Fold {
+        binding: Option<Ident>,
+        pattern: Box<ModelPattern>,
+        init: syn::Expr,
+        step: syn::Expr,
+        span: proc_macro2::Span,
+    },
     LexicalScope(Box<ModelPattern>, proc_macro2::Span),
     SpacedScope(Box<ModelPattern>, proc_macro2::Span),
     Fail {
@@ -129,6 +138,7 @@ impl ModelPattern {
             ModelPattern::Not(_, s) => *s,
             ModelPattern::Until { span, .. } => *span,
             ModelPattern::Count { span, .. } => *span,
+            ModelPattern::Fold { span, .. } => *span,
             ModelPattern::LexicalScope(_, s) => *s,
             ModelPattern::SpacedScope(_, s) => *s,
             ModelPattern::Fail { span, .. } => *span,
@@ -329,6 +339,19 @@ impl From<parser::Pattern> for ModelPattern {
                 binding,
                 pattern: Box::new((*pattern).into()),
                 span: kw_token.span(), // Custom Keyword has .span()
+            },
+            parser::Pattern::Fold {
+                binding,
+                pattern,
+                init,
+                step,
+                kw_token,
+            } => ModelPattern::Fold {
+                binding,
+                pattern: Box::new((*pattern).into()),
+                init,
+                step,
+                span: kw_token.span(),
             },
             parser::Pattern::Count {
                 binding,

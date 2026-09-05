@@ -11,7 +11,9 @@ pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::I
         ModelPattern::Lit { binding, .. } => *binding = new_binding,
         ModelPattern::Recover { binding, .. } => *binding = new_binding,
         ModelPattern::Until { binding, .. } => *binding = new_binding,
-        ModelPattern::Count { binding, .. } => *binding = new_binding,
+        ModelPattern::Count { binding, .. } | ModelPattern::Fold { binding, .. } => {
+            *binding = new_binding
+        }
         ModelPattern::Optional(inner, _)
         | ModelPattern::Repeat(inner, _)
         | ModelPattern::Plus(inner, _)
@@ -152,6 +154,7 @@ pub(crate) fn substitute_pattern(
         | ModelPattern::Peek(inner, _)
         | ModelPattern::Not(inner, _)
         | ModelPattern::Count { pattern: inner, .. }
+        | ModelPattern::Fold { pattern: inner, .. }
         | ModelPattern::LexicalScope(inner, _)
         | ModelPattern::SpacedScope(inner, _) => {
             substitute_pattern(inner, subst, type_subst);
@@ -194,7 +197,9 @@ pub(crate) fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
         ModelPattern::SpanBinding(inner, _, _) => get_inner_binding(inner),
         ModelPattern::Recover { binding, .. } => binding.as_ref(),
         ModelPattern::Until { binding, .. } => binding.as_ref(),
-        ModelPattern::Count { binding, .. } => binding.as_ref(),
+        ModelPattern::Count { binding, .. } | ModelPattern::Fold { binding, .. } => {
+            binding.as_ref()
+        }
         ModelPattern::Parenthesized(inner, _)
         | ModelPattern::Bracketed(inner, _)
         | ModelPattern::Braced(inner, _) => {
@@ -282,6 +287,11 @@ impl<'a> Codegen<'a> {
                 | ModelPattern::Plus(_, _)
                 | ModelPattern::Count { .. } => quote_spanned! {span=>
                     let #name: Vec<_> = #parser_expr.parse_next(#input)?;
+                },
+                // A fold's value is the accumulator, whose type comes from
+                // `init` - not a collection, so it must not be annotated.
+                ModelPattern::Fold { .. } => quote_spanned! {span=>
+                    let #name = #parser_expr.parse_next(#input)?;
                 },
                 _ => quote_spanned! {span=>
                     let #name = #parser_expr.parse_next(#input)?;
@@ -796,6 +806,19 @@ impl<'a> Codegen<'a> {
                     quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|v: Vec<_>| v.len()) }
                 } else {
                     quote_spanned! {span=> ::winnow::combinator::::winnow_grammar::rt::repeat_recording(0, #p).map(|v: Vec<_>| v.len()) }
+                }
+            }
+            ModelPattern::Fold {
+                pattern,
+                init,
+                step,
+                ..
+            } => {
+                let p = self.generate_parser_expr(pattern, is_lexical, false);
+                if !is_lexical {
+                    quote_spanned! {span=> ::winnow_grammar::rt::fold_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p), #init, #step) }
+                } else {
+                    quote_spanned! {span=> ::winnow_grammar::rt::fold_recording(0, #p, #init, #step) }
                 }
             }
             ModelPattern::Fail { message, .. } => match message {

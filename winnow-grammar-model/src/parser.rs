@@ -40,6 +40,7 @@ pub mod kw {
     syn::custom_keyword!(import);
     syn::custom_keyword!(fail);
     syn::custom_keyword!(count);
+    syn::custom_keyword!(fold);
     syn::custom_keyword!(lex);
     syn::custom_keyword!(spaced);
 }
@@ -583,6 +584,13 @@ pub enum Pattern {
         pattern: Box<Pattern>,
         kw_token: kw::count,
     },
+    Fold {
+        binding: Option<Ident>,
+        pattern: Box<Pattern>,
+        init: syn::Expr,
+        step: syn::Expr,
+        kw_token: kw::fold,
+    },
     LexicalScope(Box<Pattern>, kw::lex),
     SpacedScope(Box<Pattern>, kw::spaced),
     Fail {
@@ -696,6 +704,18 @@ impl Pattern {
                     pattern.collect_bindings(acc);
                 }
             }
+            Pattern::Fold {
+                binding, pattern, ..
+            } => {
+                // The accumulator is the value, so a binding names it; the
+                // element's own bindings live inside `step` and are not visible
+                // to the surrounding action.
+                if let Some(b) = binding {
+                    acc.push(b.clone());
+                } else {
+                    pattern.collect_bindings(acc);
+                }
+            }
             Pattern::LexicalScope(p, _) => p.collect_bindings(acc),
             Pattern::SpacedScope(p, _) => p.collect_bindings(acc),
             Pattern::Fail { .. } => {}
@@ -740,6 +760,9 @@ impl Pattern {
                 binding, pattern, ..
             } => binding.is_some() || pattern.has_binding(),
             Pattern::Count {
+                binding, pattern, ..
+            } => binding.is_some() || pattern.has_binding(),
+            Pattern::Fold {
                 binding, pattern, ..
             } => binding.is_some() || pattern.has_binding(),
             Pattern::LexicalScope(p, _) => p.has_binding(),
@@ -955,6 +978,26 @@ impl ToTokens for Pattern {
                     pattern.to_tokens(t);
                 });
             }
+            Pattern::Fold {
+                binding,
+                pattern,
+                init,
+                step,
+                ..
+            } => {
+                if let Some(b) = binding {
+                    b.to_tokens(tokens);
+                    token::Colon::default().to_tokens(tokens);
+                }
+                kw::fold::default().to_tokens(tokens);
+                token::Paren::default().surround(tokens, |t| {
+                    pattern.to_tokens(t);
+                    token::Comma::default().to_tokens(t);
+                    init.to_tokens(t);
+                    token::Comma::default().to_tokens(t);
+                    step.to_tokens(t);
+                });
+            }
             Pattern::LexicalScope(pattern, kw_token) => {
                 kw_token.to_tokens(tokens);
                 token::Paren::default().surround(tokens, |t| {
@@ -1079,6 +1122,22 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
         Ok(Pattern::Until {
             binding,
             pattern: Box::new(pattern),
+            kw_token,
+        })
+    } else if input.peek(kw::fold) {
+        let kw_token = input.parse::<kw::fold>()?;
+        let content;
+        syn::parenthesized!(content in input);
+        let pattern = content.parse()?;
+        let _ = content.parse::<Token![,]>()?;
+        let init = content.parse::<syn::Expr>()?;
+        let _ = content.parse::<Token![,]>()?;
+        let step = content.parse::<syn::Expr>()?;
+        Ok(Pattern::Fold {
+            binding,
+            pattern: Box::new(pattern),
+            init,
+            step,
             kw_token,
         })
     } else if input.peek(kw::count) {

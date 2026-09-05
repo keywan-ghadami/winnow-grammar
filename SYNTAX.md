@@ -238,6 +238,34 @@ rule T = "bool"
 - **`eof`**: Succeeds only at the end of the input.
 - **`fail("message")`**: Explicitly fails with a custom error message.
 - **`recover(rule, sync)`**: If `rule` fails, skips input until `sync` token is found.
+- **`fold(rule, init, step)`**: Repeats `rule` zero or more times, threading an
+  accumulator instead of collecting. `init` is called once to build the starting
+  value; `step` receives `(accumulator, item)` and returns the next accumulator.
+
+  Use it wherever `rule*` would build a `Vec` you only intend to reduce — the
+  collection is the memory cost on large inputs, not the parse. A data file with
+  millions of records is summarised in constant space:
+
+  ```rust
+  # use winnow_grammar::grammar;
+  # fn main() {
+  grammar! {
+      grammar Records {
+          // (count, total) for the whole input; no Vec is ever built.
+          pub summary -> (usize, i64) =
+              s:fold(record, || (0usize, 0i64),
+                     |acc: (usize, i64), v: i64| (acc.0 + 1, acc.1 + v))
+              -> { s }
+
+          rule record -> i64 = ident "=" v:i64 -> { v }
+      }
+  }
+  # }
+  ```
+
+  Like `rule*`, a fold matches zero occurrences, so it succeeds on empty input
+  and yields the initial accumulator. Bindings inside `rule` are consumed by
+  `step` and do not escape to the surrounding action.
 
 ## Error Messages
 
