@@ -148,7 +148,7 @@ fn collect_from_patterns(patterns: &[ModelPattern], kws: &mut HashSet<String>) {
             ModelPattern::Until { pattern, .. } => {
                 collect_from_patterns(std::slice::from_ref(pattern), kws);
             }
-            ModelPattern::Count { pattern, .. } => {
+            ModelPattern::Count { pattern, .. } | ModelPattern::Fold { pattern, .. } => {
                 collect_from_patterns(std::slice::from_ref(pattern), kws);
             }
             ModelPattern::LexicalScope(pattern, _) | ModelPattern::SpacedScope(pattern, _) => {
@@ -214,6 +214,9 @@ pub fn collect_bindings(patterns: &[ModelPattern]) -> Vec<Ident> {
                 bindings.extend(collect_bindings(std::slice::from_ref(pattern)));
             }
             ModelPattern::Count {
+                binding: Some(b), ..
+            }
+            | ModelPattern::Fold {
                 binding: Some(b), ..
             } => {
                 bindings.push(b.clone());
@@ -799,6 +802,7 @@ fn collect_called_rules<F: FnMut(String)>(patterns: &[ModelPattern], cb: &mut F)
             | ModelPattern::Not(inner, _)
             | ModelPattern::Until { pattern: inner, .. }
             | ModelPattern::Count { pattern: inner, .. }
+            | ModelPattern::Fold { pattern: inner, .. }
             | ModelPattern::LexicalScope(inner, _)
             | ModelPattern::SpacedScope(inner, _) => {
                 collect_called_rules(std::slice::from_ref(inner), cb);
@@ -1009,7 +1013,7 @@ fn collect_first_from_sequence(
                     acc,
                 );
             }
-            ModelPattern::Count { pattern, .. } => {
+            ModelPattern::Count { pattern, .. } | ModelPattern::Fold { pattern, .. } => {
                 collect_first_from_sequence(
                     std::slice::from_ref(pattern),
                     first_sets,

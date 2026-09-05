@@ -104,8 +104,10 @@ pub enum ModelPattern {
     Fold {
         binding: Option<Ident>,
         pattern: Box<ModelPattern>,
-        init: syn::Expr,
-        step: syn::Expr,
+        // Boxed for the same reason as in `parser::Pattern::Fold`: two inline
+        // `syn::Expr` would quadruple this enum's size.
+        init: Box<syn::Expr>,
+        step: Box<syn::Expr>,
         span: proc_macro2::Span,
     },
     LexicalScope(Box<ModelPattern>, proc_macro2::Span),

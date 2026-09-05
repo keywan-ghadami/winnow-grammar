@@ -587,8 +587,11 @@ pub enum Pattern {
     Fold {
         binding: Option<Ident>,
         pattern: Box<Pattern>,
-        init: syn::Expr,
-        step: syn::Expr,
+        // Boxed: a bare `syn::Expr` is ~260 bytes, and two of them would make
+        // this variant four times the size of the next largest, a cost every
+        // `Pattern` in the grammar would carry.
+        init: Box<syn::Expr>,
+        step: Box<syn::Expr>,
         kw_token: kw::fold,
     },
     LexicalScope(Box<Pattern>, kw::lex),
@@ -1130,9 +1133,9 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
         syn::parenthesized!(content in input);
         let pattern = content.parse()?;
         let _ = content.parse::<Token![,]>()?;
-        let init = content.parse::<syn::Expr>()?;
+        let init = Box::new(content.parse::<syn::Expr>()?);
         let _ = content.parse::<Token![,]>()?;
-        let step = content.parse::<syn::Expr>()?;
+        let step = Box::new(content.parse::<syn::Expr>()?);
         Ok(Pattern::Fold {
             binding,
             pattern: Box::new(pattern),
