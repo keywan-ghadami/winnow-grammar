@@ -124,7 +124,7 @@ was found, the position and the rule stack — see *Error Messages* in
 
 ```text
 expected one of: `&`, identifier; found unexpected token `)` at line 1, column 9
-in typ
+in ty
 in arg
 ```
 

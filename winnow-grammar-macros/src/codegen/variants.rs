@@ -72,7 +72,7 @@ impl<'a> Codegen<'a> {
             // name counts as the expectation. Until now the label was parsed
             // and discarded.
             match &v.label {
-                Some(label) => quote_spanned! {span=> ::winnow_grammar::rt::beschriftet(#label, #closure) },
+                Some(label) => quote_spanned! {span=> ::winnow_grammar::rt::labelled(#label, #closure) },
                 None => closure,
             }
         });
@@ -139,11 +139,11 @@ impl<'a> Codegen<'a> {
             match &v.label {
                 Some(label) => quote_spanned! {span=>
                     {
-                        let mut __beschriftet = ::winnow_grammar::rt::beschriftet(
+                        let mut __labelled = ::winnow_grammar::rt::labelled(
                             #label,
                             |#input: &mut ::winnow_grammar::ParseInput<'a, S>| #body,
                         );
-                        ::winnow::Parser::parse_next(&mut __beschriftet, #input)
+                        ::winnow::Parser::parse_next(&mut __labelled, #input)
                     }
                 },
                 None => body,

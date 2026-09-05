@@ -11,10 +11,10 @@ errors in *that* language and has to understand them without knowing the
 grammar.
 
 Until now the error type came from winnow (`ContextError`). Measured on
-`fn f(a: );` with `typ = ident | "&" ident`:
+`fn f(a: );` with `ty = ident | "&" ident`:
 
 ```
-invalid typ
+invalid ty
 expected `&`
 ```
 
@@ -42,12 +42,12 @@ selection:
 3. **Aggregation** on a tie: the expectations are merged.
 
 What `alt` never sees — errors that `x?` and `x*` discard on a *successful*
-backtrack — is remembered in `ParseContext::furthest`; `rt::abschluss` weighs
+backtrack — is remembered in `ParseContext::furthest`; `rt::finish` weighs
 it against the returned error at the end. A remembered error gets its outer
-rules from the **live** rule stack (`ParseContext::regeln`), because it never
+rules from the **live** rule stack (`ParseContext::rules`), because it never
 travels the return path where rules are normally collected.
 
-The error is boxed (`ParseError(Box<Kern>)`, fields reachable through `Deref`):
+The error is boxed (`ParseError(Box<ErrorCore>)`, fields reachable through `Deref`):
 every closure level of a generated parser holds a `Result<_, ErrMode<ParseError>>`
 on the stack, and with the payload inline (about 130 bytes instead of 32) a rule
 nested 500 deep overflowed the stack in a debug build.
@@ -58,7 +58,7 @@ nested 500 deep overflowed the stack in a debug build.
 |---|---|---|
 | 1 | Alternatives failing at the same position are merged, and what was found is named | ``expected one of: `&`, identifier; found unexpected token `)` `` |
 | 2 | Position as line and column, 1-based | `at line 2, column 8` |
-| 3 | Rule stack, innermost first — also for remembered errors | `in typ / in arg / in item 1 / in decl` |
+| 3 | Rule stack, innermost first — also for remembered errors | `in ty / in arg / in item 1 / in decl` |
 | 4 | End of input is called by name | ``unexpected end of input, expected `;` `` |
 | 5 | Trailing input reports the reason, not just "expected end of input" | ``expected `;`; found unexpected token `extra` `` |
 | 6 | A labelled alternative (`# "…"`) contributes its name at its boundary | `expected one of: number, string` |
@@ -80,7 +80,7 @@ winnow's primitives only report the position.
   parsers plugged into a grammar must return `ErrMode<ParseError>`;
   `ParseError` implements `FromExternalError` for `parse_to()` and
   `AddContext<StrContext>`, so winnow combinators keep working unchanged.
-* `ParseContext` has two new fields (`furthest`, `regeln`). Code that builds it
+* `ParseContext` has two new fields (`furthest`, `rules`). Code that builds it
   through `Default` is unaffected.
 * Still missing compared to syn-grammar: `recover(..)` does not report the
   error it skipped over (it is discarded, not remembered), and `until` has no

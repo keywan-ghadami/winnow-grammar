@@ -9,7 +9,7 @@ use winnow_grammar_model::{
 
 impl<'a> Codegen<'a> {
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
-        if super::ist_vorlage(rule) {
+        if super::is_template(rule) {
             // Template rules are not compiled as functions of their own.
             // They are inlined directly at the call site in expr.rs via AST substitution.
             return quote! {};
@@ -174,8 +174,8 @@ impl<'a> Codegen<'a> {
                 // The rule name sits on the live stack for the duration of the
                 // body, so that an error RECORDED along the way picks it up.
                 // Errors passed out collect it via `.context(Label)`.
-                #input.state.regeln.push(#rule_name_str);
-                let ergebnis = {
+                #input.state.rules.push(#rule_name_str);
+                let result = {
                     #[cfg(feature = "trace")]
                     {
                         ::winnow::combinator::trace(#rule_name_str, parser).parse_next(#input)
@@ -185,8 +185,8 @@ impl<'a> Codegen<'a> {
                         parser.parse_next(#input)
                     }
                 };
-                #input.state.regeln.pop();
-                ergebnis
+                #input.state.rules.pop();
+                result
             }
         };
 
@@ -205,7 +205,7 @@ impl<'a> Codegen<'a> {
                 // Entry point: the recorded error belongs to THIS run.
                 input.state.furthest = None;
 
-                let ergebnis: ::winnow::Result<#ret_type, ::winnow::error::ErrMode<#err_type>> = (|| {
+                let result: ::winnow::Result<#ret_type, ::winnow::error::ErrMode<#err_type>> = (|| {
                     WS(input)?;
                     let result = #inner_fn_name(input, #(#arg_names),*)?;
                     WS(input)?;
@@ -213,8 +213,8 @@ impl<'a> Codegen<'a> {
                 })();
 
                 // Error selection against the recorded error and check for
-                // leftover input - see `rt::abschluss`.
-                ::winnow_grammar::rt::abschluss(input, ergebnis)
+                // leftover input - see `rt::finish`.
+                ::winnow_grammar::rt::finish(input, result)
             }
         };
 

@@ -33,13 +33,13 @@ pub struct ParseContext<S = ()> {
     pub user_state: S,
     /// The furthest failure position that a successful backtrack (`x?`, `x*`)
     /// discarded. Compared against the returned error at the end - see
-    /// [`crate::rt::abschluss`].
+    /// [`crate::rt::finish`].
     pub furthest: Option<ParseError>,
     /// The **live** rule stack: the rules currently running, outermost first.
     /// An error that is passed out collects its rules itself on the way back;
     /// an error that is *recorded* along the way never gets there - it
     /// receives the outer rules from here.
-    pub regeln: Vec<&'static str>,
+    pub rules: Vec<&'static str>,
 }
 
 impl<S: Default> Default for ParseContext<S> {
@@ -48,7 +48,7 @@ impl<S: Default> Default for ParseContext<S> {
             interner: InternerContext::new(),
             user_state: S::default(),
             furthest: None,
-            regeln: Vec::new(),
+            rules: Vec::new(),
         }
     }
 }
@@ -56,9 +56,9 @@ impl<S: Default> Default for ParseContext<S> {
 impl<S> ParseContext<S> {
     /// Records a discarded error - following the same ranking as
     /// [`ParseError::merge`].
-    pub fn merke(&mut self, e: &ParseError) {
+    pub fn record(&mut self, e: &ParseError) {
         let mut e = e.clone();
-        for r in self.regeln.iter().rev() {
+        for r in self.rules.iter().rev() {
             e.push_rule(r);
         }
         self.furthest = Some(match self.furthest.take() {
@@ -68,7 +68,7 @@ impl<S> ParseContext<S> {
     }
 
     /// The better of the returned error and the recorded one.
-    pub fn beste(&self, e: ParseError) -> ParseError {
+    pub fn best(&self, e: ParseError) -> ParseError {
         match &self.furthest {
             Some(f) => f.clone().merge(e),
             None => e,

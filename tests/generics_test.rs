@@ -9,18 +9,18 @@ grammar! {
         pub main -> Vec<u32> = l:list<u32>(item=u32) -> { l }
 
         // Form 2: parameter without type, type parameter explicit at the call site.
-        liste<T>(item) -> Vec<T> = items:item* -> { items }
-        pub explizit -> Vec<u32> = l:liste<u32>(item=u32) -> { l }
+        list_untyped<T>(item) -> Vec<T> = items:item* -> { items }
+        pub explicit -> Vec<u32> = l:list_untyped<u32>(item=u32) -> { l }
 
         // Form 3: parameter without type, type parameter inferred from the argument -
         // the form from SYNTAX.md. Previously: "cannot find value `item`".
-        pub abgeleitet -> Vec<u32> = l:liste(item=u32) -> { l }
+        pub inferred -> Vec<u32> = l:list_untyped(item=u32) -> { l }
 
         // Type parameter also in the action block: must be substituted too. The
         // block contains statements - previously that did not work anywhere
         // ("expected expression, found `let` statement").
-        gesammelt<T>(item) -> Vec<T> = items:item* -> { let mut v: Vec<T> = Vec::new(); v.extend(items); v }
-        pub im_aktionsblock -> Vec<u32> = l:gesammelt(item=u32) -> { l }
+        collected<T>(item) -> Vec<T> = items:item* -> { let mut v: Vec<T> = Vec::new(); v.extend(items); v }
+        pub in_action_block -> Vec<u32> = l:collected(item=u32) -> { l }
     }
 }
 
@@ -32,22 +32,22 @@ fn test_generics() {
 }
 
 #[test]
-fn parser_parameter_ohne_typ_explizite_generics() {
-    Generics::parse_explizit()
+fn parser_parameter_without_type_explicit_generics() {
+    Generics::parse_explicit()
         .parse_test("1 2 3")
         .assert_success_is(vec![1, 2, 3]);
 }
 
 #[test]
-fn parser_parameter_ohne_typ_abgeleitete_generics() {
-    Generics::parse_abgeleitet()
+fn parser_parameter_without_type_inferred_generics() {
+    Generics::parse_inferred()
         .parse_test("4 5")
         .assert_success_is(vec![4, 5]);
 }
 
 #[test]
-fn typparameter_im_aktionsblock_wird_ersetzt() {
-    Generics::parse_im_aktionsblock()
+fn type_parameter_in_action_block_is_substituted() {
+    Generics::parse_in_action_block()
         .parse_test("7")
         .assert_success_is(vec![7]);
 }

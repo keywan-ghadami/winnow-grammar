@@ -246,7 +246,7 @@ message names what was expected, what was found, where, and in which rules:
 
 ```text
 expected one of: `&`, identifier; found unexpected token `)` at line 1, column 9
-in typ
+in ty
 in arg
 in item 1
 in decl

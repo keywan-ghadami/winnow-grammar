@@ -27,31 +27,31 @@ pub const PRIO_STRUCTURAL: u8 = 50;
 
 /// A parse error with everything that selection and display need.
 ///
-/// Pointer-sized: the content lives in a [`Kern`] on the heap, the fields
+/// Pointer-sized: the content lives in a [`ErrorCore`] on the heap, the fields
 /// are reachable via `Deref` (`e.expected`, `e.offset`). An error is the
 /// rare path, success the common one - and every closure level of the
 /// generated parser holds a `Result<_, ErrMode<ParseError>>` on the stack.
 /// With the content inline (around 130 bytes), a 500-fold nested rule ran
 /// into a stack overflow in the debug build.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError(Box<Kern>);
+pub struct ParseError(Box<ErrorCore>);
 
 impl std::ops::Deref for ParseError {
-    type Target = Kern;
-    fn deref(&self) -> &Kern {
+    type Target = ErrorCore;
+    fn deref(&self) -> &ErrorCore {
         &self.0
     }
 }
 
 impl std::ops::DerefMut for ParseError {
-    fn deref_mut(&mut self) -> &mut Kern {
+    fn deref_mut(&mut self) -> &mut ErrorCore {
         &mut self.0
     }
 }
 
 /// The content of a [`ParseError`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Kern {
+pub struct ErrorCore {
     /// For SELECTION: byte offset at which things went wrong. Whoever got
     /// further was closer to the intended derivation.
     pub offset: usize,
@@ -73,33 +73,33 @@ pub struct Kern {
 impl ParseError {
     /// Error at the current position of the stream.
     pub fn from_stream<I: Stream + Location + AsBStr>(input: &I) -> Self {
-        ParseError(Box::new(Kern {
+        ParseError(Box::new(ErrorCore {
             offset: input.current_token_start(),
             expected: Vec::new(),
             message: None,
-            found: naechstes_wort(input.as_bstr()),
+            found: next_word(input.as_bstr()),
             rule_stack: Vec::new(),
             priority: PRIO_NORMAL,
         }))
     }
 
     /// Appends an expectation unless it is already present.
-    pub fn erwarte(mut self, was: impl Into<String>) -> Self {
-        let was = was.into();
-        if !self.expected.contains(&was) {
-            self.expected.push(was);
+    pub fn add_expected(mut self, what: impl Into<String>) -> Self {
+        let what = what.into();
+        if !self.expected.contains(&what) {
+            self.expected.push(what);
         }
         self
     }
 
     /// Sets a verbatim message.
-    pub fn mit_meldung(mut self, meldung: impl Into<String>) -> Self {
-        self.message = Some(meldung.into());
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
         self
     }
 
     /// Sets the priority.
-    pub fn mit_prioritaet(mut self, prio: u8) -> Self {
+    pub fn with_priority(mut self, prio: u8) -> Self {
         self.priority = prio;
         self
     }
@@ -153,19 +153,19 @@ impl ParseError {
     }
 
     /// The first line of the message - without position and rule stack.
-    pub fn kopf(&self) -> String {
+    pub fn headline(&self) -> String {
         if let Some(m) = &self.message {
             return m.clone();
         }
-        let mut erwartet = self.expected.clone();
-        erwartet.sort();
-        erwartet.dedup();
-        let erwartung = match erwartet.len() {
+        let mut expected = self.expected.clone();
+        expected.sort();
+        expected.dedup();
+        let expectation = match expected.len() {
             0 => None,
-            1 => Some(format!("expected {}", erwartet[0])),
-            _ => Some(format!("expected one of: {}", erwartet.join(", "))),
+            1 => Some(format!("expected {}", expected[0])),
+            _ => Some(format!("expected one of: {}", expected.join(", "))),
         };
-        match (&self.found, erwartung) {
+        match (&self.found, expectation) {
             (None, Some(e)) => format!("unexpected end of input, {e}"),
             (None, None) => "unexpected end of input".to_string(),
             (Some(f), Some(e)) => format!("{e}; found unexpected token `{f}`"),
@@ -173,13 +173,13 @@ impl ParseError {
         }
     }
 
-    /// Line and column (1-based) of [`Kern::offset`] in `source`.
-    pub fn zeile_spalte(&self, source: &str) -> (usize, usize) {
-        let bis = self.offset.min(source.len());
-        let vor = &source[..bis];
-        let zeile = vor.matches('\n').count() + 1;
-        let spalte = vor.rsplit('\n').next().map_or(0, |z| z.chars().count()) + 1;
-        (zeile, spalte)
+    /// Line and column (1-based) of [`ErrorCore::offset`] in `source`.
+    pub fn line_column(&self, source: &str) -> (usize, usize) {
+        let end = self.offset.min(source.len());
+        let before = &source[..end];
+        let line = before.matches('\n').count() + 1;
+        let column = before.rsplit('\n').next().map_or(0, |z| z.chars().count()) + 1;
+        (line, column)
     }
 
     /// The complete message with position, as a user should see it.
@@ -188,8 +188,8 @@ impl ParseError {
     /// (from `Parser::parse`) prepends it along with the source line; whoever
     /// goes through `parse_next` has the source themselves and calls this.
     pub fn render(&self, source: &str) -> String {
-        let (zeile, spalte) = self.zeile_spalte(source);
-        let mut s = format!("{} at line {}, column {}", self.kopf(), zeile, spalte);
+        let (line, column) = self.line_column(source);
+        let mut s = format!("{} at line {}, column {}", self.headline(), line, column);
         for r in &self.rule_stack {
             s.push_str("\nin ");
             s.push_str(r);
@@ -199,25 +199,25 @@ impl ParseError {
 }
 
 /// The next word (letters, digits, `_`) or the next character.
-fn naechstes_wort(rest: &[u8]) -> Option<String> {
+fn next_word(rest: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(&rest[..rest.len().min(64)]);
-    let erstes = text.chars().next()?;
-    if erstes.is_alphanumeric() || erstes == '_' {
+    let first = text.chars().next()?;
+    if first.is_alphanumeric() || first == '_' {
         Some(
             text.chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect(),
         )
-    } else if erstes == '\n' {
+    } else if first == '\n' {
         Some("newline".to_string())
     } else {
-        Some(erstes.to_string())
+        Some(first.to_string())
     }
 }
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.kopf())?;
+        f.write_str(&self.headline())?;
         for r in &self.rule_stack {
             write!(f, "\nin {r}")?;
         }
@@ -254,7 +254,7 @@ impl<I: Stream + Location + AsBStr> AddContext<I, StrContext> for ParseError {
     ) -> Self {
         match ctx {
             StrContext::Label(name) => self.push_rule(name),
-            StrContext::Expected(was) => self = self.erwarte(was.to_string()),
+            StrContext::Expected(what) => self = self.add_expected(what.to_string()),
             _ => {}
         }
         self
@@ -263,6 +263,6 @@ impl<I: Stream + Location + AsBStr> AddContext<I, StrContext> for ParseError {
 
 impl<I: Stream + Location + AsBStr, E: fmt::Display> FromExternalError<I, E> for ParseError {
     fn from_external_error(input: &I, e: E) -> Self {
-        Self::from_stream(input).mit_meldung(e.to_string())
+        Self::from_stream(input).with_message(e.to_string())
     }
 }

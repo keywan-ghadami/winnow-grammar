@@ -16,12 +16,12 @@ use winnow_grammar_model::model::GrammarDefinition;
 /// * `list<T>(item: Rule<T>)` - the parameter is declared as a rule and its
 ///   result type bound to `T`;
 /// * `list<T>(item)` - without a type. `T` is then inferred from the argument
-///   (see `Codegen::leite_typ_ab`).
+///   (see `Codegen::infer_type`).
 ///
 /// Previously only the first form counted as a template. The second went down
 /// the path for runtime parameters, whose inner function names the parameter
 /// `item_wrapper` while the body says `item` - hence ``cannot find value `item` ``.
-pub(crate) fn ist_vorlage(rule: &winnow_grammar_model::model::Rule) -> bool {
+pub(crate) fn is_template(rule: &winnow_grammar_model::model::Rule) -> bool {
     rule.params.iter().any(|p| match &p.ty {
         None => true,
         Some(syn::Type::Path(type_path)) => type_path

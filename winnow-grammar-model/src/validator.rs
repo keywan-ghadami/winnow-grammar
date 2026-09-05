@@ -67,17 +67,17 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<()> {
             // syntactic rule inside the whitespace: it calls `WS` at its
             // start, and `WS` calls it. That is what the message says - and it
             // points at the rule to change, not at `WS`.
-            if let Some(schuldig) = cycle.iter().find(|n| *n != "WS") {
+            if let Some(culprit) = cycle.iter().find(|n| *n != "WS") {
                 if cycle.iter().any(|n| n == "WS") {
-                    let rule = grammar.rules.iter().find(|r| r.name == *schuldig).unwrap();
+                    let rule = grammar.rules.iter().find(|r| r.name == *culprit).unwrap();
                     let msg = format!(
                         "rule `{name}` is used by `WS` but is syntactic (lowercase): \
                          a syntactic rule skips whitespace at its start by calling `WS`, \
                          so `{cycle}` recurses without consuming input. \
                          Rules used for whitespace must be lexical - name it `{upper}`.",
-                        name = schuldig,
+                        name = culprit,
                         cycle = cycle_str,
-                        upper = schuldig.to_uppercase(),
+                        upper = culprit.to_uppercase(),
                     );
                     return Err(syn::Error::new(rule.name.span(), msg));
                 }

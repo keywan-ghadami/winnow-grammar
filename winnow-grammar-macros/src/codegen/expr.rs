@@ -34,9 +34,9 @@ pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::I
 }
 
 /// Substitutes type parameters in an action block (`Vec::<T>::new()`).
-struct TypSubst<'a>(&'a HashMap<String, syn::Type>);
+struct TypeSubst<'a>(&'a HashMap<String, syn::Type>);
 
-impl syn::visit_mut::VisitMut for TypSubst<'_> {
+impl syn::visit_mut::VisitMut for TypeSubst<'_> {
     fn visit_type_mut(&mut self, ty: &mut syn::Type) {
         replace_type(ty, self.0);
         syn::visit_mut::visit_type_mut(self, ty);
@@ -79,7 +79,7 @@ pub(crate) fn replace_type(ty: &mut syn::Type, subst: &HashMap<String, syn::Type
 /// Substitutes the parser parameters (`subst`) and the type parameters
 /// (`type_subst`) in a template. One traversal for both.
 /// What a builtin expects - the text after `expected …`.
-fn builtin_erwartung(name: &str) -> Option<&'static str> {
+fn builtin_expectation(name: &str) -> Option<&'static str> {
     Some(match name {
         "ident" | "raw_ident" => "identifier",
         "string" => "string literal",
@@ -379,7 +379,7 @@ impl<'a> Codegen<'a> {
     /// A literal yields `()`, a user rule its declared return type, a builtin
     /// the type from its declaration. Everything else (groups, repetitions)
     /// remains open - then the caller has to spell out the generics.
-    fn leite_typ_ab(&self, pattern: &ModelPattern) -> Option<syn::Type> {
+    fn infer_type(&self, pattern: &ModelPattern) -> Option<syn::Type> {
         use winnow_grammar_model::Backend;
         match pattern {
             ModelPattern::Lit { .. } => Some(syn::parse_quote!(())),
@@ -417,7 +417,7 @@ impl<'a> Codegen<'a> {
                 .find(|r| r.name == name_str)
                 .unwrap();
 
-            if super::ist_vorlage(target_rule) {
+            if super::is_template(target_rule) {
                 // 3b. Parser parameters -> argument patterns
                 let arg_patterns: Vec<ModelPattern> = args
                     .iter()
@@ -443,8 +443,7 @@ impl<'a> Codegen<'a> {
                 for (idx, name) in type_params.enumerate() {
                     if let Some(call_ty) = call_generics.get(idx) {
                         type_subst.insert(name, call_ty.clone());
-                    } else if let Some(ty) =
-                        arg_patterns.get(idx).and_then(|p| self.leite_typ_ab(p))
+                    } else if let Some(ty) = arg_patterns.get(idx).and_then(|p| self.infer_type(p))
                     {
                         type_subst.insert(name, ty);
                     }
@@ -464,7 +463,7 @@ impl<'a> Codegen<'a> {
                     let action = &variant.action;
                     if let Ok(mut block) = syn::parse2::<syn::Block>(quote::quote!({ #action })) {
                         syn::visit_mut::VisitMut::visit_block_mut(
-                            &mut TypSubst(&type_subst),
+                            &mut TypeSubst(&type_subst),
                             &mut block,
                         );
                         variant.action = quote::quote!(#block);
@@ -662,8 +661,8 @@ impl<'a> Codegen<'a> {
         // winnow's primitives only report the position. The expectation comes
         // from here - otherwise an `ident` branch would contribute nothing at
         // all to `expected one of: …`.
-        match builtin_erwartung(&name_str) {
-            Some(was) => quote_spanned! {span=> ::winnow_grammar::rt::erwartet(#was, #p) },
+        match builtin_expectation(&name_str) {
+            Some(what) => quote_spanned! {span=> ::winnow_grammar::rt::expected(#what, #p) },
             None => p,
         }
     }
@@ -717,35 +716,35 @@ impl<'a> Codegen<'a> {
             }
             ModelPattern::Optional(inner, _) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
-                quote_spanned! {span=> ::winnow_grammar::rt::opt_merkend(#p) }
+                quote_spanned! {span=> ::winnow_grammar::rt::opt_recording(#p) }
             }
             ModelPattern::Repeat(inner, _span) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 if !is_lexical {
                     if is_discarded {
                         // Using |i: &mut _| WS(i) explicitly since WS is a function and preceded requires a Parser.
-                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
+                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
                     } else {
-                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
+                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
                     }
                 } else if is_discarded {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(0, #p).map(|_| ()) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, #p).map(|_| ()) }
                 } else {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(0, #p) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, #p) }
                 }
             }
             ModelPattern::Plus(inner, _span) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 if !is_lexical {
                     if is_discarded {
-                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(1, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
+                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(1, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
                     } else {
-                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(1, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
+                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(1, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
                     }
                 } else if is_discarded {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(1, #p).map(|_| ()) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(1, #p).map(|_| ()) }
                 } else {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(1, #p) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(1, #p) }
                 }
             }
             ModelPattern::Parenthesized(inner, _) => {
@@ -794,9 +793,9 @@ impl<'a> Codegen<'a> {
             ModelPattern::Count { pattern, .. } => {
                 let p = self.generate_parser_expr(pattern, is_lexical, false);
                 if !is_lexical {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|v: Vec<_>| v.len()) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|v: Vec<_>| v.len()) }
                 } else {
-                    quote_spanned! {span=> ::winnow::combinator::::winnow_grammar::rt::repeat_merkend(0, #p).map(|v: Vec<_>| v.len()) }
+                    quote_spanned! {span=> ::winnow::combinator::::winnow_grammar::rt::repeat_recording(0, #p).map(|v: Vec<_>| v.len()) }
                 }
             }
             ModelPattern::Fail { message, .. } => match message {

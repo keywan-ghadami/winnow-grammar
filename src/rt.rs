@@ -11,23 +11,23 @@ use winnow::error::ErrMode;
 use winnow::stream::{Location, Stream};
 use winnow::Parser;
 
-type Fehler = ErrMode<ParseError>;
+type RtError = ErrMode<ParseError>;
 
 /// `x?` - at most once. A failed attempt is **recorded**, not thrown away:
 /// if the rule later fails at a shallower position or input is left over, it
 /// is the better message.
-pub fn opt_merkend<'a, S: Clone + std::fmt::Debug, O, P>(
+pub fn opt_recording<'a, S: Clone + std::fmt::Debug, O, P>(
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Option<O>, Fehler>
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Option<O>, RtError>
 where
-    P: Parser<ParseInput<'a, S>, O, Fehler>,
+    P: Parser<ParseInput<'a, S>, O, RtError>,
 {
     move |input| {
         let cp = input.checkpoint();
         match p.parse_next(input) {
             Ok(v) => Ok(Some(v)),
             Err(ErrMode::Backtrack(e)) => {
-                input.state.merke(&e);
+                input.state.record(&e);
                 input.reset(&cp);
                 Ok(None)
             }
@@ -39,12 +39,12 @@ where
 /// `x*` / `x+` - repetition with a minimum count. The reason why it did not
 /// continue is recorded and carries the index of the attempted element
 /// (`in item 3`). Below the minimum count it is the error itself.
-pub fn repeat_merkend<'a, S: Clone + std::fmt::Debug, O, P>(
+pub fn repeat_recording<'a, S: Clone + std::fmt::Debug, O, P>(
     min: usize,
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Vec<O>, Fehler>
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Vec<O>, RtError>
 where
-    P: Parser<ParseInput<'a, S>, O, Fehler>,
+    P: Parser<ParseInput<'a, S>, O, RtError>,
 {
     move |input| {
         let mut items = Vec::new();
@@ -66,7 +66,7 @@ where
                     if items.len() < min {
                         return Err(ErrMode::Backtrack(e));
                     }
-                    input.state.merke(&e);
+                    input.state.record(&e);
                     input.reset(&cp);
                     break;
                 }
@@ -81,12 +81,12 @@ where
 /// its name counts as the expectation instead of the internal message:
 /// ``expected `(` `` becomes `expected function argument`. If it made
 /// progress, its own message is the more informative one and stays.
-pub fn beschriftet<'a, S: Clone + std::fmt::Debug, O, P>(
+pub fn labelled<'a, S: Clone + std::fmt::Debug, O, P>(
     label: &'static str,
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, Fehler>
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, RtError>
 where
-    P: Parser<ParseInput<'a, S>, O, Fehler>,
+    P: Parser<ParseInput<'a, S>, O, RtError>,
 {
     move |input| {
         let start = input.current_token_start();
@@ -105,12 +105,12 @@ where
 
 /// Gives a builtin an expectation (`identifier`, `integer literal`) if it
 /// failed without one - winnow's own primitives only report the position.
-pub fn erwartet<'a, S: Clone + std::fmt::Debug, O, P>(
-    was: &'static str,
+pub fn expected<'a, S: Clone + std::fmt::Debug, O, P>(
+    what: &'static str,
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, Fehler>
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, RtError>
 where
-    P: Parser<ParseInput<'a, S>, O, Fehler>,
+    P: Parser<ParseInput<'a, S>, O, RtError>,
 {
     move |input| {
         let start = input.current_token_start();
@@ -118,7 +118,7 @@ where
             Err(ErrMode::Backtrack(e))
                 if e.offset == start && e.expected.is_empty() && e.message.is_none() =>
             {
-                Err(ErrMode::Backtrack(e.erwarte(was)))
+                Err(ErrMode::Backtrack(e.add_expected(what)))
             }
             r => r,
         }
@@ -128,13 +128,13 @@ where
 /// `fail("…")`: verbatim message, high priority - but not fatal. An error
 /// that got further still wins (progress before priority).
 pub fn fail<'a, S: Clone + std::fmt::Debug, O>(
-    meldung: &'static str,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, Fehler> {
+    message: &'static str,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, RtError> {
     move |input| {
         Err(ErrMode::Backtrack(
             ParseError::from_stream(input)
-                .mit_meldung(meldung)
-                .mit_prioritaet(PRIO_STRUCTURAL),
+                .with_message(message)
+                .with_priority(PRIO_STRUCTURAL),
         ))
     }
 }
@@ -145,22 +145,22 @@ pub fn fail<'a, S: Clone + std::fmt::Debug, O>(
 /// got further may have been hidden along the way by a successful backtrack.
 /// And if the rule succeeded without consuming everything, the recorded
 /// reason is the answer - otherwise only "expected end of input" would remain.
-pub fn abschluss<'a, S: Clone + std::fmt::Debug, O>(
+pub fn finish<'a, S: Clone + std::fmt::Debug, O>(
     input: &mut ParseInput<'a, S>,
-    ergebnis: Result<O, Fehler>,
+    result: Result<O, RtError>,
 ) -> Result<O, ParseError> {
-    match ergebnis {
+    match result {
         Ok(v) => {
             if input.eof_offset() == 0 {
                 Ok(v)
             } else {
-                let e = ParseError::from_stream(input).erwarte("end of input");
-                Err(input.state.beste(e))
+                let e = ParseError::from_stream(input).add_expected("end of input");
+                Err(input.state.best(e))
             }
         }
-        Err(ErrMode::Backtrack(e) | ErrMode::Cut(e)) => Err(input.state.beste(e)),
+        Err(ErrMode::Backtrack(e) | ErrMode::Cut(e)) => Err(input.state.best(e)),
         Err(ErrMode::Incomplete(_)) => {
-            Err(ParseError::from_stream(input).mit_meldung("incomplete input"))
+            Err(ParseError::from_stream(input).with_message("incomplete input"))
         }
     }
 }

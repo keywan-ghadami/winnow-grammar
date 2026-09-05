@@ -8,14 +8,14 @@
 - **Own diagnostics engine.** `parse_<rule>()` returns `winnow_grammar::ParseError`
   instead of `winnow::error::ContextError`. The message text changes: `invalid X`
   becomes ``expected one of: `&`, identifier; found unexpected token `)` `` plus
-  the rule stack (`in typ`, `in arg`, `in item 1`). Selection by progress, then
+  the rule stack (`in ty`, `in arg`, `in item 1`). Selection by progress, then
   priority, then aggregation — the contract is `docs/adr/adr15-diagnostics.md`,
   one test per point in `tests/diagnostics.rs`.
   - **Migration**: code that checks message text adjusts it. Hand-written
     parsers plugged into a grammar return `ErrMode<ParseError>`; `ParseError`
     implements `ParserError`, `AddContext<StrContext>` and `FromExternalError`,
     so winnow combinators keep working unchanged.
-- **`ParseContext`** has two new fields, `furthest` and `regeln`. Code that
+- **`ParseContext`** has two new fields, `furthest` and `rules`. Code that
   builds it through `Default` is unaffected.
 
 ### Fixed
