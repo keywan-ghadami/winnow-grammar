@@ -10,9 +10,15 @@ pub use winnow_grammar_macros::grammar;
 // Re-export winnow so generated code has access to it
 pub use winnow;
 
+/// Der Fehlertyp der erzeugten Parser und die Auswahl zwischen Fehlern.
+pub mod error;
 pub mod interner;
+/// Laufzeithelfer fuer den erzeugten Code.
+pub mod rt;
 pub mod test_result;
 pub mod testing;
+
+pub use error::{ParseError, PRIO_AGGREGATED, PRIO_LABELED, PRIO_NORMAL, PRIO_STRUCTURAL};
 
 pub use interner::{InternerContext, Symbol};
 
@@ -25,6 +31,15 @@ pub struct ParseContext<S = ()> {
     pub interner: InternerContext,
     /// A placeholder for user-defined state.
     pub user_state: S,
+    /// Die weiteste Fehlschlagstelle, die ein erfolgreiches Zuruecksetzen
+    /// (`x?`, `x*`) verworfen hat. Wird am Ende gegen den zurueckgegebenen
+    /// Fehler gehalten - siehe [`crate::rt::abschluss`].
+    pub furthest: Option<ParseError>,
+    /// Der **lebende** Regelstapel: die Regeln, die gerade laufen, aeusserste
+    /// zuerst. Ein Fehler, der herausgereicht wird, sammelt seine Regeln auf
+    /// dem Rueckweg selbst; ein Fehler, der unterwegs *gemerkt* wird, kommt
+    /// dort nie vorbei - er bekommt die aeusseren Regeln von hier.
+    pub regeln: Vec<&'static str>,
 }
 
 impl<S: Default> Default for ParseContext<S> {
@@ -32,6 +47,31 @@ impl<S: Default> Default for ParseContext<S> {
         Self {
             interner: InternerContext::new(),
             user_state: S::default(),
+            furthest: None,
+            regeln: Vec::new(),
+        }
+    }
+}
+
+impl<S> ParseContext<S> {
+    /// Merkt einen verworfenen Fehler - nach derselben Rangfolge wie
+    /// [`ParseError::merge`].
+    pub fn merke(&mut self, e: &ParseError) {
+        let mut e = e.clone();
+        for r in self.regeln.iter().rev() {
+            e.push_rule(r);
+        }
+        self.furthest = Some(match self.furthest.take() {
+            Some(f) => f.merge(e),
+            None => e,
+        });
+    }
+
+    /// Der bessere aus zurueckgegebenem Fehler und Merkstelle.
+    pub fn beste(&self, e: ParseError) -> ParseError {
+        match &self.furthest {
+            Some(f) => f.clone().merge(e),
+            None => e,
         }
     }
 }

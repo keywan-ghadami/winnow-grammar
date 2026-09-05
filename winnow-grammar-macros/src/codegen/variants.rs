@@ -61,12 +61,19 @@ impl<'a> Codegen<'a> {
                 }
             };
 
-            quote_spanned! {span=>
+            let closure = quote_spanned! {span=>
                 |#input: &mut ::winnow_grammar::ParseInput<'a, S>| {
                     #steps_code
                     #state_injection
                     #final_expr
                 }
+            };
+            // `# "…"`: scheitert die Alternative an ihrer Anfangsstelle, zaehlt
+            // ihr Name als Erwartung. Das Label wurde bisher geparst und
+            // verworfen.
+            match &v.label {
+                Some(label) => quote_spanned! {span=> ::winnow_grammar::rt::beschriftet(#label, #closure) },
+                None => closure,
             }
         });
 
@@ -120,12 +127,26 @@ impl<'a> Codegen<'a> {
                 }
             };
 
-            quote_spanned! {span=>
+            let body = quote_spanned! {span=>
                 {
                     #steps_code
                     #state_injection
                     #final_expr
                 }
+            };
+            // Auch eine einvariantige Regel darf beschriftet sein (`# "…"`):
+            // scheitert sie an ihrer Anfangsstelle, ist ihr Name die Erwartung.
+            match &v.label {
+                Some(label) => quote_spanned! {span=>
+                    {
+                        let mut __beschriftet = ::winnow_grammar::rt::beschriftet(
+                            #label,
+                            |#input: &mut ::winnow_grammar::ParseInput<'a, S>| #body,
+                        );
+                        ::winnow::Parser::parse_next(&mut __beschriftet, #input)
+                    }
+                },
+                None => body,
             }
         } else {
             quote_spanned! {span=>

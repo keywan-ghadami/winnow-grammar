@@ -78,6 +78,29 @@ pub(crate) fn replace_type(ty: &mut syn::Type, subst: &HashMap<String, syn::Type
 
 /// Setzt in einer Vorlage die Parser-Parameter (`subst`) und die Typparameter
 /// (`type_subst`) ein. Eine Traversierung fuer beides.
+/// Was ein Builtin erwartet - der Text hinter `expected …`.
+fn builtin_erwartung(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "ident" | "raw_ident" => "identifier",
+        "string" => "string literal",
+        "char" => "character literal",
+        "any" => "any character",
+        "alpha1" => "letters",
+        "digit1" => "digits",
+        "hex_digit0" | "hex_digit1" => "hex digits",
+        "oct_digit0" | "oct_digit1" => "octal digits",
+        "binary_digit0" | "binary_digit1" => "binary digits",
+        "space0" | "space1" | "multispace0" | "multispace1" => "whitespace",
+        "line_ending" => "line ending",
+        "eof" => "end of input",
+        "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64" | "i128"
+        | "isize" => "integer literal",
+        "f32" | "f64" => "float literal",
+        "bool" => "`true` or `false`",
+        _ => return None,
+    })
+}
+
 pub(crate) fn substitute_pattern(
     pattern: &mut ModelPattern,
     subst: &HashMap<String, ModelPattern>,
@@ -461,7 +484,8 @@ impl<'a> Codegen<'a> {
                     combined_lexical,
                     true,
                 );
-                let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::ContextError> };
+                let inner_err_type =
+                    quote_spanned! {span=> ::winnow::error::ErrMode<::winnow_grammar::ParseError> };
                 let input_var = &self.input_ident; // <-- NEU: Beziehe den definierten Identifier
 
                 return quote_spanned! {span=>
@@ -487,15 +511,15 @@ impl<'a> Codegen<'a> {
         }
 
         let inner_err_type =
-            quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::ContextError> };
+            quote_spanned! {span=> ::winnow::error::ErrMode<::winnow_grammar::ParseError> };
         let input_type = quote_spanned! {span=> ::winnow_grammar::ParseInput<'a, S> };
 
-        match name_str.as_str() {
+        let p = match name_str.as_str() {
             "raw_ident" => quote_spanned! {span=>
                 ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_')
             },
             "ident" => quote_spanned! {span=>
-                (|input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<_, ::winnow::error::ErrMode<::winnow::error::ContextError>> {
+                (|input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<_, ::winnow::error::ErrMode<::winnow_grammar::ParseError>> {
                     let s: &str = ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_').parse_next(input)?;
                     let symbol = input.state.interner.intern_string(s);
                     Ok(symbol)
@@ -509,7 +533,7 @@ impl<'a> Codegen<'a> {
                         '\\',
                         ::winnow::token::one_of(['\\', '"'])
                     ),
-                    '"'
+                    '"'.context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::CharLiteral('"')))
                 )
             },
             "char" => quote_spanned! {span=>
@@ -530,7 +554,7 @@ impl<'a> Codegen<'a> {
                         }),
                         ::winnow::token::none_of(['\\', '\''])
                     )),
-                    '\''
+                    '\''.context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::CharLiteral('\'')))
                 )
             },
             "any" => quote_spanned! {span=> ::winnow::token::any::<#input_type, #inner_err_type> },
@@ -634,6 +658,14 @@ impl<'a> Codegen<'a> {
                     quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #rule_path(i, #(#arg_exprs),*).map_err(::winnow::error::ErrMode::Backtrack)) }
                 }
             }
+        };
+
+        // winnows Primitiven melden nur die Stelle. Die Erwartung kommt von
+        // hier - sonst stuende in `expected one of: …` von einem `ident`-Zweig
+        // gar nichts.
+        match builtin_erwartung(&name_str) {
+            Some(was) => quote_spanned! {span=> ::winnow_grammar::rt::erwartet(#was, #p) },
+            None => p,
         }
     }
 
@@ -686,35 +718,35 @@ impl<'a> Codegen<'a> {
             }
             ModelPattern::Optional(inner, _) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
-                quote_spanned! {span=> opt(#p) }
+                quote_spanned! {span=> ::winnow_grammar::rt::opt_merkend(#p) }
             }
             ModelPattern::Repeat(inner, _span) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 if !is_lexical {
                     if is_discarded {
                         // Using |i: &mut _| WS(i) explicitly since WS is a function and preceded requires a Parser.
-                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, (), _, _>(0.., ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
+                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
                     } else {
-                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, Vec<_>, _, _>(0.., ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
+                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
                     }
                 } else if is_discarded {
-                    quote_spanned! {span=> repeat::<_, _, (), _, _>(0.., #p) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(0, #p).map(|_| ()) }
                 } else {
-                    quote_spanned! {span=> repeat::<_, _, Vec<_>, _, _>(0.., #p) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(0, #p) }
                 }
             }
             ModelPattern::Plus(inner, _span) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 if !is_lexical {
                     if is_discarded {
-                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, (), _, _>(1.., ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
+                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(1, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
                     } else {
-                        quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, Vec<_>, _, _>(1.., ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
+                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(1, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
                     }
                 } else if is_discarded {
-                    quote_spanned! {span=> repeat::<_, _, (), _, _>(1.., #p) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(1, #p).map(|_| ()) }
                 } else {
-                    quote_spanned! {span=> repeat::<_, _, Vec<_>, _, _>(1.., #p) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(1, #p) }
                 }
             }
             ModelPattern::Parenthesized(inner, _) => {
@@ -763,16 +795,14 @@ impl<'a> Codegen<'a> {
             ModelPattern::Count { pattern, .. } => {
                 let p = self.generate_parser_expr(pattern, is_lexical, false);
                 if !is_lexical {
-                    quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, Vec<_>, _, _>(0.., ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|v: Vec<_>| v.len()) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_merkend(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|v: Vec<_>| v.len()) }
                 } else {
-                    quote_spanned! {span=> ::winnow::combinator::repeat::<_, _, Vec<_>, _, _>(0.., #p).map(|v: Vec<_>| v.len()) }
+                    quote_spanned! {span=> ::winnow::combinator::::winnow_grammar::rt::repeat_merkend(0, #p).map(|v: Vec<_>| v.len()) }
                 }
             }
             ModelPattern::Fail { message, .. } => match message {
-                Some(msg) => {
-                    quote_spanned! {span=> ::winnow::combinator::fail.context(::winnow::error::StrContext::Label(#msg)) }
-                }
-                None => quote_spanned! {span=> ::winnow::combinator::fail },
+                Some(msg) => quote_spanned! {span=> ::winnow_grammar::rt::fail(#msg) },
+                None => quote_spanned! {span=> ::winnow_grammar::rt::fail("Explicit failure") },
             },
             ModelPattern::LexicalScope(inner, _) => {
                 // Lexical block implies strict parsing.

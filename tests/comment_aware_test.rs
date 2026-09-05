@@ -1,4 +1,3 @@
-use winnow::prelude::*;
 use winnow_grammar::grammar;
 use winnow_grammar::testing::WinnowTestExt;
 

@@ -239,6 +239,43 @@ rule T = "bool"
 - **`fail("message")`**: Explicitly fails with a custom error message.
 - **`recover(rule, sync)`**: If `rule` fails, skips input until `sync` token is found.
 
+## Error Messages
+
+Every generated parser reports failures as `winnow_grammar::ParseError`. The
+message names what was expected, what was found, where, and in which rules:
+
+```text
+expected one of: `&`, identifier; found unexpected token `)` at line 1, column 9
+in typ
+in arg
+in item 1
+in decl
+```
+
+How the message is chosen, in this order:
+
+1. **Progress** — of two failing branches, the one that got further wins.
+2. **Priority** at the same position — `fail("…")` beats everything, a labelled
+   alternative beats a bare token expectation.
+3. Otherwise the expectations are **merged** into `expected one of: …`.
+
+Failures that an optional (`x?`) or a repetition (`x*`) discards are remembered:
+if the rule later fails at a shallower position, or input is left over, that
+remembered reason is reported instead of a generic message.
+
+Tools you have:
+
+- `# "label"` after an alternative names it. If the alternative fails at its
+  start, the label becomes the expectation (`expected one of: number, string`)
+  instead of the internal token message.
+- `fail("…")` reports the text verbatim, with high priority.
+- `parse_next` returns the bare `ParseError` (use `e.render(source)` for the
+  position); `.parse()` goes through winnow's own `ParseError`, which prints the
+  position and the source line itself.
+- The error is a value: `e.expected`, `e.found`, `e.rule_stack`, `e.offset`.
+
+The contract, one test per point, is in `docs/adr/adr15-diagnostics.md`.
+
 ## Advanced Features
 
 ### Rule Arguments
