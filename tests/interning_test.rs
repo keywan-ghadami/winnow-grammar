@@ -38,3 +38,41 @@ fn test_interning_uniqueness() {
             );
         });
 }
+
+#[test]
+fn test_resolve_returns_the_interned_text() {
+    // Regression: `Symbol`'s round-trip used to add one twice, so `resolve`
+    // returned the *next* symbol's text. Comparing symbols to each other (the
+    // tests above) cannot catch that - only resolving can.
+    let input = "alpha beta";
+    InterningTest::parse_two_idents()
+        .parse_test(input)
+        .assert_success_with(|(s1, s2), state| {
+            assert_eq!(state.interner.resolve(*s1), "alpha");
+            assert_eq!(state.interner.resolve(*s2), "beta");
+        });
+}
+
+#[test]
+fn test_resolve_the_last_interned_symbol() {
+    // The off-by-one made the most recently interned symbol point one past the
+    // end, so this panicked with "Key out of bounds" rather than returning text.
+    let interner = winnow_grammar::InternerContext::new();
+    let only = interner.intern_string("solo");
+    assert_eq!(interner.resolve(only), "solo");
+}
+
+#[test]
+fn test_resolve_round_trips_many_symbols() {
+    let interner = winnow_grammar::InternerContext::new();
+    let words = ["fn", "main", "println", "x", "fn"];
+
+    let symbols: Vec<_> = words.iter().map(|w| interner.intern_string(w)).collect();
+
+    for (symbol, expected) in symbols.iter().zip(words.iter()) {
+        assert_eq!(interner.resolve(*symbol), *expected);
+    }
+
+    // Repeated text must still collapse onto one symbol.
+    assert_eq!(symbols[0], symbols[4]);
+}

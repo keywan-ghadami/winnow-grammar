@@ -20,6 +20,16 @@
 
 ### Fixed
 
+- **`Symbol`'s round-trip was off by one, so `resolve` returned the wrong text.**
+  `Symbol::from_spur` stored `Spur::into_inner()` (the raw key, already
+  `index + 1`) while `into_spur` passed that value to `Spur::try_from_usize`,
+  which treats its argument as an *index* and adds one again. As a result
+  `InternerContext::resolve` returned the **next** symbol's string, and panicked
+  with `Key out of bounds` on the most recently interned one. Both directions now
+  go through `Key`'s index representation. The existing interning tests only
+  compared symbols to each other, so they passed either way; three tests that
+  actually resolve have been added.
+
 - Parser parameters of generic rules (`list<T>(item)`) are substituted; missing
   type parameters are inferred from the argument.
 - A whitespace cycle (`WS -> comment -> WS` through a syntactic comment rule)

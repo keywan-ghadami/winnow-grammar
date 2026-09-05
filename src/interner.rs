@@ -7,14 +7,23 @@ use std::sync::Arc;
 pub struct Symbol(NonZeroU32);
 
 impl Symbol {
+    // `Symbol` stores `index + 1` so the `NonZeroU32` niche stays valid and
+    // `Option<Symbol>` is still four bytes.
+    //
+    // Both directions go through `Key`'s *index* representation. Mixing it with
+    // `Spur::into_inner()` - which yields the raw key, already `index + 1` - is
+    // what made the round-trip add one twice.
+
     #[doc(hidden)]
     pub fn from_spur(spur: lasso::Spur) -> Self {
-        Self(spur.into_inner())
+        let index = spur.into_usize() as u32;
+        Self(NonZeroU32::new(index + 1).expect("index + 1 is never zero"))
     }
 
     #[doc(hidden)]
     pub fn into_spur(self) -> Spur {
-        Spur::try_from_usize(self.0.get() as usize).expect("Invalid Symbol ID")
+        let index = self.0.get() as usize - 1;
+        Spur::try_from_usize(index).expect("Invalid Symbol ID")
     }
 }
 
