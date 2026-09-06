@@ -39,6 +39,10 @@ impl Backend for WinnowBackend {
                 return_type: "&'a str",
             },
             BuiltIn {
+                name: "digit",
+                return_type: "char",
+            },
+            BuiltIn {
                 name: "digit1",
                 return_type: "&'a str",
             },

@@ -77,6 +77,53 @@ where
     }
 }
 
+/// `x{n}` / `x{n,}` / `x{n,m}` - repetition with explicit bounds.
+///
+/// Greedy and possessive, like [`repeat_recording`]: it takes as many elements
+/// as it can up to `max` and never gives one back to help a later pattern
+/// match. Below `min` the element's own error is the failure; at `max` the
+/// repetition simply stops, and whatever follows sees the rest of the input.
+pub fn repeat_recording_bounded<'a, S: Clone + std::fmt::Debug, O, P>(
+    min: usize,
+    max: Option<usize>,
+    mut p: P,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Vec<O>, RtError>
+where
+    P: Parser<ParseInput<'a, S>, O, RtError>,
+{
+    move |input| {
+        let mut items = Vec::new();
+        loop {
+            if max.is_some_and(|m| items.len() >= m) {
+                break;
+            }
+            let cp = input.checkpoint();
+            let start = input.current_token_start();
+            match p.parse_next(input) {
+                Ok(v) => {
+                    // Zero-progress guard, as in `repeat_recording`.
+                    if input.current_token_start() == start {
+                        input.reset(&cp);
+                        break;
+                    }
+                    items.push(v);
+                }
+                Err(ErrMode::Backtrack(mut e)) => {
+                    e.push_rule(&format!("item {}", items.len() + 1));
+                    if items.len() < min {
+                        return Err(ErrMode::Backtrack(e));
+                    }
+                    input.state.record(&e);
+                    input.reset(&cp);
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(items)
+    }
+}
+
 /// `fold(pattern, init, step)` - a repetition that threads an accumulator
 /// instead of collecting.
 ///

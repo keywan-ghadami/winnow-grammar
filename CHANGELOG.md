@@ -38,6 +38,24 @@
 
 ### Added
 
+- **Bounded repetition `p{n}` / `p{n,}` / `p{n,m}`.** `*` and `+` say *unbounded*,
+  so a grammar had no way to state a width a format actually fixes — and a
+  backend that specialised for a fixed width anyway would be inventing a
+  constraint the grammar never made. Bounds are greedy and possessive like the
+  existing repetitions (`rt::repeat_recording_bounded`, sharing their handling of
+  progress, backtracking and error recording): at the upper bound the repetition
+  simply stops and whatever follows sees the rest of the input; below the lower
+  bound the element's own error is the failure. A malformed bound is rejected at
+  the bound itself (`{3,1}`, `{0}`, `{1,2,3}` — see `tests/ui/bounds.rs`).
+  **Disambiguation:** a brace group is still the braced-delimiter pattern; only
+  one whose content starts with an integer is read as a bound. The cost is that
+  `x{2}` can no longer mean "x, then braces around a literal 2" — write that as
+  `x "{" "2" "}"`. Documented in `SYNTAX.md`; tests in
+  `tests/bounded_repetition_test.rs`.
+- **`digit` built-in** — a single digit (`char`), next to `digit1`'s greedy run
+  of them. Fixed-width numeric formats need the single-character terminal:
+  `digit{1,2} "." digit` is the shape a bounded repetition is for, and `digit1`
+  would have swallowed the whole run before the bound could count anything.
 - **`fold(rule, init, step)`** — a repetition that threads an accumulator rather
   than collecting into a `Vec`. `repeat`/`*` must materialise every item, which
   makes the collection, not the parse, the memory cost on large inputs; a fold

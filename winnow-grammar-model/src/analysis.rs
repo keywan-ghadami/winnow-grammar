@@ -134,7 +134,10 @@ fn collect_from_patterns(patterns: &[ModelPattern], kws: &mut HashSet<String>) {
             | ModelPattern::Parenthesized(s, _) => collect_from_patterns(s, kws),
             ModelPattern::Optional(i, _)
             | ModelPattern::Repeat(i, _)
-            | ModelPattern::Plus(i, _) => collect_from_patterns(std::slice::from_ref(i), kws),
+            | ModelPattern::Plus(i, _)
+            | ModelPattern::Bounded { pattern: i, .. } => {
+                collect_from_patterns(std::slice::from_ref(i), kws)
+            }
             ModelPattern::SpanBinding(i, _, _) => {
                 collect_from_patterns(std::slice::from_ref(i), kws)
             }
@@ -171,7 +174,8 @@ pub fn collect_bindings(patterns: &[ModelPattern]) -> Vec<Ident> {
             } => bindings.push(b.clone()),
             ModelPattern::Repeat(inner, _)
             | ModelPattern::Plus(inner, _)
-            | ModelPattern::Optional(inner, _) => {
+            | ModelPattern::Optional(inner, _)
+            | ModelPattern::Bounded { pattern: inner, .. } => {
                 bindings.extend(collect_bindings(std::slice::from_ref(inner)));
             }
             ModelPattern::Parenthesized(s, _)
@@ -366,7 +370,8 @@ pub fn get_simple_peek(
         ModelPattern::Parenthesized(_, _) => Ok(Some(quote!(syn::token::Paren))),
         ModelPattern::Optional(inner, _)
         | ModelPattern::Repeat(inner, _)
-        | ModelPattern::Plus(inner, _) => get_simple_peek(inner, kws),
+        | ModelPattern::Plus(inner, _)
+        | ModelPattern::Bounded { pattern: inner, .. } => get_simple_peek(inner, kws),
         ModelPattern::SpanBinding(inner, _, _) => get_simple_peek(inner, kws),
         ModelPattern::Recover { body, .. } => get_simple_peek(body, kws),
         ModelPattern::Group { alts, .. } => {
@@ -406,7 +411,8 @@ pub fn get_peek_token_string(patterns: &[ModelPattern]) -> Option<String> {
         Some(ModelPattern::Parenthesized(_, _)) => Some("Paren".to_string()),
         Some(ModelPattern::Optional(inner, _))
         | Some(ModelPattern::Repeat(inner, _))
-        | Some(ModelPattern::Plus(inner, _)) => {
+        | Some(ModelPattern::Plus(inner, _))
+        | Some(ModelPattern::Bounded { pattern: inner, .. }) => {
             get_peek_token_string(std::slice::from_ref(&**inner))
         }
         Some(ModelPattern::SpanBinding(inner, _, _)) => {
@@ -453,6 +459,9 @@ pub fn is_nullable(pattern: &ModelPattern) -> bool {
         // returning the initial accumulator.
         ModelPattern::Fold { .. } => true,
         ModelPattern::Plus(inner, _) => is_nullable(inner),
+        // `p{0,m}` matches nothing at all; above zero it is nullable only if
+        // its element is.
+        ModelPattern::Bounded { pattern, min, .. } => *min == 0 || is_nullable(pattern),
         ModelPattern::SpanBinding(inner, _, _) => is_nullable(inner),
         ModelPattern::Recover { .. } => true,
         ModelPattern::Peek(_, _) => true,
@@ -554,6 +563,9 @@ fn is_pattern_nullable_precise(pattern: &ModelPattern, nullable_rules: &HashSet<
         | ModelPattern::Not(_, _)
         | ModelPattern::Until { .. } => true, // Peek/Not consume nothing
         ModelPattern::Plus(inner, _) => is_pattern_nullable_precise(inner, nullable_rules),
+        ModelPattern::Bounded { pattern, min, .. } => {
+            *min == 0 || is_pattern_nullable_precise(pattern, nullable_rules)
+        }
         ModelPattern::SpanBinding(inner, _, _) => {
             is_pattern_nullable_precise(inner, nullable_rules)
         }
@@ -675,6 +687,14 @@ fn collect_nullable_deps(
             ModelPattern::Plus(inner, _) => {
                 collect_nullable_deps(std::slice::from_ref(inner), nullable_rules, deps);
                 if !is_pattern_nullable_precise(inner, nullable_rules) {
+                    return;
+                }
+            }
+            // A bounded repetition behaves like `*` when it may match nothing
+            // and like `+` when it must match at least once.
+            ModelPattern::Bounded { pattern, min, .. } => {
+                collect_nullable_deps(std::slice::from_ref(pattern), nullable_rules, deps);
+                if *min > 0 && !is_pattern_nullable_precise(pattern, nullable_rules) {
                     return;
                 }
             }
@@ -803,6 +823,7 @@ fn collect_called_rules<F: FnMut(String)>(patterns: &[ModelPattern], cb: &mut F)
             | ModelPattern::Until { pattern: inner, .. }
             | ModelPattern::Count { pattern: inner, .. }
             | ModelPattern::Fold { pattern: inner, .. }
+            | ModelPattern::Bounded { pattern: inner, .. }
             | ModelPattern::LexicalScope(inner, _)
             | ModelPattern::SpacedScope(inner, _) => {
                 collect_called_rules(std::slice::from_ref(inner), cb);
@@ -983,6 +1004,18 @@ fn collect_first_from_sequence(
                     return;
                 }
             }
+            ModelPattern::Bounded { pattern, min, .. } => {
+                collect_first_from_sequence(
+                    std::slice::from_ref(pattern),
+                    first_sets,
+                    nullable_rules,
+                    acc,
+                );
+                if *min > 0 && !is_pattern_nullable_precise(pattern, nullable_rules) {
+                    return;
+                }
+                continue;
+            }
             ModelPattern::SpanBinding(inner, _, _) => {
                 collect_first_from_sequence(
                     std::slice::from_ref(inner),
@@ -1132,6 +1165,20 @@ fn pattern_structure_eq(p1: &ModelPattern, p2: &ModelPattern) -> bool {
         (ModelPattern::Count { pattern: p1, .. }, ModelPattern::Count { pattern: p2, .. }) => {
             pattern_structure_eq(p1, p2)
         }
+        (
+            ModelPattern::Bounded {
+                pattern: p1,
+                min: min1,
+                max: max1,
+                ..
+            },
+            ModelPattern::Bounded {
+                pattern: p2,
+                min: min2,
+                max: max2,
+                ..
+            },
+        ) => min1 == min2 && max1 == max2 && pattern_structure_eq(p1, p2),
         (
             ModelPattern::Recover {
                 body: b1, sync: s1, ..

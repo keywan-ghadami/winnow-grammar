@@ -89,6 +89,9 @@ Match one of several alternatives using `|`. The first one that matches wins.
 - `pattern*`: Match zero or more times. Returns a `Vec`.
 - `pattern+`: Match one or more times. Returns a `Vec`.
 - `pattern?`: Match zero or one time. Returns an `Option`.
+- `pattern{n}`: Match exactly `n` times. Returns a `Vec`.
+- `pattern{n,}`: Match at least `n` times. Returns a `Vec`.
+- `pattern{n,m}`: Match between `n` and `m` times. Returns a `Vec`.
 
 ```rust
 # use winnow_grammar::grammar;
@@ -100,6 +103,44 @@ Match one of several alternatives using `|`. The first one that matches wins.
 #     }
 # }
 ```
+
+**Bounded repetition.** `*` and `+` say *unbounded*. Where the format fixes a
+width, say so — the parser then knows it, and a fixed-width format is parsed as
+one rather than scanned:
+
+```rust
+# use winnow_grammar::grammar;
+# fn main() {
+#     grammar! {
+#         grammar Test {
+// A temperature like `-12.3` or `4.5`: one or two whole digits, exactly one
+// decimal. Parsed as tenths, so the arithmetic stays integral.
+ TENTHS -> i32 =
+    neg:"-"? whole:digit{1,2} "." frac:digit
+    -> {
+        let mut v: i32 = 0;
+        for d in whole { v = v * 10 + (d as i32 - '0' as i32); }
+        v = v * 10 + (frac as i32 - '0' as i32);
+        if neg.is_some() { -v } else { v }
+    }
+#         }
+#     }
+# }
+```
+
+Bounds are **greedy and possessive**, like `*` and `+`: the repetition takes as
+many elements as it can up to the upper bound and never gives one back to help a
+later pattern match. At the upper bound it stops, and what follows sees the rest
+of the input — `digit{2}` against `123` matches `12` and leaves `3`. Below the
+lower bound the element's own error is the failure.
+
+An upper bound below the lower one, and a bound that can match nothing (`{0}`,
+`{0,0}`), are rejected where they are written.
+
+> **Braces:** `{ pattern }` is still the braced-delimiter pattern. Only a brace
+> group whose content **starts with an integer** is read as a bound, so
+> `x { y }` is unchanged — but `x{2}` is now a repetition, and braces around a
+> literal `2` are written `x "{" "2" "}"`.
 
 ### Delimiters
 To match literal delimiters (parentheses, brackets, braces) in the input, use the specific delimiter syntax. This avoids ambiguity with grouping parentheses.
@@ -166,7 +207,8 @@ The following primitives are "portable" and expected to be available in all back
 | `i32` | Signed 32-bit integer. |
 | `bool` | Boolean (`true` or `false`). |
 | `alpha` | Alphabetic characters. |
-| `digit` | Numeric digits. |
+| `digit` | A single digit (`char`). |
+| `digit1` | One or more digits (`&str`). |
 | `whitespace` | Explicit whitespace matching. |
 | `eof` | End of input. |
 

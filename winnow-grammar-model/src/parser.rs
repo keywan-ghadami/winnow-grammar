@@ -565,6 +565,14 @@ pub enum Pattern {
     Optional(Box<Pattern>, Token![?]),
     Repeat(Box<Pattern>, Token![*]),
     Plus(Box<Pattern>, Token![+]),
+    /// `p{n}`, `p{n,}`, `p{n,m}` - a repetition with explicit bounds.
+    Bounded {
+        pattern: Box<Pattern>,
+        min: usize,
+        /// `None` for an open upper bound (`p{n,}`).
+        max: Option<usize>,
+        token: token::Brace,
+    },
     SpanBinding(Box<Pattern>, Ident, Token![@]),
     Recover {
         binding: Option<Ident>,
@@ -676,6 +684,7 @@ impl Pattern {
             Pattern::Optional(p, _) => p.collect_bindings(acc),
             Pattern::Repeat(p, _) => p.collect_bindings(acc),
             Pattern::Plus(p, _) => p.collect_bindings(acc),
+            Pattern::Bounded { pattern, .. } => pattern.collect_bindings(acc),
             Pattern::SpanBinding(p, id, _) => {
                 acc.push(id.clone());
                 p.collect_bindings(acc);
@@ -750,6 +759,7 @@ impl Pattern {
             Pattern::Optional(p, _) => p.has_binding(),
             Pattern::Repeat(p, _) => p.has_binding(),
             Pattern::Plus(p, _) => p.has_binding(),
+            Pattern::Bounded { pattern, .. } => pattern.has_binding(),
             Pattern::SpanBinding(..) => true,
             Pattern::Recover {
                 binding,
@@ -776,6 +786,74 @@ impl Pattern {
     }
 }
 
+/// Is the brace group at the cursor a repetition bound (`{2}`, `{1,}`, `{1,2}`)
+/// rather than the braced-delimiter pattern (`{ inner }`)? Decided by the first
+/// token inside: a bound always starts with an integer, and a delimiter pattern
+/// matching a bare integer literal (`{ 2 }`) has no use - the grammar would be
+/// matching the character `2` between braces, which is written `"{" "2" "}"`.
+fn starts_repeat_bounds(input: ParseStream) -> bool {
+    if !input.peek(token::Brace) {
+        return false;
+    }
+    let fork = input.fork();
+    let peek_inside = |s: ParseStream| -> Result<bool> {
+        let content;
+        let _ = syn::braced!(content in s);
+        Ok(content.peek(syn::LitInt))
+    };
+    peek_inside(&fork).unwrap_or(false)
+}
+
+/// Parses `{n}`, `{n,}` or `{n,m}`. Only called once [`starts_repeat_bounds`]
+/// has established that this brace group is a bound, so every error here is a
+/// malformed bound and is reported as such.
+fn parse_repeat_bounds(input: ParseStream) -> Result<(usize, Option<usize>, token::Brace)> {
+    let content;
+    let token = syn::braced!(content in input);
+
+    let min_lit: syn::LitInt = content.parse()?;
+    let min: usize = min_lit.base10_parse()?;
+
+    let max = if content.peek(Token![,]) {
+        content.parse::<Token![,]>()?;
+        if content.is_empty() {
+            None
+        } else {
+            let max_lit: syn::LitInt = content.parse()?;
+            let max: usize = max_lit.base10_parse()?;
+            if max == 0 {
+                return Err(syn::Error::new(
+                    max_lit.span(),
+                    "an upper bound of 0 matches nothing - remove the pattern instead",
+                ));
+            }
+            if max < min {
+                return Err(syn::Error::new(
+                    max_lit.span(),
+                    format!("upper bound {max} is below the lower bound {min}"),
+                ));
+            }
+            Some(max)
+        }
+    } else {
+        if min == 0 {
+            return Err(syn::Error::new(
+                min_lit.span(),
+                "`{0}` matches nothing - remove the pattern instead",
+            ));
+        }
+        Some(min)
+    };
+
+    if !content.is_empty() {
+        return Err(
+            content.error("expected the end of the repetition bound: `{n}`, `{n,}` or `{n,m}`")
+        );
+    }
+
+    Ok((min, max, token))
+}
+
 impl Parse for Pattern {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut pat = parse_atom(input)?;
@@ -790,6 +868,19 @@ impl Parse for Pattern {
             } else if input.peek(Token![?]) {
                 let token = input.parse::<Token![?]>()?;
                 pat = Pattern::Optional(Box::new(pat), token);
+            } else if starts_repeat_bounds(input) {
+                // `p{n,m}`. A brace group is also the *braced delimiter*
+                // pattern (`{ inner }`), so only one whose content starts with
+                // an integer is read as a bound - and once it does, a malformed
+                // bound is an error rather than a confusing "expected pattern"
+                // from the delimiter parser.
+                let (min, max, token) = parse_repeat_bounds(input)?;
+                pat = Pattern::Bounded {
+                    pattern: Box::new(pat),
+                    min,
+                    max,
+                    token,
+                };
             } else if input.peek(Token![@]) {
                 let token = input.parse::<Token![@]>()?;
                 let ident = input.parse::<Ident>()?;
@@ -922,6 +1013,22 @@ impl ToTokens for Pattern {
             Pattern::Plus(p, _) => {
                 p.to_tokens(tokens);
                 token::Plus::default().to_tokens(tokens);
+            }
+            Pattern::Bounded {
+                pattern, min, max, ..
+            } => {
+                pattern.to_tokens(tokens);
+                token::Brace::default().surround(tokens, |t| {
+                    proc_macro2::Literal::usize_unsuffixed(*min).to_tokens(t);
+                    match max {
+                        Some(m) if m == min => {}
+                        Some(m) => {
+                            token::Comma::default().to_tokens(t);
+                            proc_macro2::Literal::usize_unsuffixed(*m).to_tokens(t);
+                        }
+                        None => token::Comma::default().to_tokens(t),
+                    }
+                });
             }
             Pattern::SpanBinding(p, id, _) => {
                 p.to_tokens(tokens);
