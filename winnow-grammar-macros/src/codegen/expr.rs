@@ -267,7 +267,7 @@ impl<'a> Codegen<'a> {
                 return self.generate_delimited_step(inner, "[", "]", in_cut, is_lexical)
             }
             ModelPattern::Braced(inner, _) => {
-                return self.generate_delimited_step(inner, "{", "]", in_cut, is_lexical)
+                return self.generate_delimited_step(inner, "{", "}", in_cut, is_lexical)
             }
             _ => {}
         }
@@ -289,13 +289,13 @@ impl<'a> Codegen<'a> {
                 },
                 ModelPattern::Repeat(_, _)
                 | ModelPattern::Plus(_, _)
-                | ModelPattern::Bounded { .. }
-                | ModelPattern::Count { .. } => quote_spanned! {span=>
+                | ModelPattern::Bounded { .. } => quote_spanned! {span=>
                     let #name: Vec<_> = #parser_expr.parse_next(#input)?;
                 },
                 // A fold's value is the accumulator, whose type comes from
-                // `init` - not a collection, so it must not be annotated.
-                ModelPattern::Fold { .. } => quote_spanned! {span=>
+                // `init`, and a count's is the `usize` it mapped to - neither
+                // is a collection, so neither must be annotated as one.
+                ModelPattern::Fold { .. } | ModelPattern::Count { .. } => quote_spanned! {span=>
                     let #name = #parser_expr.parse_next(#input)?;
                 },
                 _ => quote_spanned! {span=>
@@ -837,7 +837,7 @@ impl<'a> Codegen<'a> {
                 if !is_lexical {
                     quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|v: Vec<_>| v.len()) }
                 } else {
-                    quote_spanned! {span=> ::winnow::combinator::::winnow_grammar::rt::repeat_recording(0, #p).map(|v: Vec<_>| v.len()) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, #p).map(|v: Vec<_>| v.len()) }
                 }
             }
             ModelPattern::Fold {

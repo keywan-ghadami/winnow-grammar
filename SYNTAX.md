@@ -134,6 +134,10 @@ later pattern match. At the upper bound it stops, and what follows sees the rest
 of the input — `digit{2}` against `123` matches `12` and leaves `3`. Below the
 lower bound the element's own error is the failure.
 
+An element that can match the empty input still owes the lower bound: `("a"?){3}`
+matches the empty input three times, as `(a?){3}` does in a regex. Beyond the
+lower bound an empty match ends the repetition rather than repeating forever.
+
 An upper bound below the lower one, and a bound that can match nothing (`{0}`,
 `{0,0}`), are rejected where they are written.
 

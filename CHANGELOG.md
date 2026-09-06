@@ -30,6 +30,29 @@
   compared symbols to each other, so they passed either way; three tests that
   actually resolve have been added.
 
+- **The braced delimiter pattern `{ … }` generated `]` as its closing token.**
+  `Braced` was dispatched with the closing string of the bracketed form, so a
+  grammar that matched literal braces parsed the opening brace and its content
+  and then failed at the closing one (`unexpected token \`}\``). The bracketed
+  and parenthesised forms share the same code path and were correct, which is
+  why it survived: nothing tested braces. `tests/delimiter_test.rs`.
+
+- **`count(pattern)` did not compile in any shape.** Bound to a name it was
+  emitted as `let n: Vec<_> = …` around a parser that had already mapped to
+  `usize`, and the lexical branch emitted
+  `::winnow::combinator::::winnow_grammar::rt::…`, which is not valid Rust.
+  The feature was documented in `SYNTAX.md` and had no test.
+  `tests/count_test.rs`.
+
+- **A repetition could return fewer items than its lower bound.** When the
+  element matched without consuming input, the zero-progress guard that keeps
+  the loop from spinning also ended it - below `min`. `("a"?){3}` reported
+  success with zero items. An empty match now counts towards the minimum (as
+  in a regex, where `(a?){3}` matches the empty string) and the guard only
+  stops the loop once `min` is reached. `repeat_recording` is now the
+  open-ended case of `repeat_recording_bounded` rather than a copy of it, so
+  `*` and `+` get the same fix.
+
 - Parser parameters of generic rules (`list<T>(item)`) are substituted; missing
   type parameters are inferred from the argument.
 - A whitespace cycle (`WS -> comment -> WS` through a syntactic comment rule)
@@ -45,8 +68,10 @@
   existing repetitions (`rt::repeat_recording_bounded`, sharing their handling of
   progress, backtracking and error recording): at the upper bound the repetition
   simply stops and whatever follows sees the rest of the input; below the lower
-  bound the element's own error is the failure. A malformed bound is rejected at
-  the bound itself (`{3,1}`, `{0}`, `{1,2,3}` — see `tests/ui/bounds.rs`).
+  bound the element's own error is the failure. An element that can match the
+  empty input still owes the lower bound — `("a"?){3}` matches the empty input
+  three times. A malformed bound is rejected at the bound itself (`{3,1}`,
+  `{0}`, `{1,2,3}` — see `tests/ui/bounds.rs`).
   **Disambiguation:** a brace group is still the braced-delimiter pattern; only
   one whose content starts with an integer is read as a bound. The cost is that
   `x{2}` can no longer mean "x, then braces around a literal 2" — write that as

@@ -121,19 +121,18 @@ fn rejects_a_temperature_that_is_too_wide() {
 grammar! {
     grammar Braces {
         // A brace group is still the braced-delimiter pattern: only one whose
-        // content *starts with an integer* is read as a repetition bound. That
-        // this grammar compiles is the assertion — had `{ name:raw_ident }`
-        // been read as a bound, the bound parser would have rejected it at
-        // macro-expansion time and this file would not build.
+        // content *starts with an integer* is read as a repetition bound.
         pub block -> String = "b" { name:raw_ident } -> { name.to_string() }
     }
 }
 
 #[test]
 fn a_braced_pattern_is_not_a_bound() {
-    // Naming the parser is enough; see the comment above. (The braced
-    // delimiter's own runtime behaviour is unrelated to bounds.)
-    let _ = Braces::parse_block::<()>;
+    // Had `{ name:raw_ident }` been read as a bound, this file would not
+    // build; that it parses braces at runtime is the other half of the claim.
+    Braces::parse_block()
+        .parse_test("b { hello }")
+        .assert_success_is("hello".to_string());
 }
 
 grammar! {
@@ -165,5 +164,48 @@ grammar! {
 fn bounds_count_elements_not_characters() {
     Spaced::parse_three()
         .parse_test("1 22 333")
+        .assert_success_is(3);
+}
+
+grammar! {
+    grammar Edges {
+        // A lower bound of zero is the `*` case: the bound may match nothing.
+        pub ZERO_MIN -> usize = d:digit{0,2} -> { d.len() }
+
+        // A bound over a group counts group matches, not characters.
+        pub PAIRS -> usize = g:("ab"){2} -> { g.len() }
+
+        // An element that can match the empty input. `{3}` still owes three
+        // matches, and an empty match is a match - as in a regex, where
+        // `(a?){3}` matches the empty string.
+        pub NULLABLE -> usize = o:("a"?){3} -> { o.len() }
+    }
+}
+
+#[test]
+fn a_zero_lower_bound_matches_nothing() {
+    Edges::parse_ZERO_MIN().parse_test("").assert_success_is(0);
+    Edges::parse_ZERO_MIN().parse_test("7").assert_success_is(1);
+    Edges::parse_ZERO_MIN()
+        .parse_test("77")
+        .assert_success_is(2);
+    // Still possessive at the upper bound: the third digit is left over.
+    Edges::parse_ZERO_MIN().parse_test("777").assert_failure();
+}
+
+#[test]
+fn a_bound_counts_group_matches() {
+    Edges::parse_PAIRS().parse_test("abab").assert_success_is(2);
+    Edges::parse_PAIRS().parse_test("ab").assert_failure();
+}
+
+#[test]
+fn a_nullable_element_still_owes_the_lower_bound() {
+    // The zero-progress guard stops the loop, but not before `min` is
+    // reached - otherwise `{3}` would quietly hand back fewer than three.
+    Edges::parse_NULLABLE().parse_test("").assert_success_is(3);
+    Edges::parse_NULLABLE().parse_test("a").assert_success_is(3);
+    Edges::parse_NULLABLE()
+        .parse_test("aaa")
         .assert_success_is(3);
 }

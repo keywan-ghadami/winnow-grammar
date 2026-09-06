@@ -1014,7 +1014,6 @@ fn collect_first_from_sequence(
                 if *min > 0 && !is_pattern_nullable_precise(pattern, nullable_rules) {
                     return;
                 }
-                continue;
             }
             ModelPattern::SpanBinding(inner, _, _) => {
                 collect_first_from_sequence(
