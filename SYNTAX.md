@@ -379,7 +379,11 @@ boundary and the piece that finds a frame's end is the one that owns it.
 **How do two pieces combine?** `par_fold(rule, init, step, merge)` is `fold`
 plus the merge, and requires `rule` to be a frame. It must be the whole body of
 its rule: nothing before or after it, since a prefix or suffix would belong to
-no piece.
+no piece. For the same reason its parser skips **no whitespace at its entry**,
+unlike every other rule's: the parser runs once per piece, and whitespace
+skipped there would be skipped at every cut rather than once at the start of
+the input. A frame that begins with a space keeps the space; whitespace-only
+text between two frames is a failure, in pieces and in one go alike.
 
 **What is generated.** The grammar gets, next to the parsers:
 

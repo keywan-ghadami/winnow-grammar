@@ -262,3 +262,97 @@ fn a_bounded_until_still_yields_the_text_before_its_terminator() {
             assert_eq!(*temp, 123);
         });
 }
+
+// -----------------------------------------------------------------------------
+// Split + parse + merge must agree with the sequential parse on *every* input,
+// including the ones it rejects - a wrong total on some inputs and not others
+// is what the checker exists to rule out.
+// -----------------------------------------------------------------------------
+
+grammar! {
+    grammar Lengths {
+        NAME -> &'a str = s:until(";") -> { s }
+        #[frame]
+        pub REC -> usize = n:NAME ";" "\n" -> { n.len() }
+        pub FILE -> usize =
+            s:par_fold(REC, || 0usize, |a: usize, v: usize| a + v, |a: usize, b: usize| a + b)
+            -> { s }
+    }
+}
+
+fn lengths_sequential(input: &str) -> Result<usize, String> {
+    Lengths::parse_FILE()
+        .parse_test(input)
+        .inner
+        .map_err(|e| e.to_string())
+}
+
+fn lengths_in_pieces(input: &str, n: usize) -> Result<usize, String> {
+    let mut acc = Ok(0usize);
+    for r in Lengths::frames_FILE(input, n) {
+        let piece = Lengths::parse_FILE()
+            .parse_test(&input[r])
+            .inner
+            .map_err(|e| e.to_string());
+        acc = match (acc, piece) {
+            (Ok(a), Ok(b)) => Ok(Lengths::merge_FILE(a, b)),
+            (Err(e), _) | (_, Err(e)) => Err(e),
+        };
+    }
+    acc
+}
+
+#[test]
+fn pieces_agree_with_the_sequential_parse_on_awkward_input() {
+    // Each of these once parsed differently in pieces than in one go, because
+    // the rule's entry point skipped whitespace - once per piece rather than
+    // once per input. A `par_fold` rule's parser now skips nothing at its
+    // entry, so leading whitespace of a frame is part of the frame's name in
+    // both, and whitespace-only garbage between frames is a failure in both.
+    let inputs = [
+        "A;\n B;\n  C;\n", // a frame that begins with whitespace
+        " A;\nB;\n",       // the first frame does
+        "A;\n  \nB;\n",    // whitespace-only garbage between frames
+        "A;\nB;\n\n",      // a trailing blank line
+        "A;\nB;\n  ",      // trailing spaces without a newline
+        "A;\nB;",          // no trailing boundary at all
+        "",
+        "\n",
+    ];
+    for input in inputs {
+        let expected = lengths_sequential(input);
+        for n in [1, 2, 3, 4, 8] {
+            let got = lengths_in_pieces(input, n);
+            assert_eq!(
+                got.is_ok(),
+                expected.is_ok(),
+                "{input:?} with n = {n}: sequential {expected:?}, pieces {got:?}"
+            );
+            if let (Ok(e), Ok(g)) = (&expected, &got) {
+                assert_eq!(e, g, "{input:?} with n = {n}");
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// `#[frame]` after a rule without an action block
+// -----------------------------------------------------------------------------
+
+grammar! {
+    grammar AttrAfterBareRule {
+        // No `-> { … }` on the rule before the attribute. `#` after a rule
+        // body is also how a label (`#"text"`) begins; the parser must tell
+        // `#"…"` from `#[…]` rather than demand a string literal here.
+        ITEM -> i32 = v:i32
+        #[frame]
+        pub REC -> i32 = v:ITEM "\n" -> { v }
+    }
+}
+
+#[test]
+fn a_frame_attribute_may_follow_a_rule_without_an_action() {
+    AttrAfterBareRule::parse_REC()
+        .parse_test("42\n")
+        .assert_success_is(42);
+}

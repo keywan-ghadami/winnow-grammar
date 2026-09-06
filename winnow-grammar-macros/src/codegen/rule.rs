@@ -200,6 +200,22 @@ impl<'a> Codegen<'a> {
             outer_generics.extend(quote! {, #gen_params});
         }
 
+        // The entry point tolerates whitespace around the input - except on a
+        // `par_fold` rule. Its parser runs once per *piece* when the input is
+        // parsed in pieces, and whitespace it skipped there would be skipped
+        // at every piece start and end instead of once at the input's: a
+        // frame beginning with a space would parse differently depending on
+        // where the cut fell, and whitespace-only garbage between two frames
+        // would be tolerated in the piece that happens to end there and
+        // rejected in the sequential parse. Skipping nothing makes the two
+        // agree on every input, which is the property `par_fold` promises.
+        let is_par_fold = self.frames.par_folds.contains_key(&rule_name_str);
+        let (ws_before, ws_after) = if is_par_fold {
+            (quote! {}, quote! {})
+        } else {
+            (quote! { WS(input)?; }, quote! { WS(input)?; })
+        };
+
         let outer_fn_body = quote! {
             move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
                 #(#param_wrappers)*
@@ -208,9 +224,9 @@ impl<'a> Codegen<'a> {
                 input.state.furthest = None;
 
                 let result: ::winnow::Result<#ret_type, ::winnow::error::ErrMode<#err_type>> = (|| {
-                    WS(input)?;
+                    #ws_before
                     let result = #inner_fn_name(input, #(#arg_names),*)?;
-                    WS(input)?;
+                    #ws_after
                     Ok(result)
                 })();
 

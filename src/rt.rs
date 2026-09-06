@@ -130,7 +130,9 @@ pub fn frames(input: &str, boundary: &str, n: usize) -> Vec<std::ops::Range<usiz
     let mut starts = Vec::with_capacity(n + 1);
     starts.push(0);
     for k in 1..n {
-        let nominal = len * k / n;
+        // `len * k` in `usize` would overflow before `len` does on a 32-bit
+        // target; the quotient itself is at most `len`.
+        let nominal = ((len as u128 * k as u128) / n as u128) as usize;
         let tail: &[u8] = &bytes[nominal..];
         let start = tail
             .find_slice(boundary.as_bytes())

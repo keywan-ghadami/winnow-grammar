@@ -85,7 +85,9 @@
   repaired to just past the next boundary, one owner per frame, oversized
   frames leave empty pieces, no trailing boundary keeps the last frame, every
   range a UTF-8 boundary) and `merge_<RULE>(a, b)`. The per-piece parser is the
-  rule's own `parse_<RULE>()`; threads are the caller's. `tests/frames_test.rs`
+  rule's own `parse_<RULE>()`, whose entry point - alone among the rules -
+  skips no whitespace, so that a piece parses exactly as the same bytes do in
+  the sequential parse; threads are the caller's. `tests/frames_test.rs`
   asserts split + parse + merge against the sequential parse, the split's edge
   cases, and the bounding of `until`; `tests/ui/frames.rs` the ten rejections.
   The model gains `frame::check`; `ModelPattern::Fold` gains `merge`.

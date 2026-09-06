@@ -423,7 +423,7 @@ impl RuleVariant {
                 pattern.push(input.parse()?);
             }
 
-            let label = if input.peek(Token![#]) {
+            let label = if input.peek(Token![#]) && input.peek2(syn::LitStr) {
                 let _ = input.parse::<Token![#]>()?;
                 let lit: syn::LitStr = input.parse()?;
                 Some(lit.value())
@@ -1478,7 +1478,7 @@ fn parse_group_content(input: ParseStream) -> Result<Vec<GroupAlternative>> {
             None
         };
 
-        let label = if input.peek(Token![#]) {
+        let label = if input.peek(Token![#]) && input.peek2(syn::LitStr) {
             let _: Token![#] = input.parse()?;
             let lit: syn::LitStr = input.parse()?;
             Some(lit.value())
