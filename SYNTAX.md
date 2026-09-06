@@ -287,7 +287,7 @@ rule T = "bool"
 
 ### Special (`until`, `count`, `eof`, `fail`, `recover`)
 
-- **`until(terminator)`**: Consumes tokens until `terminator` is matched. The terminator is not consumed.
+- **`until(terminator)`**: Consumes input until `terminator` is matched, and **returns the text it skipped** (`&'a str`). The terminator is not consumed. With no terminator in the rest of the input it consumes to the end rather than failing.
 - **`count(pattern)`**: Returns the number of times `pattern` matched (as `usize`).
 - **`eof`**: Succeeds only at the end of the input.
 - **`fail("message")`**: Explicitly fails with a custom error message.
@@ -359,6 +359,18 @@ Tools you have:
 The contract, one test per point, is in `docs/adr/adr15-diagnostics.md`.
 
 ## Advanced Features
+
+> **How `until` and `recover` skip.** Where the terminator's match is a fixed
+> string — a literal, the built-in `line_ending`, or the built-in `eof` — the
+> skip is a **scan** (via `memchr`: SIMD where the target has it, the same
+> word-at-a-time trick in portable code where it does not); `until(eof)` is
+> simply the rest of the input. Any other terminator has to be *tried* at every
+> position, a parser call per character; that path still exists and yields the
+> same value, it is only slower. Over 4 MiB the difference measures seconds
+> against milliseconds.
+>
+> A rule of your own named `line_ending` or `eof` is that rule, not the
+> built-in, and takes the slow path.
 
 ### Rule Arguments
 Rules can accept arguments to pass context or configuration.

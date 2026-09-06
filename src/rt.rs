@@ -8,10 +8,63 @@
 use crate::error::{ParseError, PRIO_LABELED, PRIO_STRUCTURAL};
 use crate::ParseInput;
 use winnow::error::ErrMode;
-use winnow::stream::{Location, Stream};
+use winnow::stream::{FindSlice, Location, Stream};
 use winnow::Parser;
 
 type RtError = ErrMode<ParseError>;
+
+/// `until("lit")` - consume everything before the next occurrence of a literal
+/// terminator, without consuming the terminator itself.
+///
+/// The scan is the point: `find_slice` searches the raw input a machine word at
+/// a time (memchr, with SIMD where the target has it and the same trick in
+/// portable code where it does not), instead of running the terminator's parser
+/// once per character. Byte-by-byte, a rule like `until(";")` over a large
+/// input costs a parser call per byte, and a `recover` that has to skip a long
+/// stretch is quadratic.
+///
+/// Never fails: with no terminator in the rest of the input it consumes to the
+/// end, which is what a repetition-based `until` did.
+pub fn scan_to_literal<'a, S: Clone + std::fmt::Debug>(
+    needle: &'static str,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, RtError> {
+    move |input| {
+        let end = match input.find_slice(needle) {
+            Some(range) => range.start,
+            None => input.eof_offset(),
+        };
+        Ok(input.next_slice(end))
+    }
+}
+
+/// `until(line_ending)` - consume the rest of the line, without consuming the
+/// line ending.
+///
+/// Same scan as [`scan_to_literal`], plus the one thing a literal cannot
+/// express: the terminator is two characters or one. Finding `\n` and then
+/// looking at the byte before it is O(1) and settles `\r\n` correctly - a
+/// scan for `"\r\n"` would run past an earlier bare `\n`, and a scan for
+/// `"\n"` alone would leave the carriage return on the wrong side. A bare
+/// `\r` is ordinary text, as it was before.
+pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug>(
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, RtError> {
+    move |input| {
+        let end = match input.find_slice('\n') {
+            Some(range) => {
+                let n = range.start;
+                // The text before the newline; if it ends in `\r`, that
+                // carriage return belongs to the line ending, not the line.
+                if input.peek_slice(n).ends_with('\r') {
+                    n - 1
+                } else {
+                    n
+                }
+            }
+            None => input.eof_offset(),
+        };
+        Ok(input.next_slice(end))
+    }
+}
 
 /// `x?` - at most once. A failed attempt is **recorded**, not thrown away:
 /// if the rule later fails at a shallower position or input is left over, it
