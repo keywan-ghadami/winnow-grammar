@@ -18,6 +18,8 @@ impl<'a> Codegen<'a> {
         let rule_name = &rule.name;
         let rule_name_str = rule_name.to_string();
         let is_ws_rule = rule_name_str == "WS";
+        *self.current_boundary.borrow_mut() =
+            self.frames.boundary_for(&rule_name_str).map(str::to_owned);
         let span = Span::mixed_site();
         let fn_name = format_ident!("parse_{}", rule_name, span = span);
         let inner_fn_name = format_ident!("parse_{}_inner", rule_name, span = span);
@@ -232,9 +234,85 @@ impl<'a> Codegen<'a> {
             }
         };
 
+        let frame_fns = self.generate_frame_fns(rule);
+
         quote! {
             #inner_fn
             #outer_fn
+            #frame_fns
+        }
+    }
+
+    /// The functions a driver needs to parse in pieces, next to the rule's
+    /// parser:
+    ///
+    /// * on a `#[frame]` rule, `frames_<rule>(input, n)` - the byte ranges of
+    ///   `n` pieces, each starting at a boundary (`rt::frames`);
+    /// * on a `par_fold` rule, the same `frames_<rule>` (for the frame it
+    ///   folds over) and `merge_<rule>(a, b)`, the merge it was given.
+    ///
+    /// The per-piece parser is the rule's own `parse_<rule>()` applied to the
+    /// piece; the fold matches zero or more frames, so a piece is a valid
+    /// input on its own.
+    fn generate_frame_fns(&self, rule: &Rule) -> TokenStream {
+        let span = Span::mixed_site();
+        let rule_name_str = rule.name.to_string();
+        let vis = if rule.is_pub {
+            quote! { pub }
+        } else {
+            quote! {}
+        };
+        let frames_fn = format_ident!("frames_{}", rule.name, span = span);
+
+        let boundary = if let Some(b) = self.frames.frames.get(&rule_name_str) {
+            Some(b.clone())
+        } else {
+            self.frames
+                .par_folds
+                .get(&rule_name_str)
+                .and_then(|item| self.frames.frames.get(item))
+                .cloned()
+        };
+        let Some(boundary) = boundary else {
+            return quote! {};
+        };
+
+        let frames = quote_spanned! {span=>
+            /// The byte ranges of `n` pieces of `input`, each beginning at a
+            /// frame boundary, together covering the input. Parse each piece
+            /// with the rule's parser and combine the results.
+            #[allow(dead_code)]
+            #vis fn #frames_fn(input: &str, n: usize) -> ::std::vec::Vec<::core::ops::Range<usize>> {
+                ::winnow_grammar::rt::frames(input, #boundary, n)
+            }
+        };
+
+        let merge = rule.variants.first().and_then(|v| match v.pattern.first() {
+            Some(winnow_grammar_model::model::ModelPattern::Fold { merge: Some(m), .. }) => {
+                Some(m.clone())
+            }
+            _ => None,
+        });
+        let merge = match merge {
+            Some(m) => {
+                let merge_fn = format_ident!("merge_{}", rule.name, span = span);
+                let ret_type = &rule.return_type;
+                quote_spanned! {span=>
+                    /// The merge given to `par_fold`: combines the results of
+                    /// two pieces.
+                    #[allow(dead_code)]
+                    #vis fn #merge_fn<'a>(a: #ret_type, b: #ret_type) -> #ret_type {
+                        let mut merge = #m;
+                        merge(a, b)
+                    }
+                }
+            }
+            None => quote! {},
+        };
+
+        quote! {
+            #frames
+            #merge
         }
     }
 }

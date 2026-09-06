@@ -6,4 +6,5 @@ fn ui() {
     t.compile_fail("tests/ui/recursion.rs");
     t.compile_fail("tests/ui/ws_cycle.rs");
     t.compile_fail("tests/ui/bounds.rs");
+    t.compile_fail("tests/ui/frames.rs");
 }

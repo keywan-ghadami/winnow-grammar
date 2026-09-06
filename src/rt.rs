@@ -66,6 +66,83 @@ pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug>(
     }
 }
 
+/// `until("lit")` inside a `#[frame]` rule: stop at the terminator *or* the
+/// frame boundary, whichever comes first, so that a skip can never run from
+/// one frame into the next. One scan (`memmem2`), not two.
+pub fn scan_to_either<'a, S: Clone + std::fmt::Debug>(
+    terminator: &'static str,
+    boundary: &'static str,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, RtError> {
+    move |input| {
+        let end = match input.find_slice((terminator, boundary)) {
+            Some(range) => range.start,
+            None => input.eof_offset(),
+        };
+        Ok(input.next_slice(end))
+    }
+}
+
+/// `until(line_ending)` inside a frame whose boundary is not a newline: the
+/// rest of the line, or up to the boundary if that comes first.
+pub fn scan_to_line_ending_or<'a, S: Clone + std::fmt::Debug>(
+    boundary: &'static str,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, RtError> {
+    move |input| {
+        let end = match input.find_slice(("\n", boundary)) {
+            Some(range) => {
+                let n = range.start;
+                let at_newline = input.peek_slice(n + 1).as_bytes()[n] == b'\n';
+                if at_newline && n > 0 && input.peek_slice(n).as_bytes()[n - 1] == b'\r' {
+                    n - 1
+                } else {
+                    n
+                }
+            }
+            None => input.eof_offset(),
+        };
+        Ok(input.next_slice(end))
+    }
+}
+
+/// The byte ranges of `n` pieces of `input`, each beginning right after a
+/// `boundary` - the split behind `frames_<rule>()` on a `#[frame]` rule.
+///
+/// The input is divided into `n` equal byte ranges without looking at it.
+/// Every piece but the first then moves its start forward to just past the
+/// first boundary at or after that point, and ends where the next piece
+/// starts; the last runs to the end. Hence:
+///
+/// * every frame lies in exactly one piece - the one that finds its *end*;
+/// * a frame longer than a piece is not an error: the pieces whose repaired
+///   start lands at or past their end come out empty, and the piece before
+///   them parses through;
+/// * input that does not end in a boundary still has its last frame in the
+///   last piece, for the fold to accept or reject as the grammar says;
+/// * `n == 0` is read as `1`, and empty input gives one empty piece.
+///
+/// Boundaries are found by the same scan as `until` (memchr). A valid UTF-8
+/// boundary can only match at a character boundary, so every range is one.
+pub fn frames(input: &str, boundary: &str, n: usize) -> Vec<std::ops::Range<usize>> {
+    let n = n.max(1);
+    let len = input.len();
+    let bytes = input.as_bytes();
+
+    let mut starts = Vec::with_capacity(n + 1);
+    starts.push(0);
+    for k in 1..n {
+        let nominal = len * k / n;
+        let tail: &[u8] = &bytes[nominal..];
+        let start = tail
+            .find_slice(boundary.as_bytes())
+            .map(|r| nominal + r.end)
+            .unwrap_or(len);
+        starts.push(start);
+    }
+    starts.push(len);
+
+    starts.windows(2).map(|w| w[0]..w[1]).collect()
+}
+
 /// `x?` - at most once. A failed attempt is **recorded**, not thrown away:
 /// if the rule later fails at a shallower position or input is left over, it
 /// is the better message.

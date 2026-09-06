@@ -20,11 +20,14 @@
 //! 2. **[model]**: Convert the AST into a semantic model (via `Into`).
 //! 3. **[validator]**: Validate the model for semantic correctness.
 //! 4. **[analysis]**: Extract information (keywords, recursion) for code generation.
+//! 5. **[frame]**: Check `#[frame]` rules and `par_fold`; tell the code
+//!    generator which skips to bound.
 
 use proc_macro2::TokenStream;
 use syn::Result;
 
 pub mod analysis;
+pub mod frame;
 pub mod model;
 pub mod parser;
 pub mod validator;

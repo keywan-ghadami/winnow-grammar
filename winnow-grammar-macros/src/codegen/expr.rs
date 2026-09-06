@@ -471,19 +471,49 @@ impl<'a> Codegen<'a> {
     /// parser call per character.
     fn generate_skip_to(&self, terminator: &ModelPattern, is_lexical: bool) -> TokenStream {
         let span = Span::mixed_site();
-        match self.scan_terminator(terminator) {
-            Some(ScanTerminator::Literal(lit)) => {
+        let boundary = self.current_boundary.borrow().clone();
+        match (self.scan_terminator(terminator), boundary) {
+            // Unbounded: not inside a frame.
+            (Some(ScanTerminator::Literal(lit)), None) => {
                 quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#lit) }
             }
-            Some(ScanTerminator::LineEnding) => {
+            (Some(ScanTerminator::LineEnding), None) => {
                 quote_spanned! {span=> ::winnow_grammar::rt::scan_to_line_ending() }
             }
-            Some(ScanTerminator::Eof) => quote_spanned! {span=> ::winnow::token::rest },
-            None => {
+            (Some(ScanTerminator::Eof), None) => quote_spanned! {span=> ::winnow::token::rest },
+            (None, None) => {
                 let p = self.generate_parser_expr(terminator, is_lexical, false);
                 quote_spanned! {span=>
                     ::winnow::Parser::take(::winnow::combinator::repeat::<_, _, (), _, _>(0.., (
                         ::winnow::combinator::not(::winnow::combinator::peek(#p)),
+                        ::winnow::token::any
+                    )))
+                }
+            }
+            // Inside a frame: the skip also stops at the frame boundary, so
+            // that it can never run from one frame into the next. See
+            // `winnow_grammar_model::frame`.
+            (Some(ScanTerminator::Literal(lit)), Some(b)) if lit == b => {
+                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#lit) }
+            }
+            (Some(ScanTerminator::Literal(lit)), Some(b)) => {
+                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_either(#lit, #b) }
+            }
+            (Some(ScanTerminator::LineEnding), Some(b)) if b == "\n" || b == "\r\n" => {
+                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_line_ending() }
+            }
+            (Some(ScanTerminator::LineEnding), Some(b)) => {
+                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_line_ending_or(#b) }
+            }
+            (Some(ScanTerminator::Eof), Some(b)) => {
+                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#b) }
+            }
+            (None, Some(b)) => {
+                let p = self.generate_parser_expr(terminator, is_lexical, false);
+                quote_spanned! {span=>
+                    ::winnow::Parser::take(::winnow::combinator::repeat::<_, _, (), _, _>(0.., (
+                        ::winnow::combinator::not(::winnow::combinator::peek(#p)),
+                        ::winnow::combinator::not(::winnow::combinator::peek(::winnow::token::literal(#b))),
                         ::winnow::token::any
                     )))
                 }

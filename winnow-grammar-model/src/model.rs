@@ -116,6 +116,8 @@ pub enum ModelPattern {
         // `syn::Expr` would quadruple this enum's size.
         init: Box<syn::Expr>,
         step: Box<syn::Expr>,
+        /// `par_fold`'s merge, `None` for a plain `fold`. See [`crate::frame`].
+        merge: Option<Box<syn::Expr>>,
         span: proc_macro2::Span,
     },
     LexicalScope(Box<ModelPattern>, proc_macro2::Span),
@@ -367,13 +369,15 @@ impl From<parser::Pattern> for ModelPattern {
                 pattern,
                 init,
                 step,
-                kw_token,
+                merge,
+                kw_span,
             } => ModelPattern::Fold {
                 binding,
                 pattern: Box::new((*pattern).into()),
                 init,
                 step,
-                span: kw_token.span(),
+                merge,
+                span: kw_span,
             },
             parser::Pattern::Count {
                 binding,

@@ -1,0 +1,59 @@
+error: the literal "\n" in rule `RECORD` can consume the boundary "\n" of frame `RECORD`; cutting the input at the next boundary would then land inside a frame
+  --> tests/ui/frames.rs:11:34
+   |
+11 |         RECORD -> () = "key" ":" "\n" "value" "\n" -> { () }
+   |                                  ^^^^
+
+error: rule `record` is syntactic (lowercase), so the implicit whitespace between its elements can consume the boundary "\n" of frame `record`; make the rule lexical (uppercase, or wrap the sequence in `lex(…)`), or define `WS` so it cannot
+  --> tests/ui/frames.rs:20:24
+   |
+20 |         record -> () = "a" ";" "\n" -> { () }
+   |                        ^^^
+
+error: the built-in `any` in rule `RECORD` can consume the boundary "\n" of frame `RECORD`; cutting the input at the next boundary would then land inside a frame
+  --> tests/ui/frames.rs:28:24
+   |
+28 |         RECORD -> () = any "\n" -> { () }
+   |                        ^^^
+
+error: the literal "\n" in rule `VALUE` can consume the boundary "\n" of frame `RECORD`; cutting the input at the next boundary would then land inside a frame
+  --> tests/ui/frames.rs:36:27
+   |
+36 |         VALUE -> () = "x" "\n" "y" -> { () }
+   |                           ^^^^
+
+error: frame `RECORD` must end in its boundary "\n" (the literal, `line_ending`, `eof`, or a group of those); this alternative ends in something else
+  --> tests/ui/frames.rs:47:29
+   |
+47 |         RECORD -> () = "\n" "a" -> { () }
+   |                             ^^^
+
+error: cannot infer the boundary of frame `RECORD`: every alternative must end in the same string literal; otherwise say which it is: `#[frame = "\n"]`
+  --> tests/ui/frames.rs:54:9
+   |
+54 |         #[frame]
+   |         ^
+
+error: `par_fold` folds over `ITEM`, which is not a frame; mark it `#[frame]` so the input can be cut at its boundary
+  --> tests/ui/frames.rs:63:36
+   |
+63 |         pub FILE -> i32 = par_fold(ITEM, || 0, |a: i32, b: i32| a + b, |a: i32, b: i32| a + b)
+   |                                    ^^^^
+
+error: `par_fold` must be the whole body of rule `FILE`: one alternative, nothing before or after it - the input is cut into pieces that are each folded on their own, and a prefix or suffix would belong to none of them
+  --> tests/ui/frames.rs:72:40
+   |
+72 |         pub FILE -> i32 = "header\n" t:par_fold(ITEM, || 0, |a: i32, b: i32| a + b, |a: i32, b: i32| a + b) -> { t }
+   |                                        ^^^^^^^^
+
+error: unexpected end of input, `par_fold` takes a fourth argument, the merge: `par_fold(rule, init, step, merge)`
+  --> tests/ui/frames.rs:81:70
+   |
+81 |         pub FILE -> i32 = par_fold(ITEM, || 0, |a: i32, b: i32| a + b)
+   |                                                                      ^
+
+error: the frame boundary is a non-empty string or char literal: `#[frame = "\n"]`
+  --> tests/ui/frames.rs:88:19
+   |
+88 |         #[frame = 3]
+   |                   ^

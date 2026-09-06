@@ -69,6 +69,26 @@
 
 ### Added
 
+- **`#[frame]` and `par_fold(rule, init, step, merge)`: parsing in pieces.** A
+  rule marked `#[frame]` claims it can be found from any offset by scanning to
+  the next boundary (the literal it ends in, or `#[frame = "\n"]`). The claim
+  is **checked**: every rule reachable from the frame is walked, and each thing
+  that consumes input is *safe* (a literal without the boundary, a built-in
+  whose alphabet cannot include it, lookahead), *bounded* (`until(…)` and the
+  `recover` skip: inside a frame their scan stops at the terminator or the
+  boundary, whichever is first — `memmem2`, one scan), or *rejected* with the
+  rule and pattern named (a literal containing the boundary, `any`,
+  `multispace0`, the implicit whitespace of a syntactic rule). A frame must end
+  in its boundary. `par_fold` is `fold` plus a merge over a frame rule and must
+  be the whole body of its rule. Generated next to the parsers:
+  `frames_<RULE>(input, n) -> Vec<Range<usize>>` (blind equal split, each piece
+  repaired to just past the next boundary, one owner per frame, oversized
+  frames leave empty pieces, no trailing boundary keeps the last frame, every
+  range a UTF-8 boundary) and `merge_<RULE>(a, b)`. The per-piece parser is the
+  rule's own `parse_<RULE>()`; threads are the caller's. `tests/frames_test.rs`
+  asserts split + parse + merge against the sequential parse, the split's edge
+  cases, and the bounding of `until`; `tests/ui/frames.rs` the ten rejections.
+  The model gains `frame::check`; `ModelPattern::Fold` gains `merge`.
 - **`until` and `recover` scan for a fixed terminator** instead of running the
   terminator's parser once per character. A literal terminator, and the built-in
   `line_ending`, are found with `find_slice` — `memchr`, so SIMD where the target

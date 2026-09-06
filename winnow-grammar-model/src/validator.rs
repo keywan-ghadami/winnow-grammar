@@ -50,6 +50,9 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<()> {
 
     validate_argument_counts(grammar)?;
 
+    // Frames: `#[frame]` rules, what they reach, and `par_fold`.
+    crate::frame::check(grammar, &builtin_names)?;
+
     // Perform advanced analysis
     let analysis = crate::analysis::analyze_grammar(grammar);
 

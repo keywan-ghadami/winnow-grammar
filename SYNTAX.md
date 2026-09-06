@@ -292,6 +292,8 @@ rule T = "bool"
 - **`eof`**: Succeeds only at the end of the input.
 - **`fail("message")`**: Explicitly fails with a custom error message.
 - **`recover(rule, sync)`**: If `rule` fails, skips input until `sync` token is found.
+- **`par_fold(rule, init, step, merge)`**: `fold` plus a merge, over a `#[frame]`
+  rule — see **Frames and parallel parsing** below.
 - **`fold(rule, init, step)`**: Repeats `rule` zero or more times, threading an
   accumulator instead of collecting. `init` is called once to build the starting
   value; `step` receives `(accumulator, item)` and returns the next accumulator.
@@ -320,6 +322,91 @@ rule T = "bool"
   Like `rule*`, a fold matches zero occurrences, so it succeeds on empty input
   and yields the initial accumulator. Bindings inside `rule` are consumed by
   `step` and do not escape to the surrounding action.
+
+## Frames and parallel parsing
+
+A parser reads its input front to back on one core. For a large input that is
+the whole cost. A grammar can say the two things that let the input be cut into
+pieces and parsed as pieces:
+
+**Where may it be cut?** A rule marked `#[frame]` is one that can be found
+from any offset by scanning to the next **boundary** — the literal it ends in,
+or the one named in `#[frame = "\n"]`:
+
+```rust
+# use winnow_grammar::grammar;
+# fn main() {
+grammar! {
+    grammar Measurements {
+        NAME -> &'a str = s:until(";") -> { s }
+
+        #[frame]
+        pub MEASUREMENT -> (&'a str, i32) =
+            name:NAME ";" temp:i32 "\n" -> { (name, temp) }
+
+        pub FILE -> i64 =
+            s:par_fold(MEASUREMENT, || 0i64,
+                       |acc: i64, (_, t): (&str, i32)| acc + t as i64,
+                       |a: i64, b: i64| a + b)
+            -> { s }
+    }
+}
+# }
+```
+
+**This is checked, not believed.** Cutting at the next boundary is only right
+if the boundary cannot occur *inside* a frame. Every rule reachable from the
+frame rule is walked, and what consumes input falls into one of three cases:
+
+- **Safe:** a literal without the boundary in it; a built-in whose alphabet
+  cannot include it (`digit1`, `ident`, …); lookahead, which consumes nothing.
+- **Bounded:** `until(…)` and the skip in `recover(…)`. They consume anything up
+  to their terminator, so inside a frame their scan stops at the terminator
+  *or the boundary*, whichever is first. `NAME` above cannot swallow a newline:
+  a name with one in it fails to parse at the newline, instead of silently
+  joining two measurements.
+- **Rejected**, with the rule and pattern named: a literal that contains the
+  boundary (a quoted-string rule that allows `"\n"` — CSV with quoted newlines
+  is the classic case), a built-in that can consume it (`any`, `multispace0`),
+  or a **syntactic (lowercase) rule**, whose implicit whitespace is
+  `multispace0` and eats newlines. Frame rules and what they reach are
+  lexical, or the grammar defines a `WS` that leaves the boundary alone.
+
+A frame must **end in its boundary** — the literal, `line_ending` for a newline
+boundary, `eof`, or a group of those — so that every frame ends exactly at a
+boundary and the piece that finds a frame's end is the one that owns it.
+
+**How do two pieces combine?** `par_fold(rule, init, step, merge)` is `fold`
+plus the merge, and requires `rule` to be a frame. It must be the whole body of
+its rule: nothing before or after it, since a prefix or suffix would belong to
+no piece.
+
+**What is generated.** The grammar gets, next to the parsers:
+
+- `frames_<RULE>(input, n) -> Vec<Range<usize>>` on a frame rule and on a
+  `par_fold` rule: the byte ranges of `n` pieces. The input is divided into
+  `n` equal byte ranges blind; every piece but the first then moves its start
+  to just past the first boundary at or after that point, and ends where the
+  next piece starts. Every frame lies in exactly one piece; a frame longer than
+  a piece leaves the pieces after it empty; input without a trailing boundary
+  keeps its last frame; every range is a UTF-8 character boundary.
+- `merge_<RULE>(a, b)` on a `par_fold` rule: the merge it was given.
+
+The per-piece parser is the rule's own `parse_<RULE>()` on `&input[range]` — a
+fold matches zero or more frames, so a piece is a valid input by itself.
+Running the pieces in parallel and merging is the caller's:
+
+```rust,ignore
+let ranges = Measurements::frames_FILE(&input, cores);
+let total = ranges
+    .into_par_iter()   // rayon, or whatever runs the pieces
+    .map(|r| Measurements::parse_FILE().parse(&input[r]).unwrap())
+    .reduce(|| 0, Measurements::merge_FILE);
+```
+
+This crate does not run threads; it establishes that cutting is sound and
+supplies the cut and the merge. The sequential `parse_FILE()` over the whole
+input gives the same answer, which is what `tests/frames_test.rs` asserts.
 
 ## Error Messages
 

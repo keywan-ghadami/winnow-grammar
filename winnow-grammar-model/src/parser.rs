@@ -42,6 +42,7 @@ pub mod kw {
     syn::custom_keyword!(fail);
     syn::custom_keyword!(count);
     syn::custom_keyword!(fold);
+    syn::custom_keyword!(par_fold);
     syn::custom_keyword!(lex);
     syn::custom_keyword!(spaced);
 }
@@ -601,7 +602,11 @@ pub enum Pattern {
         // `Pattern` in the grammar would carry.
         init: Box<syn::Expr>,
         step: Box<syn::Expr>,
-        kw_token: kw::fold,
+        /// `par_fold(rule, init, step, merge)`: how two accumulators combine.
+        /// `None` for a plain `fold`.
+        merge: Option<Box<syn::Expr>>,
+        /// The span of the keyword, `fold` or `par_fold`.
+        kw_span: proc_macro2::Span,
     },
     LexicalScope(Box<Pattern>, kw::lex),
     SpacedScope(Box<Pattern>, kw::spaced),
@@ -1119,19 +1124,28 @@ impl ToTokens for Pattern {
                 pattern,
                 init,
                 step,
+                merge,
                 ..
             } => {
                 if let Some(b) = binding {
                     b.to_tokens(tokens);
                     token::Colon::default().to_tokens(tokens);
                 }
-                kw::fold::default().to_tokens(tokens);
+                if merge.is_some() {
+                    kw::par_fold::default().to_tokens(tokens);
+                } else {
+                    kw::fold::default().to_tokens(tokens);
+                }
                 token::Paren::default().surround(tokens, |t| {
                     pattern.to_tokens(t);
                     token::Comma::default().to_tokens(t);
                     init.to_tokens(t);
                     token::Comma::default().to_tokens(t);
                     step.to_tokens(t);
+                    if let Some(m) = merge {
+                        token::Comma::default().to_tokens(t);
+                        m.to_tokens(t);
+                    }
                 });
             }
             Pattern::LexicalScope(pattern, kw_token) => {
@@ -1273,8 +1287,12 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
             pattern: Box::new(pattern),
             kw_token,
         })
-    } else if input.peek(kw::fold) {
-        let kw_token = input.parse::<kw::fold>()?;
+    } else if input.peek(kw::fold) || input.peek(kw::par_fold) {
+        let (kw_span, parallel) = if input.peek(kw::fold) {
+            (input.parse::<kw::fold>()?.span, false)
+        } else {
+            (input.parse::<kw::par_fold>()?.span, true)
+        };
         let content;
         syn::parenthesized!(content in input);
         let pattern = content.parse()?;
@@ -1282,12 +1300,21 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
         let init = Box::new(content.parse::<syn::Expr>()?);
         let _ = content.parse::<Token![,]>()?;
         let step = Box::new(content.parse::<syn::Expr>()?);
+        let merge = if parallel {
+            let _ = content.parse::<Token![,]>().map_err(|_| {
+                content.error("`par_fold` takes a fourth argument, the merge: `par_fold(rule, init, step, merge)`")
+            })?;
+            Some(Box::new(content.parse::<syn::Expr>()?))
+        } else {
+            None
+        };
         Ok(Pattern::Fold {
             binding,
             pattern: Box::new(pattern),
             init,
             step,
-            kw_token,
+            merge,
+            kw_span,
         })
     } else if input.peek(kw::count) {
         let kw_token = input.parse::<kw::count>()?;
