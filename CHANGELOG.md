@@ -73,10 +73,17 @@
   three times. A malformed bound is rejected at the bound itself (`{3,1}`,
   `{0}`, `{1,2,3}` — see `tests/ui/bounds.rs`).
   **Disambiguation:** a brace group is still the braced-delimiter pattern; only
-  one whose content starts with an integer is read as a bound. The cost is that
-  `x{2}` can no longer mean "x, then braces around a literal 2" — write that as
-  `x "{" "2" "}"`. Documented in `SYNTAX.md`; tests in
-  `tests/bounded_repetition_test.rs`.
+  one whose content starts with an integer is read as a bound. The group that
+  loses its bare form — braces around an integer literal — gets the keyword
+  form `brace(2)`, the same escape hatch `( … )` has in `paren( … )`: a
+  delimiter carries a keyword form for as long as its bare form means something
+  else. (In this backend nothing was lost either way: `literal(2)` does not
+  compile against `&str` input, so a brace group holding a bare integer never
+  built. The keyword form is what makes the rule hold for a backend where
+  integer literals are matchable tokens.) Documented in `SYNTAX.md`; tests in
+  `tests/bounded_repetition_test.rs` and `tests/delimiter_test.rs`.
+- **`brace(pattern)`** — the keyword form of the braced delimiter, mirroring
+  `paren(pattern)`.
 - **`digit` built-in** — a single digit (`char`), next to `digit1`'s greedy run
   of them. Fixed-width numeric formats need the single-character terminal:
   `digit{1,2} "." digit` is the shape a bounded repetition is for, and `digit1`

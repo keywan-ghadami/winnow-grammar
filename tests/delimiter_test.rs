@@ -65,3 +65,22 @@ fn the_other_delimiters_still_match() {
         .parse_test("b ( hello )")
         .assert_success_is("hello".to_string());
 }
+
+grammar! {
+    grammar Keyword {
+        // `brace(…)` is the keyword form of `{ … }`, for the one content the
+        // bare form cannot express: a leading integer literal, which reads as
+        // a repetition bound. `paren(…)` plays the same role for `( … )`.
+        pub kw_braced -> String = "b" brace(name:raw_ident) -> { name.to_string() }
+    }
+}
+
+#[test]
+fn the_keyword_form_of_a_braced_delimiter_matches_braces() {
+    Keyword::parse_kw_braced()
+        .parse_test("b { hello }")
+        .assert_success_is("hello".to_string());
+    Keyword::parse_kw_braced()
+        .parse_test("b ( hello )")
+        .assert_failure();
+}

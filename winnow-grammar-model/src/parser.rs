@@ -33,6 +33,7 @@ pub mod kw {
     syn::custom_keyword!(grammar);
     syn::custom_keyword!(rule);
     syn::custom_keyword!(paren);
+    syn::custom_keyword!(brace);
     syn::custom_keyword!(recover);
     syn::custom_keyword!(peek);
     syn::custom_keyword!(not);
@@ -804,6 +805,19 @@ fn starts_repeat_bounds(input: ParseStream) -> bool {
     peek_inside(&fork).unwrap_or(false)
 }
 
+/// Would this brace content be read back as a repetition bound rather than as
+/// a braced-delimiter pattern? The mirror of [`starts_repeat_bounds`], for the
+/// re-emission side.
+fn starts_with_int_literal(patterns: &[Pattern]) -> bool {
+    matches!(
+        patterns.first(),
+        Some(Pattern::Lit {
+            lit: Lit::Int(_),
+            ..
+        })
+    )
+}
+
 /// Parses `{n}`, `{n,}` or `{n,m}`. Only called once [`starts_repeat_bounds`]
 /// has established that this brace group is a bound, so every error here is a
 /// malformed bound and is reported as such.
@@ -982,11 +996,23 @@ impl ToTokens for Pattern {
                     b.to_tokens(tokens);
                     token::Colon::default().to_tokens(tokens);
                 }
-                token::Brace::default().surround(tokens, |t| {
-                    for p in patterns {
-                        p.to_tokens(t);
-                    }
-                });
+                // Re-emitting `{ 2 … }` would come back as a repetition bound
+                // on the preceding pattern, so the one content that needs the
+                // keyword form goes out in it.
+                if starts_with_int_literal(patterns) {
+                    kw::brace::default().to_tokens(tokens);
+                    token::Paren::default().surround(tokens, |t| {
+                        for p in patterns {
+                            p.to_tokens(t);
+                        }
+                    });
+                } else {
+                    token::Brace::default().surround(tokens, |t| {
+                        for p in patterns {
+                            p.to_tokens(t);
+                        }
+                    });
+                }
             }
             Pattern::Parenthesized {
                 binding, patterns, ..
@@ -1184,6 +1210,19 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
             patterns: parse_pattern_list(&content)?,
             kw_token: kw,
             token,
+        })
+    } else if input.peek(kw::brace) {
+        // The keyword form of `{ pattern }`, for the one content a brace
+        // group can hold that the bare form cannot express: a leading integer
+        // literal, which reads as a repetition bound. Same role `paren(…)`
+        // plays for `( … )`, which the bare form reads as a group.
+        let _kw = input.parse::<kw::brace>()?;
+        let content;
+        let token = syn::parenthesized!(content in input);
+        Ok(Pattern::Braced {
+            binding,
+            patterns: parse_pattern_list(&content)?,
+            token: token::Brace { span: token.span },
         })
     } else if input.peek(token::Paren) {
         let content;

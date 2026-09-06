@@ -143,11 +143,19 @@ An upper bound below the lower one, and a bound that can match nothing (`{0}`,
 
 > **Braces:** `{ pattern }` is still the braced-delimiter pattern. Only a brace
 > group whose content **starts with an integer** is read as a bound, so
-> `x { y }` is unchanged — but `x{2}` is now a repetition, and braces around a
-> literal `2` are written `x "{" "2" "}"`.
+> `x { y }` is unchanged. For the one group that is now ambiguous — braces
+> around an integer literal — write the keyword form, `x brace(2)`, exactly as
+> `( … )` takes `paren( … )` because the bare form is a group. A delimiter
+> keeps its keyword form for as long as its bare form means something else;
+> `[ … ]` is ambiguous with nothing and has none.
 
 ### Delimiters
 To match literal delimiters (parentheses, brackets, braces) in the input, use the specific delimiter syntax. This avoids ambiguity with grouping parentheses.
+
+`[ … ]` and `{ … }` are written bare; `( … )` is a group, so its delimiter form
+is `paren( … )`. `{ … }` also has the keyword form `brace( … )`, needed only
+when the content starts with an integer literal — the bare form would read as a
+repetition bound.
 
 - `paren(pattern)`: Matches `( pattern )`.
 - `[ pattern ]`: Matches `[ pattern ]`.

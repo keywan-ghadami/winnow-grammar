@@ -137,9 +137,9 @@ fn a_braced_pattern_is_not_a_bound() {
 
 grammar! {
     grammar IntInBraces {
-        // The documented cost of the disambiguation: a brace group holding a
+        // The one group the disambiguation takes: a brace group holding a
         // bare integer is a bound, not a delimiter pattern. `"b"{2}` matches
-        // two `b`s. Braces around a literal `2` are written `"{" "2" "}"`.
+        // two `b`s; braces around a literal `2` are `brace(2)`.
         pub twice -> usize = b:"b"{2} -> { b.len() }
     }
 }
