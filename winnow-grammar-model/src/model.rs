@@ -80,6 +80,14 @@ pub enum ModelPattern {
     Optional(Box<ModelPattern>, proc_macro2::Span),
     Repeat(Box<ModelPattern>, proc_macro2::Span),
     Plus(Box<ModelPattern>, proc_macro2::Span),
+    /// `p{n}` / `p{n,}` / `p{n,m}` - a repetition with explicit bounds. `max`
+    /// is `None` for an open upper bound; `min == 0` makes it nullable.
+    Bounded {
+        pattern: Box<ModelPattern>,
+        min: usize,
+        max: Option<usize>,
+        span: proc_macro2::Span,
+    },
     SpanBinding(Box<ModelPattern>, Ident, proc_macro2::Span),
     Recover {
         binding: Option<Ident>,
@@ -134,6 +142,7 @@ impl ModelPattern {
             ModelPattern::Optional(_, s) => *s,
             ModelPattern::Repeat(_, s) => *s,
             ModelPattern::Plus(_, s) => *s,
+            ModelPattern::Bounded { span, .. } => *span,
             ModelPattern::SpanBinding(_, _, s) => *s,
             ModelPattern::Recover { span, .. } => *span,
             ModelPattern::Peek(_, s) => *s,
@@ -312,6 +321,17 @@ impl From<parser::Pattern> for ModelPattern {
             parser::Pattern::Plus(p, token) => {
                 ModelPattern::Plus(Box::new((*p).into()), token.span)
             } // Plus has .span (field)
+            parser::Pattern::Bounded {
+                pattern,
+                min,
+                max,
+                token,
+            } => ModelPattern::Bounded {
+                pattern: Box::new((*pattern).into()),
+                min,
+                max,
+                span: token.span.join(),
+            },
             parser::Pattern::SpanBinding(p, id, token) => {
                 ModelPattern::SpanBinding(Box::new((*p).into()), id, token.span)
                 // At has .span (field)

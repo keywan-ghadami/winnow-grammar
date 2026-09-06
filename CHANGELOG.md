@@ -30,6 +30,29 @@
   compared symbols to each other, so they passed either way; three tests that
   actually resolve have been added.
 
+- **The braced delimiter pattern `{ … }` generated `]` as its closing token.**
+  `Braced` was dispatched with the closing string of the bracketed form, so a
+  grammar that matched literal braces parsed the opening brace and its content
+  and then failed at the closing one (`unexpected token \`}\``). The bracketed
+  and parenthesised forms share the same code path and were correct, which is
+  why it survived: nothing tested braces. `tests/delimiter_test.rs`.
+
+- **`count(pattern)` did not compile in any shape.** Bound to a name it was
+  emitted as `let n: Vec<_> = …` around a parser that had already mapped to
+  `usize`, and the lexical branch emitted
+  `::winnow::combinator::::winnow_grammar::rt::…`, which is not valid Rust.
+  The feature was documented in `SYNTAX.md` and had no test.
+  `tests/count_test.rs`.
+
+- **A repetition could return fewer items than its lower bound.** When the
+  element matched without consuming input, the zero-progress guard that keeps
+  the loop from spinning also ended it - below `min`. `("a"?){3}` reported
+  success with zero items. An empty match now counts towards the minimum (as
+  in a regex, where `(a?){3}` matches the empty string) and the guard only
+  stops the loop once `min` is reached. `repeat_recording` is now the
+  open-ended case of `repeat_recording_bounded` rather than a copy of it, so
+  `*` and `+` get the same fix.
+
 - Parser parameters of generic rules (`list<T>(item)`) are substituted; missing
   type parameters are inferred from the argument.
 - A whitespace cycle (`WS -> comment -> WS` through a syntactic comment rule)
@@ -38,6 +61,33 @@
 
 ### Added
 
+- **Bounded repetition `p{n}` / `p{n,}` / `p{n,m}`.** `*` and `+` say *unbounded*,
+  so a grammar had no way to state a width a format actually fixes — and a
+  backend that specialised for a fixed width anyway would be inventing a
+  constraint the grammar never made. Bounds are greedy and possessive like the
+  existing repetitions (`rt::repeat_recording_bounded`, sharing their handling of
+  progress, backtracking and error recording): at the upper bound the repetition
+  simply stops and whatever follows sees the rest of the input; below the lower
+  bound the element's own error is the failure. An element that can match the
+  empty input still owes the lower bound — `("a"?){3}` matches the empty input
+  three times. A malformed bound is rejected at the bound itself (`{3,1}`,
+  `{0}`, `{1,2,3}` — see `tests/ui/bounds.rs`).
+  **Disambiguation:** a brace group is still the braced-delimiter pattern; only
+  one whose content starts with an integer is read as a bound. The group that
+  loses its bare form — braces around an integer literal — gets the keyword
+  form `brace(2)`, the same escape hatch `( … )` has in `paren( … )`: a
+  delimiter carries a keyword form for as long as its bare form means something
+  else. (In this backend nothing was lost either way: `literal(2)` does not
+  compile against `&str` input, so a brace group holding a bare integer never
+  built. The keyword form is what makes the rule hold for a backend where
+  integer literals are matchable tokens.) Documented in `SYNTAX.md`; tests in
+  `tests/bounded_repetition_test.rs` and `tests/delimiter_test.rs`.
+- **`brace(pattern)`** — the keyword form of the braced delimiter, mirroring
+  `paren(pattern)`.
+- **`digit` built-in** — a single digit (`char`), next to `digit1`'s greedy run
+  of them. Fixed-width numeric formats need the single-character terminal:
+  `digit{1,2} "." digit` is the shape a bounded repetition is for, and `digit1`
+  would have swallowed the whole run before the bound could count anything.
 - **`fold(rule, init, step)`** — a repetition that threads an accumulator rather
   than collecting into a `Vec`. `repeat`/`*` must materialise every item, which
   makes the collection, not the parse, the memory cost on large inputs; a fold

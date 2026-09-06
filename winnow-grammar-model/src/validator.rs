@@ -181,6 +181,7 @@ fn validate_pattern(
         ModelPattern::Repeat(inner, _)
         | ModelPattern::Plus(inner, _)
         | ModelPattern::Optional(inner, _)
+        | ModelPattern::Bounded { pattern: inner, .. }
         | ModelPattern::SpanBinding(inner, _, _)
         | ModelPattern::Peek(inner, _) => {
             validate_pattern(inner, all_defs, params)?;
@@ -263,6 +264,7 @@ fn validate_no_bindings(pattern: &ModelPattern) -> syn::Result<()> {
         ModelPattern::Optional(inner, _)
         | ModelPattern::Repeat(inner, _)
         | ModelPattern::Plus(inner, _)
+        | ModelPattern::Bounded { pattern: inner, .. }
         | ModelPattern::Peek(inner, _)
         | ModelPattern::Not(inner, _)
         | ModelPattern::Until { pattern: inner, .. } => {
@@ -376,6 +378,7 @@ fn validate_args_recursive(
             ModelPattern::Repeat(inner, _)
             | ModelPattern::Plus(inner, _)
             | ModelPattern::Optional(inner, _)
+            | ModelPattern::Bounded { pattern: inner, .. }
             | ModelPattern::SpanBinding(inner, _, _)
             | ModelPattern::Peek(inner, _) => {
                 validate_args_recursive(std::slice::from_ref(inner), rule_map)?;

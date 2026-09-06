@@ -17,6 +17,7 @@ pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::I
         ModelPattern::Optional(inner, _)
         | ModelPattern::Repeat(inner, _)
         | ModelPattern::Plus(inner, _)
+        | ModelPattern::Bounded { pattern: inner, .. }
         | ModelPattern::SpanBinding(inner, _, _)
         | ModelPattern::LexicalScope(inner, _)
         | ModelPattern::SpacedScope(inner, _)
@@ -88,6 +89,7 @@ fn builtin_expectation(name: &str) -> Option<&'static str> {
         "char" => "character literal",
         "any" => "any character",
         "alpha1" => "letters",
+        "digit" => "a digit",
         "digit1" => "digits",
         "hex_digit0" | "hex_digit1" => "hex digits",
         "oct_digit0" | "oct_digit1" => "octal digits",
@@ -150,6 +152,7 @@ pub(crate) fn substitute_pattern(
         ModelPattern::Optional(inner, _)
         | ModelPattern::Repeat(inner, _)
         | ModelPattern::Plus(inner, _)
+        | ModelPattern::Bounded { pattern: inner, .. }
         | ModelPattern::SpanBinding(inner, _, _)
         | ModelPattern::Peek(inner, _)
         | ModelPattern::Not(inner, _)
@@ -194,6 +197,7 @@ pub(crate) fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
         ModelPattern::Optional(inner, _) => get_inner_binding(inner),
         ModelPattern::Repeat(inner, _) => get_inner_binding(inner),
         ModelPattern::Plus(inner, _) => get_inner_binding(inner),
+        ModelPattern::Bounded { pattern, .. } => get_inner_binding(pattern),
         ModelPattern::SpanBinding(inner, _, _) => get_inner_binding(inner),
         ModelPattern::Recover { binding, .. } => binding.as_ref(),
         ModelPattern::Until { binding, .. } => binding.as_ref(),
@@ -263,7 +267,7 @@ impl<'a> Codegen<'a> {
                 return self.generate_delimited_step(inner, "[", "]", in_cut, is_lexical)
             }
             ModelPattern::Braced(inner, _) => {
-                return self.generate_delimited_step(inner, "{", "]", in_cut, is_lexical)
+                return self.generate_delimited_step(inner, "{", "}", in_cut, is_lexical)
             }
             _ => {}
         }
@@ -285,12 +289,13 @@ impl<'a> Codegen<'a> {
                 },
                 ModelPattern::Repeat(_, _)
                 | ModelPattern::Plus(_, _)
-                | ModelPattern::Count { .. } => quote_spanned! {span=>
+                | ModelPattern::Bounded { .. } => quote_spanned! {span=>
                     let #name: Vec<_> = #parser_expr.parse_next(#input)?;
                 },
                 // A fold's value is the accumulator, whose type comes from
-                // `init` - not a collection, so it must not be annotated.
-                ModelPattern::Fold { .. } => quote_spanned! {span=>
+                // `init`, and a count's is the `usize` it mapped to - neither
+                // is a collection, so neither must be annotated as one.
+                ModelPattern::Fold { .. } | ModelPattern::Count { .. } => quote_spanned! {span=>
                     let #name = #parser_expr.parse_next(#input)?;
                 },
                 _ => quote_spanned! {span=>
@@ -302,7 +307,9 @@ impl<'a> Codegen<'a> {
                     let (_, #span_var) = #parser_expr.with_span().parse_next(#input)?;
                 },
                 // Explicitly discard result for unbinded repetitions to help type inference (e.g. Accumulate<()>)
-                ModelPattern::Repeat(_, _) | ModelPattern::Plus(_, _) => quote_spanned! {span=>
+                ModelPattern::Repeat(_, _)
+                | ModelPattern::Plus(_, _)
+                | ModelPattern::Bounded { .. } => quote_spanned! {span=>
                     let _: () = #parser_expr.parse_next(#input)?;
                 },
                 _ => quote_spanned! {span=>
@@ -569,6 +576,12 @@ impl<'a> Codegen<'a> {
             "alpha1" => {
                 quote_spanned! {span=> ::winnow::ascii::alpha1::<#input_type, #inner_err_type> }
             }
+            // A single digit, as opposed to `digit1`'s greedy run of them.
+            // Fixed-width numeric formats are written with it and a bounded
+            // repetition (`digit{1,2}`), which a greedy terminal cannot express.
+            "digit" => quote_spanned! {span=>
+                ::winnow::token::one_of::<#input_type, _, #inner_err_type>('0'..='9')
+            },
             "digit1" => {
                 quote_spanned! {span=> ::winnow::ascii::digit1::<#input_type, #inner_err_type> }
             }
@@ -757,6 +770,25 @@ impl<'a> Codegen<'a> {
                     quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(1, #p) }
                 }
             }
+            ModelPattern::Bounded {
+                pattern, min, max, ..
+            } => {
+                let p = self.generate_parser_expr(pattern, is_lexical, false);
+                let max = match max {
+                    Some(m) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
+                    None => quote_spanned! {span=> ::core::option::Option::None },
+                };
+                let inner = if is_lexical {
+                    quote_spanned! {span=> #p }
+                } else {
+                    quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p) }
+                };
+                if is_discarded {
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording_bounded(#min, #max, #inner).map(|_| ()) }
+                } else {
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording_bounded(#min, #max, #inner) }
+                }
+            }
             ModelPattern::Parenthesized(inner, _) => {
                 self.generate_delimited_expr(inner, "(", ")", is_lexical)
             }
@@ -805,7 +837,7 @@ impl<'a> Codegen<'a> {
                 if !is_lexical {
                     quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|v: Vec<_>| v.len()) }
                 } else {
-                    quote_spanned! {span=> ::winnow::combinator::::winnow_grammar::rt::repeat_recording(0, #p).map(|v: Vec<_>| v.len()) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, #p).map(|v: Vec<_>| v.len()) }
                 }
             }
             ModelPattern::Fold {

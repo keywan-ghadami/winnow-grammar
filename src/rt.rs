@@ -39,8 +39,27 @@ where
 /// `x*` / `x+` - repetition with a minimum count. The reason why it did not
 /// continue is recorded and carries the index of the attempted element
 /// (`in item 3`). Below the minimum count it is the error itself.
+///
+/// The open-ended case of [`repeat_recording_bounded`].
 pub fn repeat_recording<'a, S: Clone + std::fmt::Debug, O, P>(
     min: usize,
+    p: P,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Vec<O>, RtError>
+where
+    P: Parser<ParseInput<'a, S>, O, RtError>,
+{
+    repeat_recording_bounded(min, None, p)
+}
+
+/// `x{n}` / `x{n,}` / `x{n,m}` - repetition with explicit bounds.
+///
+/// Greedy and possessive, like [`repeat_recording`]: it takes as many elements
+/// as it can up to `max` and never gives one back to help a later pattern
+/// match. Below `min` the element's own error is the failure; at `max` the
+/// repetition simply stops, and whatever follows sees the rest of the input.
+pub fn repeat_recording_bounded<'a, S: Clone + std::fmt::Debug, O, P>(
+    min: usize,
+    max: Option<usize>,
     mut p: P,
 ) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Vec<O>, RtError>
 where
@@ -49,13 +68,26 @@ where
     move |input| {
         let mut items = Vec::new();
         loop {
+            if max.is_some_and(|m| items.len() >= m) {
+                break;
+            }
             let cp = input.checkpoint();
             let start = input.current_token_start();
             match p.parse_next(input) {
                 Ok(v) => {
-                    // Zero-progress guard: otherwise the loop spins forever
-                    // when the element matches without consuming anything.
                     if input.current_token_start() == start {
+                        // The element matched without consuming anything, so
+                        // repeating it can never make progress and the loop
+                        // has to stop - but not before the minimum is
+                        // reached, or `{n}` would quietly hand back fewer
+                        // than `n` items. An empty match still counts:
+                        // `("a"?){3}` matches the empty input three times,
+                        // and each push moves the count towards `min`, so
+                        // this terminates.
+                        if items.len() < min {
+                            items.push(v);
+                            continue;
+                        }
                         input.reset(&cp);
                         break;
                     }

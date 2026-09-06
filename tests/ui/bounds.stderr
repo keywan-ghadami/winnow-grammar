@@ -1,0 +1,23 @@
+error: upper bound 1 is below the lower bound 3
+ --> tests/ui/bounds.rs:8:36
+  |
+8 |         pub r -> usize = d:digit{3,1} -> { d.len() }
+  |                                    ^
+
+error: `{0}` matches nothing - remove the pattern instead
+  --> tests/ui/bounds.rs:14:34
+   |
+14 |         pub r -> usize = d:digit{0} -> { d.len() }
+   |                                  ^
+
+error: an upper bound of 0 matches nothing - remove the pattern instead
+  --> tests/ui/bounds.rs:20:36
+   |
+20 |         pub r -> usize = d:digit{0,0} -> { d.len() }
+   |                                    ^
+
+error: expected the end of the repetition bound: `{n}`, `{n,}` or `{n,m}`
+  --> tests/ui/bounds.rs:26:37
+   |
+26 |         pub r -> usize = d:digit{1,2,3} -> { d.len() }
+   |                                     ^
