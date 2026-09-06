@@ -159,3 +159,67 @@ fn recovery_skips_a_long_broken_region() {
         .parse_test(&input)
         .assert_success_is(2);
 }
+
+grammar! {
+    grammar Rest {
+        // `until(eof)` is "the rest of the input": no search at all.
+        pub REST -> String = "=" s:until(eof) -> { s.to_string() }
+    }
+}
+
+#[test]
+fn until_eof_is_the_rest_of_the_input() {
+    Rest::parse_REST()
+        .parse_test("=everything after, \n lines and all")
+        .assert_success_is("everything after, \n lines and all".to_string());
+    Rest::parse_REST()
+        .parse_test("=")
+        .assert_success_is(String::new());
+}
+
+grammar! {
+    grammar Shadow {
+        // A rule of the grammar's own named `line_ending` is that rule, not
+        // the built-in: the terminator is `|`, and a real newline is text.
+        rule line_ending = "|"
+        pub CELL -> String = s:until(line_ending) "|" -> { s.to_string() }
+    }
+}
+
+#[test]
+fn a_user_rule_named_line_ending_is_not_the_built_in() {
+    Shadow::parse_CELL()
+        .parse_test("one\ntwo|")
+        .assert_success_is("one\ntwo".to_string());
+}
+
+grammar! {
+    grammar LineRecovery {
+        // Recovery synchronising on a line ending takes the scanned path too.
+        // Lexical rules: the default whitespace of a syntactic rule is
+        // `multispace0`, which would swallow the very newlines being
+        // synchronised on.
+        pub LINES -> usize =
+            xs:recover(ENTRY, line_ending)* -> { xs.iter().filter(|x| x.is_some()).count() }
+
+        rule ENTRY -> i32 = v:i32 line_ending -> { v }
+    }
+}
+
+#[test]
+fn recovery_synchronises_on_a_line_ending() {
+    // The broken line ends in "\r\n": the scan must stop before the "\r" so
+    // that the synchronisation token still matches whole.
+    LineRecovery::parse_LINES()
+        .parse_test("1\nbroken line\r\n3\n")
+        .assert_success_is(2);
+}
+
+#[test]
+fn recovery_fails_when_the_synchronization_token_never_comes() {
+    // The skip runs to the end of the input; the synchronization token is
+    // then missing, and that is a failure - not a hang, not a panic.
+    Recovery::parse_items()
+        .parse_test("1;oops")
+        .assert_failure();
+}

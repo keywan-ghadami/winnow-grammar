@@ -10,11 +10,11 @@ This file tracks critical technical debt and optimization opportunities identifi
 
 ## 2. Robust Error Recovery (`recover`)
 
-*   **Current State:** The `recover(rule, sync)` pattern is implemented in `codegen/mod.rs` using a combination of `alt`, `repeat`, and `peek`. It effectively says: "Try to parse `rule`. If it fails, consume characters one-by-one until `sync` is peekable, then return `None`."
+*   **Current State:** `recover(rule, sync)` is `alt((rule.map(Some), (skip, sync).map(|_| None)))` in `codegen/expr.rs`. The skip is shared with `until` (`Codegen::generate_skip_to`): a literal, `line_ending` or `eof` sync is *scanned* for with `find_slice`/`memchr`; any other sync is still tried position by position.
 *   **The Issue:**
-    *   **Performance:** Consuming tokens one by one (`repeat(.., (not(peek(sync)), any))`) is inefficient (O(N^2) in worst case if `sync` is complex). It should use `winnow`'s optimized `take_until` or similar fast-scanning combinators if possible.
+    *   ~~**Performance:** Consuming tokens one by one is O(N²) in the worst case.~~ Done for fixed terminators. Still open: a sync that is a user rule whose body is a single literal takes the slow path; resolving through the rule would extend the scan to it.
     *   **Correctness:** The current implementation assumes strict success/fail binary. Real-world recovery often needs to accumulate errors (diagnostics) rather than just returning `None`. The integration with `winnow`'s error reporting traits needs to be stronger so that the "skipped" bad input is reported as a specific error type to the user.
-*   **Goal:** Replace the naive `repeat` loop with a more efficient scanning mechanism (e.g., `take_until` or `find_slice`). Consider extending the `recover` syntax or semantics to allow capturing the error for diagnostic reporting instead of just silently discarding it.
+*   **Goal:** Extend the `recover` syntax or semantics to allow capturing the error for diagnostic reporting instead of just silently discarding it.
 
 ## 3. Map `winnow::stream::Location` to Proper Spans
 

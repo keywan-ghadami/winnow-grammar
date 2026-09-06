@@ -73,9 +73,10 @@
   terminator's parser once per character. A literal terminator, and the built-in
   `line_ending`, are found with `find_slice` — `memchr`, so SIMD where the target
   provides it and the same word-at-a-time trick in portable code where it does
-  not, with no `unsafe` in this crate. Measured over 4 MB in release: a
-  single-character terminator went from **1.29 s to 3.2 ms**, a multi-character
-  one from **1.36 s to 11.4 ms**.
+  not, with no `unsafe` in this crate; `until(eof)` is the rest of the input
+  with no search at all. Measured over 4 MiB in release, on this machine:
+  `until(";")` **2.1 s → 2.7 ms**, `until(line_ending)` **3.7 s → 2.6 ms**, a
+  `recover` skip **2.1 s → 2.0 ms**.
   - This is the skip in `recover` as well, which is the expensive half of error
     recovery and is reached exactly when a file has many errors (the
     `TODO.md` item about the byte-by-byte skip).
@@ -84,7 +85,11 @@
     stays ordinary text, and an earlier `\n` is not skipped past — which
     scanning for `"\r\n"` would do.
   - A terminator that is not a fixed string keeps the old position-by-position
-    path and now yields the same value as the scanned ones.
+    path and now yields the same value as the scanned ones. `until` and
+    `recover` share one skip generator, so they cannot drift apart.
+  - A rule of the grammar's own named `line_ending` or `eof` is that rule, not
+    the built-in — the precedence rule calls already had — and takes the slow
+    path.
   - Behaviour otherwise unchanged: the terminator is not consumed, and its
     absence consumes to the end of the input rather than failing. Tests in
     `tests/scan_test.rs`, including the UTF-8 boundary case — the scan works in

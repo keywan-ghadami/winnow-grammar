@@ -292,17 +292,6 @@ rule T = "bool"
 - **`eof`**: Succeeds only at the end of the input.
 - **`fail("message")`**: Explicitly fails with a custom error message.
 - **`recover(rule, sync)`**: If `rule` fails, skips input until `sync` token is found.
-
-> **How the skipping is done.** Where the terminator is a fixed string — a
-> literal, or the built-in `line_ending` — `until` and `recover` **scan** for it
-> a machine word at a time (via `memchr`: SIMD where the target has it, the same
-> trick in portable code where it does not). Anything else has to be *tried* at
-> every position, which is a parser call per character; that path still exists
-> and yields the same value, it is simply slower. Over 4 MB the difference
-> measured 1.29 s against 3.2 ms.
->
-> A rule of your own named `line_ending` is that rule, not the built-in, and
-> takes the slow path.
 - **`fold(rule, init, step)`**: Repeats `rule` zero or more times, threading an
   accumulator instead of collecting. `init` is called once to build the starting
   value; `step` receives `(accumulator, item)` and returns the next accumulator.
@@ -370,6 +359,18 @@ Tools you have:
 The contract, one test per point, is in `docs/adr/adr15-diagnostics.md`.
 
 ## Advanced Features
+
+> **How `until` and `recover` skip.** Where the terminator's match is a fixed
+> string — a literal, the built-in `line_ending`, or the built-in `eof` — the
+> skip is a **scan** (via `memchr`: SIMD where the target has it, the same
+> word-at-a-time trick in portable code where it does not); `until(eof)` is
+> simply the rest of the input. Any other terminator has to be *tried* at every
+> position, a parser call per character; that path still exists and yields the
+> same value, it is only slower. Over 4 MiB the difference measures seconds
+> against milliseconds.
+>
+> A rule of your own named `line_ending` or `eof` is that rule, not the
+> built-in, and takes the slow path.
 
 ### Rule Arguments
 Rules can accept arguments to pass context or configuration.

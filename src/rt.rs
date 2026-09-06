@@ -52,9 +52,9 @@ pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug>(
         let end = match input.find_slice('\n') {
             Some(range) => {
                 let n = range.start;
-                // `peek_slice` is a byte slice of the input up to the newline,
-                // so its last byte is the character before it.
-                if n > 0 && input.peek_slice(n).as_bytes()[n - 1] == b'\r' {
+                // The text before the newline; if it ends in `\r`, that
+                // carriage return belongs to the line ending, not the line.
+                if input.peek_slice(n).ends_with('\r') {
                     n - 1
                 } else {
                     n
