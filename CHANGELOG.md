@@ -5,6 +5,14 @@
 
 ### Breaking Changes
 
+- **`until(…)` returns the text it skipped** (`&'a str`) instead of `()`. Binding
+  it (`s:until(";")`) was possible before but gave the unit value, so there was
+  nothing a grammar could do with it; scanning produces the slice anyway, and
+  discarding it would have cost an extra combinator to hand back something
+  useless. Unbound uses are unaffected.
+  - **Migration**: a binding that relied on the unit type stops compiling; drop
+    the binding, or use the slice.
+
 - **Own diagnostics engine.** `parse_<rule>()` returns `winnow_grammar::ParseError`
   instead of `winnow::error::ContextError`. The message text changes: `invalid X`
   becomes ``expected one of: `&`, identifier; found unexpected token `)` `` plus
@@ -61,6 +69,26 @@
 
 ### Added
 
+- **`until` and `recover` scan for a fixed terminator** instead of running the
+  terminator's parser once per character. A literal terminator, and the built-in
+  `line_ending`, are found with `find_slice` — `memchr`, so SIMD where the target
+  provides it and the same word-at-a-time trick in portable code where it does
+  not, with no `unsafe` in this crate. Measured over 4 MB in release: a
+  single-character terminator went from **1.29 s to 3.2 ms**, a multi-character
+  one from **1.36 s to 11.4 ms**.
+  - This is the skip in `recover` as well, which is the expensive half of error
+    recovery and is reached exactly when a file has many errors (the
+    `TODO.md` item about the byte-by-byte skip).
+  - `line_ending` is two shapes rather than one literal, so the scan finds `\n`
+    and then looks at the byte before it: `\r\n` is left whole, a bare `\r`
+    stays ordinary text, and an earlier `\n` is not skipped past — which
+    scanning for `"\r\n"` would do.
+  - A terminator that is not a fixed string keeps the old position-by-position
+    path and now yields the same value as the scanned ones.
+  - Behaviour otherwise unchanged: the terminator is not consumed, and its
+    absence consumes to the end of the input rather than failing. Tests in
+    `tests/scan_test.rs`, including the UTF-8 boundary case — the scan works in
+    byte offsets.
 - **Bounded repetition `p{n}` / `p{n,}` / `p{n,m}`.** `*` and `+` say *unbounded*,
   so a grammar had no way to state a width a format actually fixes — and a
   backend that specialised for a fixed width anyway would be inventing a

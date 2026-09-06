@@ -81,6 +81,13 @@ pub(crate) fn replace_type(ty: &mut syn::Type, subst: &HashMap<String, syn::Type
 
 /// Substitutes the parser parameters (`subst`) and the type parameters
 /// (`type_subst`) in a template. One traversal for both.
+/// A terminator that can be found with a scan instead of a parser call per
+/// character. See `Generator::scan_terminator`.
+enum ScanTerminator {
+    Literal(String),
+    LineEnding,
+}
+
 /// What a builtin expects - the text after `expected …`.
 fn builtin_expectation(name: &str) -> Option<&'static str> {
     Some(match name {
@@ -409,6 +416,35 @@ impl<'a> Codegen<'a> {
                     .iter()
                     .find(|b| b.name == name)
                     .and_then(|b| syn::parse_str::<syn::Type>(b.return_type).ok())
+            }
+            _ => None,
+        }
+    }
+
+    /// Can this terminator be *scanned* for rather than *tried* at every
+    /// position? Only a fixed string can: a literal, or the built-in
+    /// `line_ending`, whose two shapes need the one extra check in
+    /// [`winnow_grammar::rt::scan_to_line_ending`]. A rule named `line_ending`
+    /// in the grammar is that rule, not the built-in, and takes the slow path.
+    fn scan_terminator(&self, pattern: &ModelPattern) -> Option<ScanTerminator> {
+        match pattern {
+            ModelPattern::Lit { lit, .. } => match lit {
+                syn::Lit::Str(s) => Some(ScanTerminator::Literal(s.value())),
+                syn::Lit::Char(c) => Some(ScanTerminator::Literal(c.value().to_string())),
+                _ => None,
+            },
+            ModelPattern::RuleCall {
+                rule_path,
+                generics,
+                args,
+                ..
+            } if generics.is_empty() && args.is_empty() => {
+                let name = rule_path.segments.last()?.ident.to_string();
+                if name == "line_ending" && !self.user_rules.contains(&name) {
+                    Some(ScanTerminator::LineEnding)
+                } else {
+                    None
+                }
             }
             _ => None,
         }
@@ -802,14 +838,30 @@ impl<'a> Codegen<'a> {
             ModelPattern::Recover { body, sync, .. } => {
                 let body_parser = self.generate_parser_expr(body, is_lexical, false);
                 let sync_parser = self.generate_parser_expr(sync, is_lexical, false);
+                // Skipping to the synchronization point is the expensive half of
+                // recovery: it is what runs over the broken region, and it is
+                // reached exactly when a file has many errors. A fixed
+                // synchronization token is scanned for; anything else is tried
+                // position by position, as before.
+                let skip = match self.scan_terminator(sync) {
+                    Some(ScanTerminator::Literal(lit)) => {
+                        quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#lit) }
+                    }
+                    Some(ScanTerminator::LineEnding) => {
+                        quote_spanned! {span=> ::winnow_grammar::rt::scan_to_line_ending() }
+                    }
+                    None => quote_spanned! {span=>
+                        ::winnow::combinator::repeat::<_, _, (), _, _>(0.., (
+                            ::winnow::combinator::not(::winnow::combinator::peek(#sync_parser)),
+                            ::winnow::token::any
+                        ))
+                    },
+                };
                 quote_spanned! {span=>
                     alt((
                         #body_parser.map(Some),
                         (
-                            ::winnow::combinator::repeat::<_, _, (), _, _>(0.., (
-                                ::winnow::combinator::not(::winnow::combinator::peek(#sync_parser)),
-                                ::winnow::token::any
-                            )),
+                            #skip,
                             #sync_parser
                         ).map(|_| None)
                     ))
@@ -823,15 +875,26 @@ impl<'a> Codegen<'a> {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 quote_spanned! {span=> ::winnow::combinator::not(#p) }
             }
-            ModelPattern::Until { pattern, .. } => {
-                let p = self.generate_parser_expr(pattern, is_lexical, false);
-                quote_spanned! {span=>
-                     ::winnow::combinator::repeat::<_, _, (), _, _>(0.., (
-                        ::winnow::combinator::not(::winnow::combinator::peek(#p)),
-                        ::winnow::token::any
-                    ))
+            ModelPattern::Until { pattern, .. } => match self.scan_terminator(pattern) {
+                Some(ScanTerminator::Literal(lit)) => {
+                    quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#lit) }
                 }
-            }
+                Some(ScanTerminator::LineEnding) => {
+                    quote_spanned! {span=> ::winnow_grammar::rt::scan_to_line_ending() }
+                }
+                // A terminator that is not a fixed string has to be tried at
+                // every position. `.take()` keeps the value the same as on the
+                // scanned paths: the text that was skipped.
+                None => {
+                    let p = self.generate_parser_expr(pattern, is_lexical, false);
+                    quote_spanned! {span=>
+                        ::winnow::Parser::take(::winnow::combinator::repeat::<_, _, (), _, _>(0.., (
+                            ::winnow::combinator::not(::winnow::combinator::peek(#p)),
+                            ::winnow::token::any
+                        )))
+                    }
+                }
+            },
             ModelPattern::Count { pattern, .. } => {
                 let p = self.generate_parser_expr(pattern, is_lexical, false);
                 if !is_lexical {

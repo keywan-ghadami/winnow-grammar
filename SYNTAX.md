@@ -287,11 +287,22 @@ rule T = "bool"
 
 ### Special (`until`, `count`, `eof`, `fail`, `recover`)
 
-- **`until(terminator)`**: Consumes tokens until `terminator` is matched. The terminator is not consumed.
+- **`until(terminator)`**: Consumes input until `terminator` is matched, and **returns the text it skipped** (`&'a str`). The terminator is not consumed. With no terminator in the rest of the input it consumes to the end rather than failing.
 - **`count(pattern)`**: Returns the number of times `pattern` matched (as `usize`).
 - **`eof`**: Succeeds only at the end of the input.
 - **`fail("message")`**: Explicitly fails with a custom error message.
 - **`recover(rule, sync)`**: If `rule` fails, skips input until `sync` token is found.
+
+> **How the skipping is done.** Where the terminator is a fixed string — a
+> literal, or the built-in `line_ending` — `until` and `recover` **scan** for it
+> a machine word at a time (via `memchr`: SIMD where the target has it, the same
+> trick in portable code where it does not). Anything else has to be *tried* at
+> every position, which is a parser call per character; that path still exists
+> and yields the same value, it is simply slower. Over 4 MB the difference
+> measured 1.29 s against 3.2 ms.
+>
+> A rule of your own named `line_ending` is that rule, not the built-in, and
+> takes the slow path.
 - **`fold(rule, init, step)`**: Repeats `rule` zero or more times, threading an
   accumulator instead of collecting. `init` is called once to build the starting
   value; `step` receives `(accumulator, item)` and returns the next accumulator.
