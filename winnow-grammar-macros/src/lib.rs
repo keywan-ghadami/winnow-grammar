@@ -95,6 +95,12 @@ impl Backend for WinnowBackend {
                 return_type: "()",
             },
             BuiltIn {
+                // The boundary of the enclosing `#[frame]`; see
+                // `winnow_grammar_model::frame`.
+                name: "frame_end",
+                return_type: "&'a str",
+            },
+            BuiltIn {
                 name: "eof",
                 return_type: "()",
             },

@@ -125,7 +125,11 @@ impl Summary {
 
 grammar! {
     grammar Measurements {
-        NAME -> &'a str = s:until(";") -> { s }
+        // Up to `;`, or to the end of the frame: under a frame the
+        // terminator has to cover the boundary, and the grammar says so.
+        // `frame_end` is the boundary of the frame this rule is reached
+        // from - written once, in the attribute, and referenced here.
+        NAME -> &'a str = s:until(";" | frame_end) -> { s }
 
         TENTHS -> i32 =
             neg:"-"? whole:digit{1,2} "." frac:digit
@@ -137,10 +141,10 @@ grammar! {
             }
 
         // A measurement can be found from any offset by scanning to the next
-        // "\n": the boundary is inferred from the trailing literal.
-        #[frame]
+        // "\n". The boundary is written once; the rule ends in `frame_end`.
+        #[frame(boundary = "\n")]
         pub MEASUREMENT -> (&'a str, i32) =
-            name:NAME ";" temp:TENTHS "\n" -> { (name, temp) }
+            name:NAME ";" temp:TENTHS frame_end -> { (name, temp) }
 
         pub FILE -> Summary =
             s:par_fold(
@@ -224,37 +228,41 @@ fn an_empty_piece_parses_to_the_initial_accumulator() {
 }
 
 // -----------------------------------------------------------------------------
-// until(…) inside a frame is bounded by the boundary
+// The terminator says where the skip stops - the same everywhere
 // -----------------------------------------------------------------------------
 
 grammar! {
     grammar Unframed {
-        // The same NAME rule with no frame around it: `until(";")` consumes
-        // anything, a newline included.
-        NAME -> &'a str = s:until(";") -> { s }
+        // The same NAME rule with no frame anywhere near it. It means the
+        // same thing: a frame elsewhere changes no rule's parser.
+        NAME -> &'a str = s:until(";" | "\n") -> { s }
         pub REC -> String = name:NAME ";" -> { name.to_string() }
     }
 }
 
 #[test]
-fn outside_a_frame_until_runs_through_a_newline() {
+fn the_terminator_stops_at_either_alternative_outside_a_frame_too() {
+    Unframed::parse_REC()
+        .parse_test("Hamburg;")
+        .assert_success_is("Hamburg".to_string());
+    // The newline is an alternative of the terminator, so the name ends there
+    // and the `;` that follows is missing: a failure at the newline.
     Unframed::parse_REC()
         .parse_test("Ham\nburg;")
-        .assert_success_is("Ham\nburg".to_string());
+        .assert_failure_contains("column 4");
 }
 
 #[test]
-fn inside_a_frame_until_stops_at_the_boundary() {
-    // Inside `MEASUREMENT`'s frame the skip in NAME stops at "\n" as well as
-    // at ";": the newline is where the parse fails, instead of silently
-    // joining two frames into one name.
+fn inside_a_frame_the_name_ends_at_the_boundary() {
+    // The newline is where the parse fails, instead of silently joining two
+    // frames into one name.
     Measurements::parse_MEASUREMENT()
         .parse_test("Ham\nburg;1.0\n")
         .assert_failure_contains("column 4");
 }
 
 #[test]
-fn a_bounded_until_still_yields_the_text_before_its_terminator() {
+fn until_still_yields_the_text_before_its_terminator() {
     Measurements::parse_MEASUREMENT()
         .parse_test("Hamburg;12.3\n")
         .assert_success_with(|(name, temp), _| {
@@ -271,7 +279,7 @@ fn a_bounded_until_still_yields_the_text_before_its_terminator() {
 
 grammar! {
     grammar Lengths {
-        NAME -> &'a str = s:until(";") -> { s }
+        NAME -> &'a str = s:until(";" | frame_end) -> { s }
         #[frame]
         pub REC -> usize = n:NAME ";" "\n" -> { n.len() }
         pub FILE -> usize =
@@ -355,4 +363,86 @@ fn a_frame_attribute_may_follow_a_rule_without_an_action() {
     AttrAfterBareRule::parse_REC()
         .parse_test("42\n")
         .assert_success_is(42);
+}
+
+// -----------------------------------------------------------------------------
+// The driver: parse_<RULE>_pieces
+// -----------------------------------------------------------------------------
+
+use winnow_grammar::rt::Parallelism;
+use winnow_grammar::ParseContext;
+
+#[test]
+fn the_driver_agrees_with_the_sequential_parse_however_it_is_run() {
+    let input = sample_input(5_000);
+    let expected = parse_sequential(&input);
+    for how in [
+        Parallelism::Off,
+        Parallelism::Pieces(1),
+        Parallelism::Pieces(7),
+        Parallelism::Pieces(1000),
+        Parallelism::Auto,
+    ] {
+        let got = Measurements::parse_FILE_pieces(&input, ParseContext::<()>::default, how)
+            .unwrap_or_else(|e| panic!("{how:?}: {}", e.render(&input)));
+        assert_eq!(got, expected, "{how:?}");
+    }
+}
+
+#[test]
+fn the_driver_reports_a_piece_error_at_its_offset_in_the_whole_input() {
+    // Line 3 is broken. Whichever piece it lands in, the error must point at
+    // line 3 of the input, not at line 1 of that piece.
+    let input = "A;1.0\nB;2.0\nC;x.0\nD;4.0\nE;5.0\nF;6.0\n";
+    for how in [
+        Parallelism::Off,
+        Parallelism::Pieces(3),
+        Parallelism::Pieces(6),
+    ] {
+        let err = Measurements::parse_FILE_pieces(input, ParseContext::<()>::default, how)
+            .expect_err("line 3 is broken");
+        let rendered = err.render(input);
+        assert!(
+            rendered.contains("line 3"),
+            "{how:?}: expected an error on line 3, got:\n{rendered}"
+        );
+    }
+}
+
+#[test]
+fn parallelism_off_is_one_piece_and_auto_is_the_core_count() {
+    assert_eq!(Parallelism::Off.pieces(), None);
+    assert_eq!(Parallelism::Pieces(0).pieces(), Some(1));
+    assert_eq!(Parallelism::Pieces(4).pieces(), Some(4));
+    assert!(Parallelism::Auto.pieces().is_some_and(|n| n >= 1));
+    assert_eq!(Parallelism::default(), Parallelism::Auto);
+}
+
+// -----------------------------------------------------------------------------
+// unchecked: the author asserts the invariant
+// -----------------------------------------------------------------------------
+
+grammar! {
+    grammar Asserted {
+        // `until(";")` does not cover the boundary and the check would say
+        // so; `unchecked` is the author saying "no name contains a newline
+        // in this data". The word is there to grep for.
+        NAME -> &'a str = s:until(";") -> { s }
+        #[frame(boundary = "\n", unchecked)]
+        pub REC -> usize = n:NAME ";" "\n" -> { n.len() }
+        pub FILE -> usize =
+            s:par_fold(REC, || 0usize, |a: usize, v: usize| a + v, |a: usize, b: usize| a + b)
+            -> { s }
+    }
+}
+
+#[test]
+fn an_unchecked_frame_is_taken_at_its_word() {
+    let input = "Hamburg;\nBerlin;\n";
+    let seq = Asserted::parse_FILE().parse_test(input).assert_success();
+    let pieces =
+        Asserted::parse_FILE_pieces(input, ParseContext::<()>::default, Parallelism::Pieces(2))
+            .unwrap();
+    assert_eq!(seq, 13);
+    assert_eq!(pieces, seq);
 }

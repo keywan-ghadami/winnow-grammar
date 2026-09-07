@@ -79,17 +79,25 @@ pub(crate) fn replace_type(ty: &mut syn::Type, subst: &HashMap<String, syn::Type
     }
 }
 
-/// A terminator that can be *found* with a scan rather than *tried* at every
-/// position. See [`Codegen::scan_terminator`] for what qualifies and
-/// [`Codegen::generate_skip_to`] for the parser each one becomes.
-enum ScanTerminator {
-    /// A string or char literal: `memchr` for the bytes.
-    Literal(String),
-    /// The built-in `line_ending`: `memchr` for `\n`, then one look back for
-    /// `\r`.
-    LineEnding,
-    /// The built-in `eof`: the rest of the input, no search at all.
-    Eof,
+/// A terminator whose match is a fixed string, or a few of them - what a
+/// scan can *find* rather than *try* at every position. See
+/// [`Codegen::scan_terminator`] for what qualifies and
+/// [`Codegen::generate_skip_to`] for the parser it becomes.
+struct ScanSet {
+    /// String and char literals, deduplicated. `"\n"` is folded into
+    /// `line_ending` when both are present.
+    lits: Vec<String>,
+    /// The built-in `line_ending`: `\n`, with one look back for `\r`.
+    line_ending: bool,
+}
+
+impl ScanSet {
+    /// How many distinct byte strings the scan has to look for. The one-pass
+    /// scan handles up to three (`memchr3` over the first bytes, then a
+    /// check); more than that takes the position-by-position path.
+    fn needles(&self) -> usize {
+        self.lits.len() + usize::from(self.line_ending)
+    }
 }
 
 /// What a builtin expects - the text after `expected …`.
@@ -108,6 +116,7 @@ fn builtin_expectation(name: &str) -> Option<&'static str> {
         "space0" | "space1" | "multispace0" | "multispace1" => "whitespace",
         "line_ending" => "line ending",
         "eof" => "end of input",
+        "frame_end" => "the frame boundary",
         "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64" | "i128"
         | "isize" => "integer literal",
         "f32" | "f64" => "float literal",
@@ -428,36 +437,78 @@ impl<'a> Codegen<'a> {
     }
 
     /// Can this terminator be *scanned* for rather than *tried* at every
-    /// position? Only one whose match is a fixed string can: a literal, the
-    /// built-in `line_ending` (two shapes, settled by one look back - see
-    /// `winnow_grammar::rt::scan_to_line_ending`), and the built-in `eof`,
-    /// which needs no search at all. A rule of the grammar's own under one of
-    /// those names is that rule, not the built-in - the same precedence
-    /// `generate_rule_call_parser` gives it - and takes the slow path.
-    fn scan_terminator(&self, pattern: &ModelPattern) -> Option<ScanTerminator> {
+    /// position? Only one whose alternatives are all fixed strings can: a
+    /// literal, the built-in `line_ending` (two shapes, settled by one look
+    /// back), the built-in `eof` (nothing to look for: the scan runs to the
+    /// end), or a group of such alternatives - `until(";" | "\n")`. A rule of
+    /// the grammar's own under one of those names is that rule, not the
+    /// built-in - the same precedence `generate_rule_call_parser` gives it -
+    /// and takes the slow path.
+    fn scan_terminator(&self, pattern: &ModelPattern) -> Option<ScanSet> {
+        let mut set = ScanSet {
+            lits: Vec::new(),
+            line_ending: false,
+        };
+        if !self.collect_scan_set(pattern, &mut set) {
+            return None;
+        }
+        if set.line_ending {
+            set.lits.retain(|l| l != "\n");
+        }
+        Some(set)
+    }
+
+    fn collect_scan_set(&self, pattern: &ModelPattern, set: &mut ScanSet) -> bool {
         match pattern {
-            ModelPattern::Lit { lit, .. } => match lit {
-                syn::Lit::Str(s) => Some(ScanTerminator::Literal(s.value())),
-                syn::Lit::Char(c) => Some(ScanTerminator::Literal(c.value().to_string())),
-                _ => None,
-            },
+            ModelPattern::Lit { lit, .. } => {
+                let text = match lit {
+                    syn::Lit::Str(s) => s.value(),
+                    syn::Lit::Char(c) => c.value().to_string(),
+                    _ => return false,
+                };
+                if !set.lits.contains(&text) {
+                    set.lits.push(text);
+                }
+                true
+            }
             ModelPattern::RuleCall {
                 rule_path,
                 generics,
                 args,
                 ..
             } if generics.is_empty() && args.is_empty() => {
-                let name = rule_path.segments.last()?.ident.to_string();
+                let Some(name) = rule_path.segments.last().map(|s| s.ident.to_string()) else {
+                    return false;
+                };
                 if self.user_rules.contains(&name) {
-                    return None;
+                    return false;
                 }
                 match name.as_str() {
-                    "line_ending" => Some(ScanTerminator::LineEnding),
-                    "eof" => Some(ScanTerminator::Eof),
-                    _ => None,
+                    "line_ending" => {
+                        set.line_ending = true;
+                        true
+                    }
+                    "eof" => true,
+                    winnow_grammar_model::frame::FRAME_END => {
+                        // Resolved for this rule by the frame check.
+                        let Some(b) = self.current_boundary.borrow().clone() else {
+                            return false;
+                        };
+                        if !set.lits.contains(&b) {
+                            set.lits.push(b);
+                        }
+                        true
+                    }
+                    _ => false,
                 }
             }
-            _ => None,
+            ModelPattern::Group { alts, .. } => {
+                alts.iter().all(|(seq, _, _)| match seq.as_slice() {
+                    [single] => self.collect_scan_set(single, set),
+                    _ => false,
+                })
+            }
+            _ => false,
         }
     }
 
@@ -467,53 +518,34 @@ impl<'a> Codegen<'a> {
     ///
     /// This is the skip in `until(…)` and in `recover(…)`, so both get the same
     /// value and the same fast path. A terminator the scan can find is found
-    /// with `memchr`; anything else has to be tried at every position, a
-    /// parser call per character.
+    /// in one pass with `memchr`; anything else has to be tried at every
+    /// position, a parser call per character. What a terminator means does
+    /// not depend on where the rule is used: a `#[frame]` elsewhere in the
+    /// grammar changes nothing here (see `winnow_grammar_model::frame`).
     fn generate_skip_to(&self, terminator: &ModelPattern, is_lexical: bool) -> TokenStream {
         let span = Span::mixed_site();
-        let boundary = self.current_boundary.borrow().clone();
-        match (self.scan_terminator(terminator), boundary) {
-            // Unbounded: not inside a frame.
-            (Some(ScanTerminator::Literal(lit)), None) => {
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#lit) }
-            }
-            (Some(ScanTerminator::LineEnding), None) => {
+        let set = self
+            .scan_terminator(terminator)
+            .filter(|s| s.needles() <= 3);
+        match set {
+            Some(set) if set.needles() == 0 => quote_spanned! {span=> ::winnow::token::rest },
+            Some(set) if set.needles() == 1 && set.line_ending => {
                 quote_spanned! {span=> ::winnow_grammar::rt::scan_to_line_ending() }
             }
-            (Some(ScanTerminator::Eof), None) => quote_spanned! {span=> ::winnow::token::rest },
-            (None, None) => {
+            Some(set) if set.needles() == 1 => {
+                let lit = &set.lits[0];
+                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#lit) }
+            }
+            Some(set) => {
+                let lits = &set.lits;
+                let line_ending = set.line_ending;
+                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_any(&[#(#lits),*], #line_ending) }
+            }
+            None => {
                 let p = self.generate_parser_expr(terminator, is_lexical, false);
                 quote_spanned! {span=>
                     ::winnow::Parser::take(::winnow::combinator::repeat::<_, _, (), _, _>(0.., (
                         ::winnow::combinator::not(::winnow::combinator::peek(#p)),
-                        ::winnow::token::any
-                    )))
-                }
-            }
-            // Inside a frame: the skip also stops at the frame boundary, so
-            // that it can never run from one frame into the next. See
-            // `winnow_grammar_model::frame`.
-            (Some(ScanTerminator::Literal(lit)), Some(b)) if lit == b => {
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#lit) }
-            }
-            (Some(ScanTerminator::Literal(lit)), Some(b)) => {
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_either(#lit, #b) }
-            }
-            (Some(ScanTerminator::LineEnding), Some(b)) if b == "\n" || b == "\r\n" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_line_ending() }
-            }
-            (Some(ScanTerminator::LineEnding), Some(b)) => {
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_line_ending_or(#b) }
-            }
-            (Some(ScanTerminator::Eof), Some(b)) => {
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#b) }
-            }
-            (None, Some(b)) => {
-                let p = self.generate_parser_expr(terminator, is_lexical, false);
-                quote_spanned! {span=>
-                    ::winnow::Parser::take(::winnow::combinator::repeat::<_, _, (), _, _>(0.., (
-                        ::winnow::combinator::not(::winnow::combinator::peek(#p)),
-                        ::winnow::combinator::not(::winnow::combinator::peek(::winnow::token::literal(#b))),
                         ::winnow::token::any
                     )))
                 }
@@ -727,6 +759,16 @@ impl<'a> Codegen<'a> {
             }
             "empty" => quote_spanned! {span=> ::winnow::combinator::empty },
             "eof" => quote_spanned! {span=> ::winnow::combinator::eof },
+            // The boundary of the frame this rule is reached from, resolved
+            // by the frame check; the check rejects a `frame_end` no frame
+            // reaches, so the fallback only keeps the generator total.
+            winnow_grammar_model::frame::FRAME_END => {
+                let b = self.current_boundary.borrow().clone().unwrap_or_default();
+                quote_spanned! {span=>
+                    literal(#b)
+                        .context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::StringLiteral(#b)))
+                }
+            }
 
             "u8" => {
                 quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u8, #inner_err_type> }

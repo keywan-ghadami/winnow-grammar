@@ -69,28 +69,40 @@
 
 ### Added
 
-- **`#[frame]` and `par_fold(rule, init, step, merge)`: parsing in pieces.** A
-  rule marked `#[frame]` claims it can be found from any offset by scanning to
-  the next boundary (the literal it ends in, or `#[frame = "\n"]`). The claim
-  is **checked**: every rule reachable from the frame is walked, and each thing
-  that consumes input is *safe* (a literal without the boundary, a built-in
-  whose alphabet cannot include it, lookahead), *bounded* (`until(…)` and the
-  `recover` skip: inside a frame their scan stops at the terminator or the
-  boundary, whichever is first — `memmem2`, one scan), or *rejected* with the
-  rule and pattern named (a literal containing the boundary, `any`,
-  `multispace0`, the implicit whitespace of a syntactic rule). A frame must end
-  in its boundary. `par_fold` is `fold` plus a merge over a frame rule and must
-  be the whole body of its rule. Generated next to the parsers:
-  `frames_<RULE>(input, n) -> Vec<Range<usize>>` (blind equal split, each piece
-  repaired to just past the next boundary, one owner per frame, oversized
-  frames leave empty pieces, no trailing boundary keeps the last frame, every
-  range a UTF-8 boundary) and `merge_<RULE>(a, b)`. The per-piece parser is the
-  rule's own `parse_<RULE>()`, whose entry point - alone among the rules -
-  skips no whitespace, so that a piece parses exactly as the same bytes do in
-  the sequential parse; threads are the caller's. `tests/frames_test.rs`
-  asserts split + parse + merge against the sequential parse, the split's edge
-  cases, and the bounding of `until`; `tests/ui/frames.rs` the ten rejections.
-  The model gains `frame::check`; `ModelPattern::Fold` gains `merge`.
+- **`#[frame]` and `par_fold(rule, init, step, merge)`: parsing in pieces.**
+  ADR 16. A rule marked `#[frame]` claims it can be found from any offset by
+  scanning to the next boundary (the literal it ends in, or
+  `#[frame(boundary = "\n")]`). The claim is **checked, never repaired**: every
+  rule reachable from the frame is walked, and each thing that consumes input
+  is *safe* (a literal without the boundary, a built-in whose alphabet cannot
+  include it, lookahead, an `until(…)` whose terminator covers the boundary)
+  or *rejected* with the rule and pattern named (a literal containing the
+  boundary, `any`, `multispace0`, the implicit whitespace of a syntactic rule,
+  an `until(…)` that does not cover the boundary — the message says
+  `until(… | frame_end)` — and `recover(…)`). Nothing changes what a pattern
+  means: the parser of a rule is the same whether or not a frame reaches it.
+  **`frame_end`** is a new built-in naming the boundary of the enclosing
+  frame — written once in the attribute, referenced in the rules, resolved
+  statically (an error outside every frame, or under two boundaries).
+  `#[frame(…, unchecked)]` skips the walk, greppably. A frame must end in its
+  boundary. `par_fold` is `fold` plus a merge over a frame rule, must be the
+  whole body of its rule, and its entry point — alone among the rules — skips
+  no whitespace, so that a piece parses exactly as the same bytes do in the
+  sequential parse. Generated next to the parsers: `frames_<RULE>(input, n)`,
+  `merge_<RULE>(a, b)`, and `parse_<RULE>_pieces(input, new_context, how)`
+  with `how: rt::Parallelism` (`Off`, `Pieces(n)`, `Auto`), which cuts,
+  parses, merges and reports a piece's error at its offset in the whole
+  input; with the new optional **`rayon` feature** the pieces run on rayon's
+  global pool, without it in sequence with the same result. The split is byte
+  based (`rt::frames_bytes`) and `rt::frames` its `&str` view. The attribute is
+  a keyed list so the formats the check cannot see through yet (quoted fields,
+  start patterns, escapes, a scanner of one's own — ADR 16 §5) get keys rather
+  than a second syntax. `tests/frames_test.rs`, `tests/ui/frames.rs`.
+- **`until(…)` takes an alternation, and a few fixed alternatives are scanned
+  in one pass**: `until(";" | frame_end)`, `until("," | line_ending)` — up to
+  three needles via `memchr2`/`memchr3` (`rt::scan_to_any`). More than three,
+  or an alternative that is not a fixed string, take the position-by-position
+  path.
 - **`until` and `recover` scan for a fixed terminator** instead of running the
   terminator's parser once per character. A literal terminator, and the built-in
   `line_ending`, are found with `find_slice` — `memchr`, so SIMD where the target

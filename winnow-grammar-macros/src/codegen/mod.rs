@@ -52,13 +52,13 @@ pub struct Codegen<'a> {
     grammar: &'a GrammarDefinition,
     pub user_rules: HashSet<String>,
     pub input_ident: syn::Ident,
-    /// What `frame::check` established: frame rules, their boundaries, and
-    /// which rules' skips must stop at one.
+    /// What `frame::check` established: frame rules and their boundaries,
+    /// which rules are a `par_fold` over which frame, and what `frame_end`
+    /// stands for in each rule a frame reaches.
     pub frames: Frames,
-    /// The boundary bounding skips in the rule currently being generated -
-    /// set by `generate_rule`, read by `generate_skip_to`. A template inlined
-    /// at a call site is generated under the caller's boundary, which is the
-    /// right one: it is that caller's format the template is part of there.
+    /// What `frame_end` stands for in the rule being generated - set by
+    /// `generate_rule`, read where a `frame_end` is met. It resolves a name
+    /// the grammar wrote; it never changes a pattern the grammar did not.
     pub current_boundary: RefCell<Option<String>>,
 }
 

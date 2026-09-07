@@ -1,34 +1,40 @@
-//! Frames: rules a parser can resynchronize on, and what that costs the rest
-//! of the grammar.
+//! Frames: rules a parser can resynchronize on, and what that asks of the
+//! rest of the grammar. The decision record is `docs/adr/adr16-frames.md`.
 //!
 //! A rule marked `#[frame]` claims that an occurrence of it can be found from
 //! an arbitrary offset in the input by scanning to the next **boundary** — the
-//! literal it ends in, or the one given as `#[frame = "\n"]` — with no parse
-//! state from earlier in the input. That is what lets a large input be cut
-//! blindly into pieces, each piece repair its own start to the next boundary,
-//! and every frame end up in exactly one piece.
+//! literal it ends in, or the one given as `#[frame(boundary = "\n")]` — with
+//! no parse state from earlier in the input. That is what lets a large input
+//! be cut blindly into pieces, each piece repair its own start to the next
+//! boundary, and every frame end up in exactly one piece.
 //!
 //! The claim is only true if the boundary cannot occur *inside* a frame. That
-//! is not taken on trust. Every rule reachable from the frame rule is walked,
-//! and each thing that consumes input is one of three cases:
+//! is not taken on trust: every rule reachable from the frame rule is walked,
+//! and each thing that consumes input is one of two cases.
 //!
-//! * **Safe** — a literal that does not contain the boundary, a built-in whose
-//!   alphabet cannot include it (`digit1`, `ident`, …), something that does not
-//!   consume at all (`peek`, `not`, `eof`).
-//! * **Bounded** — `until(t)` and the skip inside `recover(…)`. These consume
-//!   *anything* up to their terminator, so on their own they would run through
-//!   a boundary. Rather than reject them, the generated scan is bounded: it
-//!   stops at the terminator *or the boundary*, whichever comes first. A name
-//!   with a stray newline in it then fails to parse where the newline is,
-//!   instead of silently joining two frames. This is what [`Frames::bounded`]
-//!   records for the code generator.
-//! * **Rejected** — a literal that contains the boundary (`"\n"` inside a
-//!   quoted-string rule: the CSV-with-quoted-newlines case), a built-in whose
-//!   alphabet includes it (`any`, `multispace0`), or the implicit whitespace of
-//!   a syntactic (lowercase) rule when the grammar's whitespace can consume it.
-//!   Each is a compile error naming the rule and the pattern, because cutting
-//!   such an input at the next boundary would land inside a record on some
-//!   inputs and not others.
+//! * **Safe** — a literal that does not contain the boundary; a built-in whose
+//!   alphabet cannot include it (`digit1`, `ident`, …); something that does not
+//!   consume at all (`peek`, `not`, `eof`); an `until(…)` whose terminator
+//!   **covers** the boundary, so that its scan stops at or before every
+//!   occurrence of it — `until(";" | frame_end)`, where `frame_end` *is* the
+//!   boundary of the frame the rule is reached from, written once in the
+//!   attribute and referenced rather than copied; or the literal itself.
+//! * **Rejected** — a compile error naming the rule and the pattern: a literal
+//!   that contains the boundary (`"\n"` inside a quoted-string rule: the
+//!   CSV-with-quoted-newlines case); a built-in whose alphabet includes it
+//!   (`any`, `multispace0`); the implicit whitespace of a syntactic (lowercase)
+//!   rule; an `until(…)` whose terminator does not cover the boundary — the
+//!   message says what to add; and `recover(…)`, whose skip and
+//!   synchronization token cannot both be kept off the boundary.
+//!
+//! Nothing here changes what a pattern means. `until(";")` consumes up to the
+//! next `;` everywhere; inside a frame that is a mistake, and the checker says
+//! so and says what to write instead. The generated parser for a rule is the
+//! same whether or not a frame reaches it.
+//!
+//! `#[frame(…, unchecked)]` skips the walk: the grammar's author asserts the
+//! invariant, as with `unsafe`. It exists for the formats the check cannot
+//! see through yet (see the ADR's open flank), and it is greppable.
 //!
 //! `par_fold(rule, init, step, merge)` is the second half: it requires `rule`
 //! to be a frame and supplies the merge, so the pieces can be folded
@@ -41,12 +47,26 @@ use syn::spanned::Spanned;
 /// The `#[frame]` attribute as written on a rule.
 #[derive(Debug, Clone)]
 pub struct FrameAttr {
-    /// `#[frame = "\n"]` / `#[frame("\n")]`; `None` for a bare `#[frame]`.
+    /// `boundary = "\n"`; `None` for a bare `#[frame]`, inferred from the
+    /// trailing literal.
     pub boundary: Option<String>,
+    /// `unchecked`: the walk over the frame's rules is skipped.
+    pub unchecked: bool,
     pub span: proc_macro2::Span,
 }
 
-/// Reads `#[frame]`, `#[frame = "…"]` and `#[frame("…")]` off a rule.
+const ATTR_HELP: &str = "`#[frame]` (boundary inferred from the trailing literal) or \
+                         `#[frame(boundary = \"\\n\")]`, optionally with `unchecked`";
+
+/// Reads `#[frame]` and `#[frame(boundary = "…", unchecked)]` off a rule.
+///
+/// The keyed form is the one that stays extensible: a frame definition will
+/// need more than a boundary for the formats named in the ADR's open flank
+/// (a quote character to respect, a pattern a frame must start with, a
+/// scanner of the author's own), and each of those is another key. The
+/// positional forms `#[frame = "\n"]` / `#[frame("\n")]` are rejected with
+/// a pointer to the keyed one, so that no second positional meaning has to
+/// be invented later.
 pub fn frame_attr(rule: &Rule) -> syn::Result<Option<FrameAttr>> {
     let mut found: Option<FrameAttr> = None;
     for attr in &rule.attrs {
@@ -54,32 +74,60 @@ pub fn frame_attr(rule: &Rule) -> syn::Result<Option<FrameAttr>> {
             continue;
         }
         let span = attr.span();
-        let boundary = match &attr.meta {
-            syn::Meta::Path(_) => None,
-            syn::Meta::NameValue(nv) => Some(boundary_literal(&nv.value)?),
-            syn::Meta::List(list) => Some(boundary_literal(&list.parse_args::<syn::Expr>()?)?),
-        };
+        let mut boundary = None;
+        let mut unchecked = false;
+        match &attr.meta {
+            syn::Meta::Path(_) => {}
+            syn::Meta::NameValue(nv) => {
+                return Err(syn::Error::new(
+                    nv.value.span(),
+                    format!("`#[frame = …]` is not a form; write {ATTR_HELP}"),
+                ));
+            }
+            syn::Meta::List(_) => {
+                attr.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("boundary") {
+                        if boundary.is_some() {
+                            return Err(meta.error("`boundary` given twice"));
+                        }
+                        let lit: syn::Lit = meta.value()?.parse()?;
+                        boundary = Some(boundary_literal(&lit)?);
+                        Ok(())
+                    } else if meta.path.is_ident("unchecked") {
+                        unchecked = true;
+                        Ok(())
+                    } else {
+                        Err(meta.error(
+                            "unknown key in `#[frame(…)]`; the keys are `boundary = \"…\"` and \
+                             `unchecked`",
+                        ))
+                    }
+                })
+                .map_err(|e| {
+                    // A positional literal (`#[frame("\n")]`) lands here too.
+                    syn::Error::new(e.span(), format!("{e}; write {ATTR_HELP}"))
+                })?;
+            }
+        }
         if found.is_some() {
             return Err(syn::Error::new(span, "`#[frame]` given twice"));
         }
-        found = Some(FrameAttr { boundary, span });
+        found = Some(FrameAttr {
+            boundary,
+            unchecked,
+            span,
+        });
     }
     Ok(found)
 }
 
-fn boundary_literal(expr: &syn::Expr) -> syn::Result<String> {
-    match expr {
-        syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(s),
-            ..
-        }) if !s.value().is_empty() => Ok(s.value()),
-        syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Char(c),
-            ..
-        }) => Ok(c.value().to_string()),
+fn boundary_literal(lit: &syn::Lit) -> syn::Result<String> {
+    match lit {
+        syn::Lit::Str(s) if !s.value().is_empty() => Ok(s.value()),
+        syn::Lit::Char(c) => Ok(c.value().to_string()),
         _ => Err(syn::Error::new(
-            expr.span(),
-            "the frame boundary is a non-empty string or char literal: `#[frame = \"\\n\"]`",
+            lit.span(),
+            "the frame boundary is a non-empty string or char literal: `boundary = \"\\n\"`",
         )),
     }
 }
@@ -89,20 +137,26 @@ fn boundary_literal(expr: &syn::Expr) -> syn::Result<String> {
 pub struct Frames {
     /// Frame rule → its boundary.
     pub frames: BTreeMap<String, String>,
-    /// Every rule reachable from a frame rule, the frame rule included, → the
-    /// boundary its `until`/`recover` skips must stop at. A rule reached from
-    /// a frame is part of that frame's format.
+    /// Every rule reachable from a frame rule, the frame rule included → the
+    /// boundary that `frame_end` stands for in it. Only a rule that writes
+    /// `frame_end` needs this, and such a rule is part of one frame's format:
+    /// reached from two frames with different boundaries it is an error.
     pub bounded: BTreeMap<String, String>,
     /// Rules whose body is a `par_fold` → the frame rule it folds over.
     pub par_folds: BTreeMap<String, String>,
 }
 
 impl Frames {
-    /// The boundary that bounds skips inside `rule`, if any.
+    /// What `frame_end` stands for in `rule`, if a frame reaches it.
     pub fn boundary_for(&self, rule: &str) -> Option<&str> {
         self.bounded.get(rule).map(String::as_str)
     }
 }
+
+/// The built-in that names the boundary of the enclosing frame. As a parser it
+/// matches that boundary; as an alternative of an `until` terminator it makes
+/// the coverage hold by construction.
+pub const FRAME_END: &str = "frame_end";
 
 /// Runs the frame check over the whole grammar. `builtins` are the names the
 /// backend provides; anything not a user rule and not a built-in is left to
@@ -113,6 +167,7 @@ pub fn check(grammar: &GrammarDefinition, builtins: &HashSet<String>) -> syn::Re
     let has_user_ws = user_rules.contains("WS");
 
     // 1. Frame rules and their boundaries.
+    let mut unchecked: HashSet<String> = HashSet::new();
     for rule in &grammar.rules {
         let Some(attr) = frame_attr(rule)? else {
             continue;
@@ -121,18 +176,19 @@ pub fn check(grammar: &GrammarDefinition, builtins: &HashSet<String>) -> syn::Re
             Some(b) => b,
             None => infer_boundary(rule, attr.span)?,
         };
-        check_terminators(rule, &boundary, &user_rules)?;
+        if attr.unchecked {
+            unchecked.insert(rule.name.to_string());
+        } else {
+            check_terminators(rule, &boundary, &user_rules)?;
+        }
         out.frames.insert(rule.name.to_string(), boundary);
     }
 
-    // 2. Reachability and the per-rule check.
+    // 2. Reachability, the meaning of `frame_end`, and the per-rule check. A
+    //    rule reached from two frames is checked against each boundary;
+    //    nothing about the rule changes, so only a rule that *writes*
+    //    `frame_end` has a boundary to disagree about.
     for (frame_name, boundary) in &out.frames {
-        let frame_rule = grammar
-            .rules
-            .iter()
-            .find(|r| r.name == frame_name)
-            .expect("frame rule exists");
-
         let mut reachable: Vec<String> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         let mut stack = vec![frame_name.clone()];
@@ -157,25 +213,28 @@ pub fn check(grammar: &GrammarDefinition, builtins: &HashSet<String>) -> syn::Re
         }
 
         for name in &reachable {
-            if let Some(other) = out.bounded.get(name) {
-                if other != boundary {
-                    return Err(syn::Error::new(
-                        frame_rule.name.span(),
-                        format!(
-                            "rule `{name}` is reached from two frames with different boundaries \
-                             ({:?} and {:?}); a rule is part of one frame's format",
-                            other, boundary
-                        ),
-                    ));
-                }
-            }
-            out.bounded.insert(name.clone(), boundary.clone());
-
             let rule = grammar
                 .rules
                 .iter()
                 .find(|r| r.name == name)
                 .expect("reachable rules are user rules");
+            if let Some(other) = out.bounded.get(name) {
+                if other != boundary && uses_frame_end(rule, &user_rules) {
+                    return Err(syn::Error::new(
+                        rule.name.span(),
+                        format!(
+                            "rule `{name}` writes `frame_end` but is reached from two frames with \
+                             different boundaries ({other:?} via one, {boundary:?} via `{frame_name}`); \
+                             a rule that names its frame's boundary is part of one frame's format"
+                        ),
+                    ));
+                }
+            } else {
+                out.bounded.insert(name.clone(), boundary.clone());
+            }
+            if unchecked.contains(frame_name) {
+                continue;
+            }
             let cx = Cx {
                 frame: frame_name,
                 boundary,
@@ -187,12 +246,68 @@ pub fn check(grammar: &GrammarDefinition, builtins: &HashSet<String>) -> syn::Re
         }
     }
 
-    // 3. `par_fold` uses.
+    // 3. `frame_end` outside every frame has nothing to stand for.
+    for rule in &grammar.rules {
+        let name = rule.name.to_string();
+        if !out.bounded.contains_key(&name) && uses_frame_end(rule, &user_rules) {
+            return Err(syn::Error::new(
+                rule.name.span(),
+                format!(
+                    "rule `{name}` writes `frame_end`, but no `#[frame]` rule reaches it, so there \
+                     is no boundary for it to stand for"
+                ),
+            ));
+        }
+    }
+
+    // 4. `par_fold` uses.
     for rule in &grammar.rules {
         check_par_fold(rule, &out.frames, &mut out.par_folds)?;
     }
 
     Ok(out)
+}
+
+/// Does the rule write `frame_end` anywhere (the built-in, not a rule of the
+/// grammar's own under that name)?
+fn uses_frame_end(rule: &Rule, user_rules: &HashSet<String>) -> bool {
+    if user_rules.contains(FRAME_END) {
+        return false;
+    }
+    fn walk(p: &ModelPattern) -> bool {
+        match p {
+            ModelPattern::RuleCall {
+                rule_path, args, ..
+            } => {
+                rule_path
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == FRAME_END)
+                    || args.iter().any(|a| match a {
+                        Argument::Positional(p) | Argument::Named(_, p) => walk(p),
+                    })
+            }
+            ModelPattern::Group { alts, .. } => alts.iter().any(|(seq, _, _)| seq.iter().any(walk)),
+            ModelPattern::Bracketed(inner, _)
+            | ModelPattern::Braced(inner, _)
+            | ModelPattern::Parenthesized(inner, _) => inner.iter().any(walk),
+            ModelPattern::Optional(inner, _)
+            | ModelPattern::Repeat(inner, _)
+            | ModelPattern::Plus(inner, _)
+            | ModelPattern::SpanBinding(inner, _, _)
+            | ModelPattern::Peek(inner, _)
+            | ModelPattern::Not(inner, _)
+            | ModelPattern::LexicalScope(inner, _)
+            | ModelPattern::SpacedScope(inner, _) => walk(inner),
+            ModelPattern::Until { pattern, .. }
+            | ModelPattern::Count { pattern, .. }
+            | ModelPattern::Fold { pattern, .. }
+            | ModelPattern::Bounded { pattern, .. } => walk(pattern),
+            ModelPattern::Recover { body, sync, .. } => walk(body) || walk(sync),
+            ModelPattern::Cut(_) | ModelPattern::Fail { .. } | ModelPattern::Lit { .. } => false,
+        }
+    }
+    rule.variants.iter().any(|v| v.pattern.iter().any(walk))
 }
 
 // -----------------------------------------------------------------------------
@@ -212,7 +327,8 @@ fn infer_boundary(rule: &Rule, attr_span: proc_macro2::Span) -> syn::Result<Stri
                     attr_span,
                     format!(
                         "cannot infer the boundary of frame `{}`: every alternative must end in \
-                         the same string literal; otherwise say which it is: `#[frame = \"\\n\"]`",
+                         the same string literal; otherwise say which it is: \
+                         `#[frame(boundary = \"\\n\")]`",
                         rule.name
                     ),
                 ))
@@ -271,7 +387,7 @@ fn is_terminator(p: &ModelPattern, boundary: &str, user_rules: &HashSet<String>)
             let name = rule_path.segments.last().map(|s| s.ident.to_string());
             match name.as_deref() {
                 Some(n) if user_rules.contains(n) => false,
-                Some("eof") => true,
+                Some("eof") | Some(FRAME_END) => true,
                 Some("line_ending") => boundary == "\n" || boundary == "\r\n",
                 _ => false,
             }
@@ -295,6 +411,69 @@ fn literal_text(p: &ModelPattern) -> Option<String> {
         } => Some(c.value().to_string()),
         _ => None,
     }
+}
+
+// -----------------------------------------------------------------------------
+// Terminator coverage: does `until(t)` stop at the boundary?
+// -----------------------------------------------------------------------------
+
+/// The alternatives of a terminator, as far as they are fixed: `";"`,
+/// `line_ending`, `eof`, or a group of such. `None` if any alternative is
+/// something else (a rule call, a repetition) — its stopping points are not
+/// known here.
+fn terminator_alternatives(p: &ModelPattern, user_rules: &HashSet<String>) -> Option<Vec<TermAlt>> {
+    match p {
+        ModelPattern::Lit { .. } => literal_text(p).map(|t| vec![TermAlt::Lit(t)]),
+        ModelPattern::RuleCall {
+            rule_path,
+            generics,
+            args,
+            ..
+        } if generics.is_empty() && args.is_empty() => {
+            let name = rule_path.segments.last()?.ident.to_string();
+            if user_rules.contains(&name) {
+                return None;
+            }
+            match name.as_str() {
+                "line_ending" => Some(vec![TermAlt::LineEnding]),
+                "eof" => Some(vec![TermAlt::Eof]),
+                FRAME_END => Some(vec![TermAlt::FrameEnd]),
+                _ => None,
+            }
+        }
+        ModelPattern::Group { alts, .. } => {
+            let mut out = Vec::new();
+            for (seq, _, _) in alts {
+                let [single] = seq.as_slice() else {
+                    return None;
+                };
+                out.extend(terminator_alternatives(single, user_rules)?);
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+enum TermAlt {
+    Lit(String),
+    LineEnding,
+    Eof,
+    /// `frame_end`: the boundary itself, by reference.
+    FrameEnd,
+}
+
+/// Does a scan for these alternatives stop at or before every occurrence of
+/// the boundary? Yes if one of them is `frame_end`, is the boundary or a
+/// prefix of it, or is `line_ending` for a newline boundary. `eof` on its own
+/// stops nowhere.
+fn covers(alts: &[TermAlt], boundary: &str) -> bool {
+    alts.iter().any(|a| match a {
+        TermAlt::FrameEnd => true,
+        TermAlt::Lit(l) => boundary.starts_with(l.as_str()),
+        TermAlt::LineEnding => boundary == "\n" || boundary == "\r\n",
+        TermAlt::Eof => false,
+    })
 }
 
 // -----------------------------------------------------------------------------
@@ -352,11 +531,13 @@ fn check_rule(rule: &Rule, is_frame: bool, cx: &Cx) -> syn::Result<()> {
 }
 
 fn check_sequence(seq: &[ModelPattern], lexical: bool, rule: &Rule, cx: &Cx) -> syn::Result<()> {
-    if !lexical && !cx.has_user_ws && seq.len() > 1 && cx.builtin_overlaps("multispace0") {
+    // A syntactic rule skips whitespace before every element, the first
+    // included, so one element is enough to be exposed.
+    if !lexical && !cx.has_user_ws && !seq.is_empty() && cx.builtin_overlaps("multispace0") {
         return Err(syn::Error::new(
             seq[0].span(),
             format!(
-                "rule `{}` is syntactic (lowercase), so the implicit whitespace between its \
+                "rule `{}` is syntactic (lowercase), so the implicit whitespace before its \
                  elements can consume the boundary {:?} of frame `{}`; make the rule lexical \
                  (uppercase, or wrap the sequence in `lex(…)`), or define `WS` so it cannot",
                 rule.name, cx.boundary, cx.frame
@@ -403,6 +584,15 @@ fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::
                 // Reached; checked as a rule of its own.
                 return Ok(());
             }
+            if name == FRAME_END {
+                return Err(cx.err(
+                    p.span(),
+                    format!(
+                        "`frame_end` inside rule `{}` - it is the boundary itself, and",
+                        rule.name
+                    ),
+                ));
+            }
             if cx.builtins.contains(&name) && cx.builtin_overlaps(&name) {
                 return Err(cx.err(
                     p.span(),
@@ -411,14 +601,41 @@ fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::
             }
             Ok(())
         }
-        // Bounded by the code generator: the scan stops at the terminator or
-        // the boundary, whichever is first. The terminator itself must still
-        // not be the boundary's superset; it is checked like any pattern.
-        ModelPattern::Until { pattern, .. } => check_pattern(pattern, lexical, rule, cx),
-        ModelPattern::Recover { body, sync, .. } => {
-            check_pattern(body, lexical, rule, cx)?;
-            check_pattern(sync, lexical, rule, cx)
+        // `until` consumes anything up to its terminator. Inside a frame the
+        // terminator has to cover the boundary, so that the scan stops at or
+        // before it; the terminator itself is not consumed, so its text is
+        // not the concern here.
+        ModelPattern::Until { pattern, .. } => {
+            let covered = terminator_alternatives(pattern, cx.user_rules)
+                .is_some_and(|alts| covers(&alts, cx.boundary));
+            if covered {
+                Ok(())
+            } else {
+                Err(syn::Error::new(
+                    p.span(),
+                    format!(
+                        "`until(…)` in rule `{}` can run through the boundary {:?} of frame `{}`; \
+                         add the boundary as an alternative of the terminator so the scan stops \
+                         there: `until(… | frame_end)`",
+                        rule.name, cx.boundary, cx.frame
+                    ),
+                ))
+            }
         }
+        // The skip would have to stop at the boundary and the synchronization
+        // token would have to consume it, or neither; there is no
+        // `recover(…)` that is sound under a frame. The same recovery is a
+        // frame-local alternative: `(item | until("\n")) "\n"`.
+        ModelPattern::Recover { .. } => Err(syn::Error::new(
+            p.span(),
+            format!(
+                "`recover(…)` in rule `{}` skips input up to a synchronization token that is \
+                 then consumed; under the boundary {:?} of frame `{}` that skip cannot be kept \
+                 inside the frame. Recover per frame instead, with an alternative that takes the \
+                 rest of the frame: `(… | until(frame_end)) frame_end`",
+                rule.name, cx.boundary, cx.frame
+            ),
+        )),
         ModelPattern::Group { alts, .. } => {
             for (seq, _, _) in alts {
                 check_sequence(seq, lexical, rule, cx)?;
@@ -448,7 +665,6 @@ fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::
             // A repetition in a syntactic context skips whitespace before each
             // element, which is the same concern as a sequence of two.
             if matches!(p, ModelPattern::Repeat(..) | ModelPattern::Plus(..)) {
-                check_sequence(std::slice::from_ref(&**inner), lexical, rule, cx)?;
                 check_sequence(&[(**inner).clone(), (**inner).clone()], lexical, rule, cx)
             } else {
                 check_pattern(inner, lexical, rule, cx)

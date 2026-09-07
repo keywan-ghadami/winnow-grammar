@@ -66,33 +66,37 @@ pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug>(
     }
 }
 
-/// `until("lit")` inside a `#[frame]` rule: stop at the terminator *or* the
-/// frame boundary, whichever comes first, so that a skip can never run from
-/// one frame into the next. One scan (`memmem2`), not two.
-pub fn scan_to_either<'a, S: Clone + std::fmt::Debug>(
-    terminator: &'static str,
-    boundary: &'static str,
+/// `until(";" | "\n")` / `until(";" | line_ending)` - a terminator with two
+/// or three fixed alternatives, found in one pass: `memchr2`/`memchr3` over
+/// the alternatives' first bytes, then a check of the full string at each
+/// candidate (winnow's tuple `find_slice`). `line_ending` contributes `\n`
+/// and the one look back for `\r`.
+///
+/// The code generator calls this with two or three needles in total; one is
+/// [`scan_to_literal`] / [`scan_to_line_ending`], and more than three take
+/// the position-by-position path.
+pub fn scan_to_any<'a, S: Clone + std::fmt::Debug>(
+    lits: &'static [&'static str],
+    line_ending: bool,
 ) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, RtError> {
-    move |input| {
-        let end = match input.find_slice((terminator, boundary)) {
-            Some(range) => range.start,
-            None => input.eof_offset(),
-        };
-        Ok(input.next_slice(end))
+    let mut needles: Vec<&'static str> = lits.to_vec();
+    if line_ending {
+        needles.push("\n");
     }
-}
-
-/// `until(line_ending)` inside a frame whose boundary is not a newline: the
-/// rest of the line, or up to the boundary if that comes first.
-pub fn scan_to_line_ending_or<'a, S: Clone + std::fmt::Debug>(
-    boundary: &'static str,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, RtError> {
     move |input| {
-        let end = match input.find_slice(("\n", boundary)) {
+        let hit = match needles.as_slice() {
+            [] => None,
+            [a] => input.find_slice(*a),
+            [a, b] => input.find_slice((*a, *b)),
+            [a, b, c] => input.find_slice((*a, *b, *c)),
+            _ => unreachable!("the code generator limits a scan set to three needles"),
+        };
+        let end = match hit {
             Some(range) => {
                 let n = range.start;
-                let at_newline = input.peek_slice(n + 1).as_bytes()[n] == b'\n';
-                if at_newline && n > 0 && input.peek_slice(n).as_bytes()[n - 1] == b'\r' {
+                let before = input.peek_slice(n);
+                let at_newline = input.peek_slice(range.end).ends_with('\n') && range.len() == 1;
+                if line_ending && at_newline && before.ends_with('\r') {
                     n - 1
                 } else {
                     n
@@ -102,6 +106,135 @@ pub fn scan_to_line_ending_or<'a, S: Clone + std::fmt::Debug>(
         };
         Ok(input.next_slice(end))
     }
+}
+
+/// How `parse_<rule>_pieces` runs the pieces of a `par_fold` rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Parallelism {
+    /// No cut at all: the whole input, one parse. What `parse_<rule>()` does.
+    Off,
+    /// This many pieces.
+    Pieces(usize),
+    /// One piece per available core (`std::thread::available_parallelism`).
+    #[default]
+    Auto,
+}
+
+impl Parallelism {
+    /// The number of pieces this asks for; `None` for [`Parallelism::Off`].
+    pub fn pieces(self) -> Option<usize> {
+        match self {
+            Parallelism::Off => None,
+            Parallelism::Pieces(n) => Some(n.max(1)),
+            Parallelism::Auto => Some(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1),
+            ),
+        }
+    }
+}
+
+/// The driver behind `parse_<rule>_pieces` on a `par_fold` rule: cut `input`
+/// at `boundary` into the pieces `how` asks for, parse each with `parse`
+/// under a context from `new_context`, and fold the results with `merge`,
+/// first piece first. A piece's error is shifted to its offset in `input`,
+/// so it renders against the whole input; when several pieces fail, the
+/// first one's error is the one returned.
+///
+/// With the `rayon` feature the pieces are parsed on rayon's global pool;
+/// without it, in sequence - the same cut and the same answer, which is what
+/// lets a test check the split without threads.
+#[cfg(not(feature = "rayon"))]
+pub fn fold_pieces<'a, S, T, P, M, C>(
+    input: &'a str,
+    boundary: &str,
+    how: Parallelism,
+    new_context: C,
+    parse: P,
+    merge: M,
+) -> Result<T, ParseError>
+where
+    S: Clone + std::fmt::Debug,
+    C: Fn() -> crate::ParseContext<S>,
+    P: Fn(&mut ParseInput<'a, S>) -> Result<T, ParseError>,
+    M: Fn(T, T) -> T,
+{
+    let ranges = piece_ranges(input, boundary, how);
+    let mut acc: Option<T> = None;
+    for r in ranges {
+        let v = parse_piece(input, r, &new_context, &parse)?;
+        acc = Some(match acc {
+            Some(a) => merge(a, v),
+            None => v,
+        });
+    }
+    Ok(acc.expect("at least one piece"))
+}
+
+/// See the sequential definition; this one runs the pieces on rayon's
+/// global pool. Configure that pool (`rayon::ThreadPoolBuilder`) to bound
+/// the threads; `Parallelism` bounds the pieces.
+#[cfg(feature = "rayon")]
+pub fn fold_pieces<'a, S, T, P, M, C>(
+    input: &'a str,
+    boundary: &str,
+    how: Parallelism,
+    new_context: C,
+    parse: P,
+    merge: M,
+) -> Result<T, ParseError>
+where
+    S: Clone + std::fmt::Debug,
+    T: Send,
+    C: Fn() -> crate::ParseContext<S> + Sync,
+    P: Fn(&mut ParseInput<'a, S>) -> Result<T, ParseError> + Sync,
+    M: Fn(T, T) -> T,
+{
+    use rayon::prelude::*;
+    let ranges = piece_ranges(input, boundary, how);
+    let results: Vec<Result<T, ParseError>> = ranges
+        .into_par_iter()
+        .map(|r| parse_piece(input, r, &new_context, &parse))
+        .collect();
+    let mut acc: Option<T> = None;
+    for res in results {
+        let v = res?;
+        acc = Some(match acc {
+            Some(a) => merge(a, v),
+            None => v,
+        });
+    }
+    Ok(acc.expect("at least one piece"))
+}
+
+fn piece_ranges(input: &str, boundary: &str, how: Parallelism) -> Vec<std::ops::Range<usize>> {
+    match how.pieces() {
+        None => std::iter::once(0..input.len()).collect(),
+        Some(n) => frames(input, boundary, n),
+    }
+}
+
+fn parse_piece<'a, S, T, P, C>(
+    input: &'a str,
+    range: std::ops::Range<usize>,
+    new_context: &C,
+    parse: &P,
+) -> Result<T, ParseError>
+where
+    S: Clone + std::fmt::Debug,
+    C: Fn() -> crate::ParseContext<S>,
+    P: Fn(&mut ParseInput<'a, S>) -> Result<T, ParseError>,
+{
+    let start = range.start;
+    let mut piece = ParseInput {
+        input: winnow::stream::LocatingSlice::new(&input[range]),
+        state: new_context(),
+    };
+    parse(&mut piece).map_err(|mut e| {
+        e.offset += start;
+        e
+    })
 }
 
 /// The byte ranges of `n` pieces of `input`, each beginning right after a
@@ -120,12 +253,20 @@ pub fn scan_to_line_ending_or<'a, S: Clone + std::fmt::Debug>(
 ///   last piece, for the fold to accept or reject as the grammar says;
 /// * `n == 0` is read as `1`, and empty input gives one empty piece.
 ///
-/// Boundaries are found by the same scan as `until` (memchr). A valid UTF-8
-/// boundary can only match at a character boundary, so every range is one.
+/// The split works on bytes ([`frames_bytes`]); this is the `&str` view of
+/// it. A valid UTF-8 boundary can only match at a character boundary, so
+/// every range is one - a consequence of the input being `&str`, not a
+/// constraint the split adds.
 pub fn frames(input: &str, boundary: &str, n: usize) -> Vec<std::ops::Range<usize>> {
+    frames_bytes(input.as_bytes(), boundary.as_bytes(), n)
+}
+
+/// [`frames`] on bytes: the split itself, with no notion of characters. The
+/// generated parsers take `&str`, so [`frames`] is what they use; this is
+/// the primitive underneath, for a byte-oriented input type to build on.
+pub fn frames_bytes(input: &[u8], boundary: &[u8], n: usize) -> Vec<std::ops::Range<usize>> {
     let n = n.max(1);
     let len = input.len();
-    let bytes = input.as_bytes();
 
     let mut starts = Vec::with_capacity(n + 1);
     starts.push(0);
@@ -133,9 +274,9 @@ pub fn frames(input: &str, boundary: &str, n: usize) -> Vec<std::ops::Range<usiz
         // `len * k` in `usize` would overflow before `len` does on a 32-bit
         // target; the quotient itself is at most `len`.
         let nominal = ((len as u128 * k as u128) / n as u128) as usize;
-        let tail: &[u8] = &bytes[nominal..];
+        let tail: &[u8] = &input[nominal..];
         let start = tail
-            .find_slice(boundary.as_bytes())
+            .find_slice(boundary)
             .map(|r| nominal + r.end)
             .unwrap_or(len);
         starts.push(start);

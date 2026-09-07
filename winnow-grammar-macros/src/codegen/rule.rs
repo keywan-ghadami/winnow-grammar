@@ -259,17 +259,18 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    /// The functions a driver needs to parse in pieces, next to the rule's
-    /// parser:
+    /// The functions for parsing in pieces, next to the rule's parser:
     ///
-    /// * on a `#[frame]` rule, `frames_<rule>(input, n)` - the byte ranges of
-    ///   `n` pieces, each starting at a boundary (`rt::frames`);
-    /// * on a `par_fold` rule, the same `frames_<rule>` (for the frame it
-    ///   folds over) and `merge_<rule>(a, b)`, the merge it was given.
-    ///
-    /// The per-piece parser is the rule's own `parse_<rule>()` applied to the
-    /// piece; the fold matches zero or more frames, so a piece is a valid
-    /// input on its own.
+    /// * on a `#[frame]` rule and on a `par_fold` rule,
+    ///   `frames_<rule>(input, n)`: the byte ranges of `n` pieces, each
+    ///   starting at a boundary (`rt::frames`);
+    /// * on a `par_fold` rule, `merge_<rule>(a, b)`, the merge it was given,
+    ///   and `parse_<rule>_pieces(input, new_context, how)`, the driver: it
+    ///   cuts, parses every piece with `parse_<rule>()`, merges, and reports a
+    ///   piece's error at its position in the whole input. `how` is a
+    ///   `rt::Parallelism`: off, a number of pieces, or one per core; with
+    ///   the `rayon` feature the pieces run in parallel, without it in
+    ///   sequence - same cut, same answer.
     fn generate_frame_fns(&self, rule: &Rule) -> TokenStream {
         let span = Span::mixed_site();
         let rule_name_str = rule.name.to_string();
@@ -309,9 +310,11 @@ impl<'a> Codegen<'a> {
             }
             _ => None,
         });
-        let merge = match merge {
+        let driver = match merge {
             Some(m) => {
                 let merge_fn = format_ident!("merge_{}", rule.name, span = span);
+                let pieces_fn = format_ident!("parse_{}_pieces", rule.name, span = span);
+                let parse_fn = format_ident!("parse_{}", rule.name, span = span);
                 let ret_type = &rule.return_type;
                 quote_spanned! {span=>
                     /// The merge given to `par_fold`: combines the results of
@@ -321,6 +324,33 @@ impl<'a> Codegen<'a> {
                         let mut merge = #m;
                         merge(a, b)
                     }
+
+                    /// Parses `input` in pieces and merges: the cut is
+                    /// `frames_…`, the per-piece parser `parse_…()`, the merge
+                    /// `merge_…`. `new_context` builds the context each piece
+                    /// parses with (share an interner through it; see ADR 14).
+                    /// A piece's error is reported at its offset in `input`.
+                    #[allow(dead_code)]
+                    #vis fn #pieces_fn<'a, S>(
+                        input: &'a str,
+                        new_context: impl Fn() -> ::winnow_grammar::ParseContext<S> + Sync,
+                        how: ::winnow_grammar::rt::Parallelism,
+                    ) -> ::core::result::Result<#ret_type, ::winnow_grammar::ParseError>
+                    where
+                        S: ::std::fmt::Debug + Clone,
+                        #ret_type: Send,
+                    {
+                        ::winnow_grammar::rt::fold_pieces(
+                            input,
+                            #boundary,
+                            how,
+                            new_context,
+                            |piece: &mut ::winnow_grammar::ParseInput<'a, S>| {
+                                ::winnow::Parser::parse_next(&mut #parse_fn(), piece)
+                            },
+                            #merge_fn,
+                        )
+                    }
                 }
             }
             None => quote! {},
@@ -328,7 +358,7 @@ impl<'a> Codegen<'a> {
 
         quote! {
             #frames
-            #merge
+            #driver
         }
     }
 }

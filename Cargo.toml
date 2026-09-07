@@ -15,6 +15,9 @@ path = "src/winnow_grammar.rs"
 
 [features]
 trace = ["winnow/debug"]
+# `parse_<rule>_pieces` on a `par_fold` rule runs the pieces on rayon's global
+# pool. Without it the same function runs them in sequence.
+rayon = ["dep:rayon"]
 
 [dependencies]
 winnow = "0.7"
@@ -25,6 +28,7 @@ lasso = { version = "0.7", features = ["multi-threaded"] }
 # Emitted in the body of `test_case_impl!` (`src/testing.rs`), so it must be
 # available to users of the macro as well - not only to our own tests.
 paste = "1.0"
+rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 trybuild = "1.0.116"

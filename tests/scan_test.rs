@@ -223,3 +223,52 @@ fn recovery_fails_when_the_synchronization_token_never_comes() {
         .parse_test("1;oops")
         .assert_failure();
 }
+
+grammar! {
+    grammar Alternatives {
+        // Two and three fixed alternatives: one pass (`memchr2`/`memchr3`).
+        pub TWO -> String = s:until(";" | "\n") -> { s.to_string() }
+        pub THREE -> String = s:until("," | ";" | line_ending) -> { s.to_string() }
+        // The value before a "\r\n": `line_ending` after it matches only if
+        // the scan stopped before the "\r".
+        pub LINE3 -> String = s:until("," | ";" | line_ending) line_ending -> { s.to_string() }
+        // Four: more than the one-pass scan takes; the position-by-position
+        // path must give the same value.
+        pub FOUR -> String = s:until("," | ";" | ":" | "|") -> { s.to_string() }
+    }
+}
+
+#[test]
+fn a_terminator_with_alternatives_stops_at_whichever_comes_first() {
+    Alternatives::parse_TWO()
+        .parse_test("ab;cd\n")
+        .assert_failure(); // stops at `;`, and `;cd\n` is left over
+    Alternatives::parse_TWO()
+        .parse_test("ab")
+        .assert_success_is("ab".to_string());
+    Alternatives::parse_THREE()
+        .parse_test("ab")
+        .assert_success_is("ab".to_string());
+}
+
+#[test]
+fn line_ending_among_the_alternatives_keeps_the_carriage_return_out() {
+    // "\r\n" is one line ending: the value stops before the "\r", and the
+    // `line_ending` that follows consumes both characters.
+    Alternatives::parse_LINE3()
+        .parse_test("ab\r\n")
+        .assert_success_is("ab".to_string());
+    Alternatives::parse_LINE3()
+        .parse_test("ab\n")
+        .assert_success_is("ab".to_string());
+}
+
+#[test]
+fn four_alternatives_take_the_slow_path_and_agree() {
+    let r = Alternatives::parse_FOUR().parse_test("abc|d");
+    assert!(r.inner.is_err());
+    assert!(r.inner.unwrap_err().contains("column 4"));
+    Alternatives::parse_FOUR()
+        .parse_test("abc")
+        .assert_success_is("abc".to_string());
+}

@@ -1280,8 +1280,19 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
     } else if input.peek(kw::until) {
         let kw_token = input.parse::<kw::until>()?;
         let content;
-        syn::parenthesized!(content in input);
-        let pattern = content.parse()?;
+        let token = syn::parenthesized!(content in input);
+        // The terminator may be an alternation - `until(";" | frame_end)` -
+        // which is a group; a single pattern stays a single pattern.
+        let mut alts = parse_group_content(&content)?;
+        let pattern = if alts.len() == 1 && alts[0].0.len() == 1 && alts[0].1.is_none() {
+            alts.remove(0).0.remove(0)
+        } else {
+            Pattern::Group {
+                binding: None,
+                alts,
+                token,
+            }
+        };
         Ok(Pattern::Until {
             binding,
             pattern: Box::new(pattern),
