@@ -5,7 +5,19 @@ use crate::model::*;
 use std::collections::{HashMap, HashSet};
 use syn::spanned::Spanned;
 
-pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<()> {
+/// What validation established, handed on to the code generator so that no
+/// analysis runs twice: one analysis, one result, one consumer each for
+/// diagnostics and generation (ADR 16 §6).
+#[derive(Debug, Clone)]
+pub struct Validated {
+    /// Frame rules, their boundaries, what `frame_end` stands for where, and
+    /// the `par_fold` rules - see [`crate::frame`].
+    pub frames: crate::frame::Frames,
+    /// Nullability, first sets, cycles and unused rules.
+    pub analysis: crate::analysis::GrammarAnalysis,
+}
+
+pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<Validated> {
     let builtins = B::get_builtins();
     let builtin_names: HashSet<String> = builtins.iter().map(|b| b.name.to_string()).collect();
 
@@ -51,7 +63,7 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<()> {
     validate_argument_counts(grammar)?;
 
     // Frames: `#[frame]` rules, what they reach, and `par_fold`.
-    crate::frame::check(grammar, &builtin_names)?;
+    let frames = crate::frame::check(grammar, &builtin_names)?;
 
     // Perform advanced analysis
     let analysis = crate::analysis::analyze_grammar(grammar);
@@ -117,7 +129,7 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<()> {
         }
     }
 
-    Ok(())
+    Ok(Validated { frames, analysis })
 }
 
 fn validate_rule(rule: &Rule, all_defs: &HashSet<String>) -> syn::Result<()> {

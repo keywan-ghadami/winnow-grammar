@@ -144,14 +144,15 @@ invented later. `rt::frames_bytes` is the primitive each of those scanners
 would replace or wrap. Until one exists, a grammar for such a format uses
 `unchecked` and says so in the grammar.
 
-### 6. Where the check runs
+### 6. Where the check runs — once
 
-`frame::check` runs in the model's validator, where its errors are reported,
-and again in the code generator, which needs its result (which rules are
-frames and `par_fold`s) and has no other way to get it. The check is linear
-in the grammar and pure; running it twice costs nothing observable. A
-validator that returned its analysis would be the cleaner shape and is not
-this ADR's concern.
+`frame::check` runs in the model's validator, where its errors are reported.
+The validator returns what it established (`validator::Validated`: the frames
+and the grammar analysis), `parse_grammar` hands it on as `ParsedGrammar`,
+and the code generator takes that whole. Nothing is analysed twice, and the
+generator has no way to disagree with the validator about which rules are
+frames. This is the shape to build from the start for any analysis that both
+diagnostics and generation consume: one analysis, one result, passed on.
 
 ## Consequences
 

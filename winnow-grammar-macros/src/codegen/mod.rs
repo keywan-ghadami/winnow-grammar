@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use winnow_grammar_model::frame::Frames;
 use winnow_grammar_model::model::GrammarDefinition;
+use winnow_grammar_model::ParsedGrammar;
 
 /// Is the rule a template that is not generated as a function of its own but
 /// inlined at every call site?
@@ -35,15 +36,12 @@ pub(crate) fn is_template(rule: &winnow_grammar_model::model::Rule) -> bool {
     })
 }
 
-pub fn generate_rust(grammar: GrammarDefinition) -> syn::Result<TokenStream> {
-    // Validation has already run this check and reported its errors; running
-    // it again here is how the generator learns which skips to bound.
-    use winnow_grammar_model::Backend;
-    let builtins: HashSet<String> = crate::WinnowBackend::get_builtins()
-        .iter()
-        .map(|b| b.name.to_string())
-        .collect();
-    let frames = winnow_grammar_model::frame::check(&grammar, &builtins)?;
+pub fn generate_rust(parsed: ParsedGrammar) -> syn::Result<TokenStream> {
+    // Validation ran the frame check once and hands its result over; the
+    // generator does not run it again.
+    let ParsedGrammar {
+        grammar, frames, ..
+    } = parsed;
     let mut codegen = Codegen::new(&grammar, frames);
     codegen.generate()
 }

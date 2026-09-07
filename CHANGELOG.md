@@ -98,6 +98,9 @@
   a keyed list so the formats the check cannot see through yet (quoted fields,
   start patterns, escapes, a scanner of one's own — ADR 16 §5) get keys rather
   than a second syntax. `tests/frames_test.rs`, `tests/ui/frames.rs`.
+  Validation returns its analysis (`validator::Validated`, carried by
+  `ParsedGrammar`) and the generator consumes it, so the frame check runs
+  once.
 - **`until(…)` takes an alternation, and a few fixed alternatives are scanned
   in one pass**: `until(";" | frame_end)`, `until("," | line_ending)` — up to
   three needles via `memchr2`/`memchr3` (`rt::scan_to_any`). More than three,

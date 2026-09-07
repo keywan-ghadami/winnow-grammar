@@ -40,15 +40,29 @@ pub use proc_macro2::Span;
 /// This encapsulates the standard 3-step process used by all backends.
 ///
 /// This function uses the provided `Backend` to validate built-ins.
-pub fn parse_grammar<B: Backend>(input: TokenStream) -> Result<model::GrammarDefinition> {
+/// A grammar that passed validation, together with what validation found
+/// out about it. The code generator takes this whole, so that nothing is
+/// analysed twice.
+#[derive(Debug, Clone)]
+pub struct ParsedGrammar {
+    pub grammar: model::GrammarDefinition,
+    pub frames: frame::Frames,
+    pub analysis: analysis::GrammarAnalysis,
+}
+
+pub fn parse_grammar<B: Backend>(input: TokenStream) -> Result<ParsedGrammar> {
     // 1. Parsing: From TokenStream to syntactic AST
     let p_ast: parser::GrammarDefinition = syn::parse2(input)?;
 
     // 2. Transformation: From syntactic AST to semantic model
-    let m_ast: model::GrammarDefinition = p_ast.into();
+    let grammar: model::GrammarDefinition = p_ast.into();
 
-    // 3. Validation: Check for semantic errors
-    validator::validate::<B>(&m_ast)?;
+    // 3. Validation: semantic errors out, the analysis kept for generation
+    let validator::Validated { frames, analysis } = validator::validate::<B>(&grammar)?;
 
-    Ok(m_ast)
+    Ok(ParsedGrammar {
+        grammar,
+        frames,
+        analysis,
+    })
 }

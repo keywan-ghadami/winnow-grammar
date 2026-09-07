@@ -478,6 +478,7 @@ pub fn is_nullable(pattern: &ModelPattern) -> bool {
 //  Graph Analysis & Diagnostics (Infinite Recursion, Ambiguity, Unused Rules)
 // ==============================================================================
 
+#[derive(Debug, Clone)]
 pub struct GrammarAnalysis {
     pub nullable_rules: HashSet<String>,
     pub cycles: Vec<Vec<String>>,

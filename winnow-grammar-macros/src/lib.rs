@@ -177,13 +177,14 @@ pub fn grammar(input: TokenStream) -> TokenStream {
 fn grammar_impl(input: TokenStream) -> TokenStream {
     // 1. Parse & Validate using syn-grammar-model with specific built-ins
     // Note: validator is patched in vendored source to support typed generic params.
-    let m_ast = match parse_grammar::<WinnowBackend>(input.into()) {
-        Ok(ast) => ast,
+    let parsed = match parse_grammar::<WinnowBackend>(input.into()) {
+        Ok(parsed) => parsed,
         Err(e) => return e.to_compile_error().into(),
     };
 
-    // 2. Generate Code using local winnow codegen
-    match codegen::generate_rust(m_ast) {
+    // 2. Generate Code using local winnow codegen, from the validated
+    //    grammar and what validation found out about it
+    match codegen::generate_rust(parsed) {
         Ok(stream) => {
             if std::env::var("DEBUG_GRAMMAR").is_ok() {
                 eprintln!("{}", stream);
