@@ -174,6 +174,22 @@
 
 ### Added
 
+- **`text(p)`: what was matched, not what was parsed.** Runs `p` and hands back
+  the input it consumed as `&'a str`, borrowed from the input - no allocation,
+  whatever `p` is. Several patterns are a sequence, not several arguments, so
+  `text(digit{2} raw_ident)` captures both and the whitespace between them is
+  whatever it would be outside the `text`.
+
+  It settles an inconsistency the language already had: `digit1` yields
+  `&'a str` and `digit{1,2}` a `Vec<char>`, though both are a run of digits.
+  That is why `intern(until(";"))` worked and `intern(digit{3})` could not - a
+  `Vec<char>` is no `AsRef<str>`. `intern(text(digit{3}))` now does.
+
+  It is also where the 1BRC temperature's time was: `TENTHS` written with
+  `text(digit{1,2})` instead of a `Vec<char>` measures 59 ns -> 36 ns
+  (`benches/repetition.rs`, one machine), which is hand-written to within the
+  noise. The whole difference is not copying two characters onto the heap.
+
 - **An attribute a rule carries must be one the generator reads.** `#[frame(…)]`
   and doc comments are it; anything else is now a spanned error instead of
   being dropped in silence, so a typo (`#[frmae(boundary = "\n")]`) no longer

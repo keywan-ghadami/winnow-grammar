@@ -1455,7 +1455,10 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
             // from the backend's own list - see `feature-requests.md` §1.
             // Until then a builtin with an argument is added here.
             let is_builtin = is_simple_ident
-                && (ident_str == "separated" || ident_str == "repeated" || ident_str == "intern");
+                && (ident_str == "separated"
+                    || ident_str == "repeated"
+                    || ident_str == "intern"
+                    || ident_str == "text");
 
             // Note: `is_scoped` (e.g. `foo::bar(...)`) is NO LONGER a heuristic for args.
             // Explicitly: only built-ins or named args or templates allowed.
