@@ -9,3 +9,9 @@ error: unknown attribute `allow` on rule `A`; a rule takes `#[frame(…)]` and d
    |
 15 |         #[allow(dead_code)]
    |           ^^^^^
+
+error: unknown attribute `frmae` on extern rule `outside`; a rule takes `#[frame(…)]` and doc comments, and nothing else here reads an attribute
+  --> tests/ui/attrs.rs:24:11
+   |
+24 |         #[frmae(boundary = "\n")]
+   |           ^^^^^

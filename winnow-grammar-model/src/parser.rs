@@ -147,6 +147,14 @@ pub struct GrammarDefinition {
     pub imports: Vec<ImportedGrammar>,
 }
 
+/// Is the next item an `extern rule`? Both it and an ordinary rule may carry
+/// attributes - a doc comment is one - and both parse them first, so the
+/// choice between them has to look past them rather than at the first token.
+fn peek_extern_rule(input: ParseStream) -> bool {
+    let fork = input.fork();
+    Attribute::parse_outer(&fork).is_ok() && fork.peek(Token![extern])
+}
+
 impl Parse for GrammarDefinition {
     fn parse(input: ParseStream) -> Result<Self> {
         // Parse top-level imports that might appear before `grammar Name { ... }`
@@ -177,7 +185,7 @@ impl Parse for GrammarDefinition {
                 uses.push(content.parse()?);
             } else if content.peek(kw::import) {
                 nested_imports.push(content.parse()?);
-            } else if content.peek(Token![extern]) {
+            } else if peek_extern_rule(&content) {
                 extern_rules.push(content.parse()?);
             } else {
                 // Try parsing as rule (it might have attributes)

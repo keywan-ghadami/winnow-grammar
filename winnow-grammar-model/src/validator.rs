@@ -52,6 +52,16 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<Validate
     // grammar with an ordinary `use` loses the "Undefined rule" message, and
     // a typo in a rule name only shows up as a follow-up error in the
     // generated code.
+    //
+    // What "switched off" costs, measured rather than assumed: a typo under a
+    // glob still fails to compile. The call site emits the name as a plain
+    // path, so rustc reports `E0425: cannot find value \`digti1\` in this
+    // scope` at the right span, plus a type-inference error behind it. So this
+    // trades a good message for a worse one - it does not let a typo through.
+    // That is why the answer here is not a warning: the developer already
+    // hears about it, and a warning on every name a legitimate glob brings
+    // (every inherited rule, for one) would be noise on top of an error.
+    // The three tests at the bottom of this file pin both directions.
     let should_validate_rule_calls = !grammar.uses.iter().any(|u| use_tree_has_glob(&u.tree));
 
     if should_validate_rule_calls {
@@ -523,6 +533,50 @@ mod tests {
             Ok(_) => panic!("Expected undefined rule error"),
             Err(e) => assert_eq!(e.to_string(), "Undefined rule: 'undefined_rule'"),
         }
+    }
+
+    // The "Undefined rule" check is switched off by a glob import, on purpose:
+    // a glob - inheritance among them - can bring rule names this grammar does
+    // not define, and the check cannot see what it brings. These three pin
+    // that decision from both sides, because nothing else in the suite covers
+    // it and an accidental narrowing would break inheritance silently.
+
+    #[test]
+    fn a_glob_import_keeps_unknown_rule_names_legal() {
+        let input = quote! {
+            grammar test {
+                use other::*;
+                main = from_the_glob
+            }
+        };
+        let model = parse_model(input);
+        assert!(validate::<TestBackend>(&model).is_ok());
+    }
+
+    #[test]
+    fn inheritance_keeps_unknown_rule_names_legal() {
+        // `grammar test : Base` is mapped to `use super::Base::*;`, which is
+        // the reason the check can be switched off at all.
+        let input = quote! {
+            grammar test : Base {
+                main = from_the_base
+            }
+        };
+        let model = parse_model(input);
+        assert!(validate::<TestBackend>(&model).is_ok());
+    }
+
+    #[test]
+    fn a_named_import_does_not_switch_the_check_off() {
+        let input = quote! {
+            grammar test {
+                use other::Thing;
+                main = undefined_rule
+            }
+        };
+        let model = parse_model(input);
+        let err = validate::<TestBackend>(&model).unwrap_err();
+        assert_eq!(err.to_string(), "Undefined rule: 'undefined_rule'");
     }
 
     #[test]

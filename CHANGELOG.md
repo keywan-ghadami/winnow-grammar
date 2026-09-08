@@ -44,6 +44,13 @@
 
 ### Fixed
 
+- **An `extern rule` behind an attribute is parseable.** The grammar body chose
+  between a rule and an `extern rule` by peeking at the first token, but both
+  parse attributes first, so `/// doc` in front of a declaration routed it to
+  the rule parser and failed with `expected \`=\``. `ExternRule.attrs` had been
+  unreachable since it was written. The choice now looks past the attributes,
+  which also makes the attribute check reach an `extern rule`.
+
 - **A rule that only lookahead reaches is no longer checked against a frame
   boundary.** `peek(…)` and `not(…)` consume nothing, so nothing they contain
   can carry the parser past the boundary - but the reachability walk followed
