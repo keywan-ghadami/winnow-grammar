@@ -736,6 +736,7 @@ where
     F: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<EmptyError>>,
     D: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<ParseError>>,
 {
+    input.state.begin_parse();
     match input.state.diagnose {
         Diagnose::Eager => {}
         Diagnose::Off => return accepted(input, fast).ok_or_else(ParseError::undiagnosed),
@@ -781,6 +782,7 @@ where
     F: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<EmptyError>>,
     D: Fn(&mut ParseInput<'a, S>) -> Result<O, ErrMode<ParseError>>,
 {
+    input.state.begin_parse();
     let origin = input.current_token_start();
     let base = input.state.fold.base;
     match input.state.diagnose {

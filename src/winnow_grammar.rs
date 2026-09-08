@@ -137,6 +137,29 @@ impl<S> ParseContext<S> {
         }
     }
 
+    /// Takes ownership of the fields that belong to *one* parse, so that a
+    /// context can be used for a second.
+    ///
+    /// The interner and the user state are the caller's and outlive the
+    /// parse, which is what ADR 14 built this struct for. `furthest`,
+    /// `rules` and `fold` are the diagnostics engine's working space and
+    /// belong to the parse that is starting. Nothing reset them, so
+    /// `fold.base` (which numbers a `par_fold`'s items, and is advanced when
+    /// one fails) carried into the next parse and numbered its items from
+    /// the previous total.
+    ///
+    /// Called by [`rt::entry`](crate::rt::entry) and
+    /// [`rt::entry_framed`](crate::rt::entry_framed), which is where a parse
+    /// begins. Nesting one inside the other would reset the outer one's
+    /// state, and does not happen: [`rt::finish`](crate::rt::finish) fails a
+    /// parse with input left over, so an entry point called inside another
+    /// parse already fails.
+    pub fn begin_parse(&mut self) {
+        self.furthest = None;
+        self.rules.clear();
+        self.fold = FoldProgress::default();
+    }
+
     /// Records a discarded error - following the same ranking as
     /// [`ParseError::merge`].
     pub fn record(&mut self, e: &ParseError) {

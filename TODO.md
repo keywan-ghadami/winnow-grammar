@@ -93,24 +93,23 @@ The shape to try, and what to check about it:
   miss path costs no more than ~2-3 ns over today; and that symbols are
   unchanged - the cache is an optimisation, not a semantic.
 
-## 5. `fold.base` survives a parse (ADR 19 §1)
+## 5. `fold.base` survived a parse — **fixed**
 
-`fold_impl` numbers its items from `input.state.fold.base`, and
-`rt::entry_framed` writes `base + seen` back when a `par_fold` fails. Nothing
-resets it, so a context used for a second parse numbers from where the first
-one stopped. Reproduced: the identical failing input reports `in item 4` with
-a fresh context and `in item 7` with a reused one.
+`rt::entry` and `rt::entry_framed` now call `ParseContext::begin_parse`, which
+clears the diagnostics engine's working space (`fold`, `furthest`, `rules`)
+where a parse begins. Before that, a `par_fold` grammar parsed twice through
+one context numbered the second parse's items from the first one's total, and
+the offset grew with every failure: `in item 4`, then `7`, then `10`.
 
-This hits exactly what ADR 14 advertises - one long-lived context across many
-source files - and it blocks ADR 19 §2, which would clone the stale value into
-every piece.
+The scope was narrower than it first looked, and `tests/context_reuse_test.rs`
+records all of it: only a `par_fold` rule (a plain `fold` runs untracked and
+never read the base), only after a *failed* parse (a successful one leaves the
+base at zero), and only in the diagnostic message - what a parse accepted and
+what it returned never depended on it. The three tests that cover the defect
+fail without the fix; that was checked by reverting it, not assumed.
 
-The fix is to reset the per-parse fields (`fold`, and defensively `furthest`
-and `rules`) at the start of `rt::entry` and `rt::entry_framed`. Safe against
-a nested entry point, because that composition does not exist: `rt::finish`
-fails a parse with input left over, so an entry point called inside another
-parse already fails with `expected end of input`. Wanted with it: a test that
-parses twice through one context and gets the same message both times.
+ADR 19 §2 - `parse_<rule>_pieces` taking a context rather than a factory - was
+blocked on this and is now open.
 
 ## 6. The high-end path: a bespoke interner, and why a grammar cannot have one
 

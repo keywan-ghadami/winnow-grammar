@@ -76,6 +76,22 @@
   lookahead *written inside* a rule this way; the walk now agrees for a rule
   reached *through* it.
 
+- **A context used for a second parse numbered its items from the first one's
+  total.** `fold.base` numbers a `par_fold`'s items and is advanced when a
+  parse fails; nothing reset it, so the next parse through the same context
+  counted from where the last one stopped - `in item 7` for what a fresh
+  context called `in item 4`, growing by the item count with every failure.
+  That is the case ADR 14 is built for: one long-lived context, several source
+  files. `rt::entry` and `rt::entry_framed` now begin by clearing the
+  diagnostics engine's working space (`ParseContext::begin_parse`: `fold`,
+  `furthest`, `rules`), which is where a parse takes ownership of it.
+
+  The defect was confined to the message - what a parse accepted and returned
+  never depended on it - and to `par_fold` rules, since a plain `fold` runs
+  untracked. `tests/context_reuse_test.rs` pins both the fix and those
+  boundaries, and the tests covering the defect were checked to fail without
+  it. See `docs/adr/adr19-one-context-per-parse-not-a-factory.md` §1.
+
 - **`_state` in an action block did not compile, and was detected by a text
   search.** The code generator injects a
   binding for the `ParseContext` when an action names `_state`, and injected

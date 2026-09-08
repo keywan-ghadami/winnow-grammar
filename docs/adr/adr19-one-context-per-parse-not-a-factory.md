@@ -1,7 +1,9 @@
 # ADR 19: The Context Holds Two Lifetimes — and `_pieces` Has to Choose
 
-**Status:** Proposed; **blocked on the reset below**, which is a fix in its own
-right. **Date:** 2026-09-08.
+**Status:** §1 accepted and implemented; §2 proposed, now unblocked.
+**Date:** 2026-09-08.
+**Tests:** `tests/context_reuse_test.rs` — six, and the three that matter fail
+without the fix (checked by reverting it).
 **Depends on:** ADR 14 (the shared context), ADR 16 (frames and `par_fold`),
 ADR 17 (the diagnosing replay), ADR 18 §3 and §4.
 
@@ -68,11 +70,19 @@ files — gets wrong item numbers from the second failing file onwards, today.
 
 ## Decision
 
-### 1. First the reset, which is owed anyway
+### 1. First the reset, which is owed anyway — **implemented**
 
 The per-parse fields belong to the parse, so a parse begins by owning them:
-`rt::entry` and `rt::entry_framed` reset `fold` (and, defensively, `furthest`
-and `rules`) at their start, before anything reads them.
+`rt::entry` and `rt::entry_framed` call `ParseContext::begin_parse` at their
+start, which clears `fold` and, defensively, `furthest` and `rules`, before
+anything reads them.
+
+What the reset does *not* do is clean up after a parse: a failed `par_fold`
+still leaves `fold.base` set, because that is `entry_framed` recording where
+its replay starts. The leftover is inert — the next parse resets it — and it
+is now bounded instead of cumulative, which is the observable difference:
+three failures through one context leave `3, 3, 3` where they used to leave
+`3, 6, 9`, each step shifting the item number in the message.
 
 This is safe against the one thing that would break it — an `entry` inside
 another `entry`, which would reset its caller's accumulator — because that
