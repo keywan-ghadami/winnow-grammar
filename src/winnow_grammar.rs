@@ -148,10 +148,10 @@ impl<S> ParseContext<S> {
     /// one fails) carried into the next parse and numbered its items from
     /// the previous total.
     ///
-    /// Called by [`rt::entry`](crate::rt::entry) and
-    /// [`rt::entry_framed`](crate::rt::entry_framed), which is where a parse
+    /// Called by [`rt::entry`] and
+    /// [`rt::entry_framed`], which is where a parse
     /// begins. Nesting one inside the other would reset the outer one's
-    /// state, and does not happen: [`rt::finish`](crate::rt::finish) fails a
+    /// state, and does not happen: [`rt::finish`] fails a
     /// parse with input left over, so an entry point called inside another
     /// parse already fails.
     pub fn begin_parse(&mut self) {
