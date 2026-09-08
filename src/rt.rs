@@ -354,12 +354,19 @@ where
     repeat_recording_bounded(min, None, p)
 }
 
-/// `x{n}` / `x{n,}` / `x{n,m}` - repetition with explicit bounds.
+/// `x{n}` / `x{n,}` / `x{n,m}` - repetition with explicit bounds, collecting
+/// the elements.
 ///
 /// Greedy and possessive, like [`repeat_recording`]: it takes as many elements
 /// as it can up to `max` and never gives one back to help a later pattern
 /// match. Below `min` the element's own error is the failure; at `max` the
 /// repetition simply stops, and whatever follows sees the rest of the input.
+///
+/// [`repeat_counting_bounded`] is the same loop for a repetition whose
+/// elements nobody names. The two are written out separately on purpose:
+/// threading the accumulator through a closure so that one body could serve
+/// both cost the collecting form 35% (`benches/repetition.rs`), and this is
+/// the form every bound repetition in every grammar runs.
 pub fn repeat_recording_bounded<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
     min: usize,
     max: Option<usize>,
@@ -368,10 +375,13 @@ pub fn repeat_recording_bounded<'a, S: Clone + std::fmt::Debug, O, P, E: RtError
 where
     P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
 {
+    // The bound as a plain number, tested once per element instead of an
+    // `Option` unwrapped every time round.
+    let cap = max.unwrap_or(usize::MAX);
     move |input| {
         let mut items = Vec::new();
         loop {
-            if max.is_some_and(|m| items.len() >= m) {
+            if items.len() >= cap {
                 break;
             }
             let cp = input.checkpoint();
@@ -409,6 +419,76 @@ where
             }
         }
         Ok(items)
+    }
+}
+
+/// `x*` / `x+` with no binding, and `count(x)`: the repetition of
+/// [`repeat_recording`], answering with how many elements there were instead
+/// of with the elements.
+///
+/// The grammar has already said the elements are not wanted - it named none -
+/// and over a large input holding them is the memory cost, not the parse. That
+/// is the same reason [`fold_recording`] exists.
+/// `tests/repetition_memory_test.rs` pins the memory; `benches/repetition.rs`
+/// measures the time, which on a short repetition is about half.
+///
+/// The loop is [`repeat_recording_bounded`]'s, with the `Vec` replaced by a
+/// counter - see the note there on why it is written out twice.
+pub fn repeat_counting<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+    min: usize,
+    p: P,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<usize, ErrMode<E>>
+where
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+{
+    repeat_counting_bounded(min, None, p)
+}
+
+/// The bounded form of [`repeat_counting`].
+pub fn repeat_counting_bounded<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+    min: usize,
+    max: Option<usize>,
+    mut p: P,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<usize, ErrMode<E>>
+where
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+{
+    // The bound as a plain number, tested once per element instead of an
+    // `Option` unwrapped every time round.
+    let cap = max.unwrap_or(usize::MAX);
+    move |input| {
+        let mut seen = 0usize;
+        loop {
+            if seen >= cap {
+                break;
+            }
+            let cp = input.checkpoint();
+            let start = input.current_token_start();
+            match p.parse_next(input) {
+                Ok(_) => {
+                    if input.current_token_start() == start {
+                        if seen < min {
+                            seen += 1;
+                            continue;
+                        }
+                        input.reset(&cp);
+                        break;
+                    }
+                    seen += 1;
+                }
+                Err(ErrMode::Backtrack(e)) => {
+                    let e = e.item(seen + 1);
+                    if seen < min {
+                        return Err(ErrMode::Backtrack(e));
+                    }
+                    e.record(&mut input.state);
+                    input.reset(&cp);
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(seen)
     }
 }
 
