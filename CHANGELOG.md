@@ -44,6 +44,21 @@
 
 ### Fixed
 
+- **A repetition whose elements nobody names no longer collects them.** `x*`
+  and `x+` without a binding, `x{n,m}` without one, and `count(x)` built a
+  `Vec` and then threw it away or asked only for its length. The grammar had
+  already said the elements were not wanted - it named none - so
+  `rt::repeat_counting` counts instead. Memory goes from proportional to the
+  input to constant: over 200 000 elements the peak drops from ~5.2 MB to
+  nothing, which `tests/repetition_memory_test.rs` pins with a counting
+  allocator. Time, measured with `benches/repetition.rs` on one machine: a
+  short repetition roughly halves (`digit{1,2}` discarded 49 ns -> 23 ns,
+  `digit*` over five 93 ns -> 34 ns); over 200 000 elements the collecting and
+  counting forms are within a few percent of each other. Bounded repetitions
+  that *do* bind their elements gained about 12% on the way (`digit{1,2}`
+  50 ns -> 44 ns), because the upper bound is now a plain number rather than an
+  `Option` unwrapped once per element.
+
 - **An `extern rule` behind an attribute is parseable.** The grammar body chose
   between a rule and an `extern rule` by peeking at the first token, but both
   parse attributes first, so `/// doc` in front of a declaration routed it to

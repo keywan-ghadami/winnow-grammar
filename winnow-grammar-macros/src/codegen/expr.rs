@@ -910,12 +910,12 @@ impl<'a> Codegen<'a> {
                 if !is_lexical {
                     if is_discarded {
                         // Using |i: &mut _| WS(i) explicitly since WS is a function and preceded requires a Parser.
-                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
+                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
                     } else {
                         quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
                     }
                 } else if is_discarded {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, #p).map(|_| ()) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, #p).map(|_| ()) }
                 } else {
                     quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, #p) }
                 }
@@ -924,12 +924,12 @@ impl<'a> Codegen<'a> {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 if !is_lexical {
                     if is_discarded {
-                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(1, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
+                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(1, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
                     } else {
                         quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(1, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
                     }
                 } else if is_discarded {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(1, #p).map(|_| ()) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(1, #p).map(|_| ()) }
                 } else {
                     quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(1, #p) }
                 }
@@ -948,7 +948,7 @@ impl<'a> Codegen<'a> {
                     quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p) }
                 };
                 if is_discarded {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording_bounded(#min, #max, #inner).map(|_| ()) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting_bounded(#min, #max, #inner).map(|_| ()) }
                 } else {
                     quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording_bounded(#min, #max, #inner) }
                 }
@@ -992,9 +992,9 @@ impl<'a> Codegen<'a> {
             ModelPattern::Count { pattern, .. } => {
                 let p = self.generate_parser_expr(pattern, is_lexical, false);
                 if !is_lexical {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|v: Vec<_>| v.len()) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
                 } else {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, #p).map(|v: Vec<_>| v.len()) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, #p) }
                 }
             }
             ModelPattern::Fold {

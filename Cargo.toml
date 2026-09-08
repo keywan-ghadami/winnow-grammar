@@ -45,3 +45,7 @@ harness = false
 [[bench]]
 name = "where"
 harness = false
+
+[[bench]]
+name = "repetition"
+harness = false
