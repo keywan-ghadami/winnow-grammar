@@ -51,11 +51,29 @@ elsewhere.
     does not. If the two-step proves clumsy in practice, that is the change to
     make, and the count is what makes it possible.
 
-## 3. Map `winnow::stream::Location` to Proper Spans
+## 3. Spans — **byte offsets kept, the place made reachable**
 
-*   **Current State:** The `@` binding syntax uses `.with_span()` which returns a `Range<usize>`. The code currently assumes the user will manually handle this `Range` or that it is sufficient.
-*   **The Issue:** In many parser use cases (especially when using `LocatingSlice`), users want a rich `Span` object that might include line/column information, or they might be using a custom input type where `Range<usize>` isn't the natural span representation. The code comment explicitly states: *"This is where 'Map winnow::stream::Location to spans' task comes in... winnow-grammar currently just returns the Range as the 'span'."*
-*   **Goal:** Make the span type configurable or smarter. If the input is `LocatingSlice`, we might want to return the slice itself or a custom `Span` struct. We need to verify if `winnow::stream::Location` is being fully utilized to provide rich location data (line/col) vs just raw byte offsets.
+The item asked whether `@` should yield something richer than a
+`Range<usize>`, since users want line and column. It should not, and the reason
+is where the two things live: byte offsets are what `LocatingSlice` knows, they
+cost nothing to produce and they slice the source directly, while line and
+column **cannot be computed without the source** - computing them during the
+parse would mean scanning back for newlines once per span, for spans nobody
+looks at.
+
+So they are a presentation step, and that step now has a home:
+`winnow_grammar::span` with `line_column(source, offset)` and a `SpanExt` for
+`Range<usize>` (`text(source)`, `line_columns(source)`). The error engine's own
+`ErrorCore::line_column` calls it, so one implementation serves both and a span
+and a message cannot disagree about where something is -
+`tests/explicit_span_test.rs` asserts that, along with character-counted
+columns and clamping past the end.
+
+`winnow::stream::Location` is fully used as it is: `.with_span()` is what
+produces the offsets, and `LocatingSlice` has nothing beyond them to give.
+Making the span type *configurable* is what remains conceivable and is not
+proposed: it would put a type parameter in every rule that binds a span, for
+something a caller can compute from the offsets in one call.
 
 ## 4. Interning: where the time goes, and what is still open
 

@@ -199,12 +199,11 @@ impl ParseError {
     }
 
     /// Line and column (1-based) of [`ErrorCore::offset`] in `source`.
+    ///
+    /// The same function a grammar's own spans use -
+    /// [`span::line_column`](crate::span::line_column).
     pub fn line_column(&self, source: &str) -> (usize, usize) {
-        let end = self.offset.min(source.len());
-        let before = &source[..end];
-        let line = before.matches('\n').count() + 1;
-        let column = before.rsplit('\n').next().map_or(0, |z| z.chars().count()) + 1;
-        (line, column)
+        crate::span::line_column(source, self.offset)
     }
 
     /// The complete message with position, as a user should see it.

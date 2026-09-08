@@ -69,6 +69,39 @@ Match a sequence of patterns. Use `name:pattern` to bind the result to a variabl
 # }
 ```
 
+### Spans: where something was
+
+`pattern @ name` binds the byte range the pattern matched, beside the value:
+
+```rust,ignore
+pub assignment -> Node = n:raw_ident @ at "=" v:expr -> { Node::new(n, at, v) }
+```
+
+`at` is a `Range<usize>` of byte offsets into the input. A whole rule's span is
+`@=` before the action, which binds `_span`:
+
+```rust,ignore
+pub node -> Node @= a:raw_ident -> { Node::new(a, _span) }
+```
+
+The range excludes whitespace the rule's wrapper consumed before it: a span
+starts where the pattern does.
+
+**Byte offsets, and where a person looks.** Offsets are what the input knows,
+they cost nothing to produce, and they slice the source. Line and column need
+the source and a scan, so they are a step you take on the spans you actually
+report:
+
+```rust,ignore
+use winnow_grammar::span::{line_column, SpanExt};
+
+assert_eq!(at.text(source), "counter");
+let ((line, col), _end) = at.line_columns(source);
+```
+
+It is the same function the error messages use, so a span and a diagnostic
+cannot disagree about where something is.
+
 ### Alternatives
 Match one of several alternatives using `|`. The first one that matches wins.
 

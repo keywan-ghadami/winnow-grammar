@@ -17,6 +17,7 @@ pub mod intern_cache;
 pub mod interner;
 /// Runtime helpers for the generated code.
 pub mod rt;
+pub mod span;
 pub mod state;
 pub mod test_result;
 pub mod testing;

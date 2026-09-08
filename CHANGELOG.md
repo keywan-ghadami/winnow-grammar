@@ -275,6 +275,16 @@
   grammar parser because parsing runs before the backend is known; an arity on
   `BuiltIn` is the general fix (`feature-requests.md` §1).
 
+- **`winnow_grammar::span`: byte offsets, and the place they name.** A `@`
+  binding yields a `Range<usize>` and keeps doing so - offsets are what
+  `LocatingSlice` knows, they cost nothing and they slice the source, while
+  line and column cannot be computed without the source at all. That step now
+  has a home: `line_column(source, offset)`, and a `SpanExt` for
+  `Range<usize>` with `text(source)` and `line_columns(source)`.
+  `ErrorCore::line_column` calls the same function, so a span and a message
+  cannot disagree about where something is. Spans are also documented in
+  SYNTAX.md for the first time, `@` and `@=` both.
+
 - **`recover(…)` keeps what it swallowed.** It was
   `alt((body.map(Some), (skip, sync).map(|_| None)))`, which discarded the
   failure where it was produced, so a parse could recover from ten errors and
