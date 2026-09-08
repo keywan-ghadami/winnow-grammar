@@ -210,11 +210,18 @@ Portable built-ins map to specific `winnow` return types:
 
 | Portable Primitive | Return Type | Notes |
 |---|---|---|
-| `ident` | `String` | Consumes leading whitespace. |
-| `string` | `String` | |
+| `ident` | `Symbol` | Interned in the context's interner - `intern(raw_ident)`. |
+| `raw_ident` | `&'a str` | The same characters, not interned. |
+| `intern(p)` | `Symbol` | Interns whatever `p` yields. |
+| `string` | `&'a str` | Borrowed from the input, quotes excluded. |
+| `alpha1`, `digit1` | `&'a str` | |
 | `u32`, `i32`, `f64` | `u32`, `i32`, `f64` | |
 | `bool` | `bool` | |
-| `alpha`, `digit` | `char` | |
+| `char`, `any`, `digit` | `char` | |
+
+A `Symbol` is a 4-byte id; `ctx.interner.resolve(sym)` gives the text back.
+Symbols are only meaningful against the interner that made them - see the
+`par_fold` note in [SYNTAX.md](SYNTAX.md).
 
 ## Diagnostics
 

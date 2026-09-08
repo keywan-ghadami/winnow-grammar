@@ -1,9 +1,9 @@
 # ADR 18: Interning — One Builtin, Two Escape Hatches, No Operator
 
-**Status:** Proposed. **Date:** 2026-09-08.
-**Tests:** `tests/shared_interner_test.rs` (§3). The three paths below were
-verified by hand against the current tree; `tests/interning_test.rs` covers
-only the first of them.
+**Status:** Accepted, implemented. **Date:** 2026-09-08.
+**Tests:** `tests/intern_test.rs` and `tests/ui/intern_arity.rs` (§1),
+`tests/state_action_test.rs` (§2), `tests/shared_interner_test.rs` (§3).
+`tests/interning_test.rs` keeps covering `ident` itself.
 
 ## Context
 
@@ -85,14 +85,34 @@ validated recursively. Nothing else changes: to every other pass `intern(p)`
 is an ordinary `RuleCall` with an argument, which the frame and nullability
 analyses already handle.
 
-The generated code is the shape `ident` already has:
+One thing the estimate missed, found in implementation: which builtins may
+take **positional** arguments is a hard-coded pair in the grammar parser
+(`separated`, `repeated`), because parsing runs before the backend is known -
+`parse_grammar` is generic over `B`, `syn::parse2` is not. Everything else
+followed by `(...)` parses as a *group*, so `intern(until(";"))` reached
+codegen as a call with zero arguments next to a parenthesised pattern. The
+implementation adds `intern` to that pair and names the general fix where it
+belongs: an arity on `BuiltIn`, with disambiguation from the backend's own
+list - `feature-requests.md` §1.
+
+The parser it generates lives in `rt`, not in the macro:
 
 ```rust
-(|i: &mut ParseInput<'a, S>| -> Result<Symbol, ErrMode<E>> {
-    let s = #inner.parse_next(i)?;
-    Ok(i.state.interner.intern_string(s.as_ref()))
-})
+pub fn intern<'a, S, O: AsRef<str>, P, E>(mut p: P)
+    -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Symbol, ErrMode<E>>
+where P: Parser<ParseInput<'a, S>, O, ErrMode<E>>
+{
+    move |input| {
+        let text = p.parse_next(input)?;
+        Ok(input.state.interner.intern_string(text.as_ref()))
+    }
+}
 ```
+
+That is `rt::expected`'s shape, so the codegen arm is one line
+(`rt::intern(#inner)`) and the behaviour is documented and testable where the
+rest of the runtime is. `intern` with any other number of arguments is a
+compile error pointing at the word `intern`.
 
 which makes the second half of this decision free: **`ident` is
 `intern(raw_ident)`**. The builtin keeps its name and its return type, but its
@@ -119,6 +139,15 @@ is where a grammar puts Rust anyway. That path stays, and this ADR fixes it:
 the injection becomes `let _state = &mut #input.state;`, gains a regression
 test, and is documented as what it is — the general way an action reaches
 `ParseContext`, of which the interner is one field.
+
+What the hatch does *not* reach, found while testing it: `_state.user_state`.
+A generated rule is generic over `S`, so the field is opaque there - the
+`lazy_diagnostics` tests already say "a grammar action cannot do this to a
+generic `S`" and write their state-mutating passes by hand. `_state` is
+therefore the *context's own* fields: the interner above all, and `fold`,
+`diagnose` and `rules` beside it. `tests/state_action_test.rs` covers all
+three injection sites - a plain variant, one with a span binding, and the
+left-recursive loop body.
 
 Two known weaknesses of the mechanism are recorded rather than fixed. The
 trigger is a substring search over the action's token text, so `_state` inside
@@ -185,7 +214,33 @@ identity, e.g. `Arc::ptr_eq` on the backend), and tying `Symbol` to its
 interner in the type system. The second is the real fix and the expensive
 one — it is what would turn a silent wrong answer into a compile error.
 
-### 4. What is not decided here
+### 4. Why `parse_<rule>_pieces` takes a factory - the reason is not the interner
+
+A claim worth correcting, because it makes the trap in §3 look designed away:
+that `parse_<rule>_pieces` takes a *context factory* rather than a context "so
+that the interner can be shared through an `Arc`, per ADR 14". The first half
+is right - the parameter is `impl Fn() -> ParseContext<S> + Sync`, called once
+per piece. The reason is not.
+
+The factory exists because the rest of the context is **per-parse mutable
+state**, not shared state: `furthest` (the recorded error), `rules` (the live
+rule stack), `fold` (`FoldProgress`), `diagnose` and `user_state`. Every piece
+parses through `&mut` on its own, concurrently, so they cannot have one
+context between them. Sharing the interner is what the closure *permits* -
+by cloning an `Arc` into each fresh context - not what it is for. §3 is the
+evidence: the factory has been there since ADR 16 and nothing has ever shared
+anything through it.
+
+It is worth noticing that the factory is not forced by the sharing
+requirement either. `ParseContext` is `Clone` and `S: Clone` is already a
+bound, so an API taking one context and cloning it per piece would carry the
+interner's `Arc` into every piece *by default*, and the trap in §3 would not
+exist. What the factory buys instead is a `user_state` that starts fresh per
+piece rather than being copied - a real choice, made silently. Not changed
+here: the signature is public API, and the documented example plus the test
+of §3 cost nothing and break nobody.
+
+### 5. What is not decided here
 
 **No return-type coercion.** A rule declared `-> Symbol` whose body yields
 `&str` could intern implicitly. Rejected: it would make the interner reachable
@@ -219,9 +274,12 @@ only for identifiers) without depending on it in either direction.
 * **Symbols are meaningful only against the interner that made them** — see
   §3, which this ADR promotes from a footnote to a decision because `intern`
   puts symbols in front of many more grammars than `ident` did.
-* **Documentation debt this uncovered, to be paid with the implementation.**
-  `README.md` lists `ident` as returning `String` — it returns `Symbol`.
-  `SYNTAX.md`'s builtin table describes `ident` as "an identifier" without
-  saying it interns, and never mentions that `raw_ident` is the
-  non-interning twin. Neither `_state` nor `extern rule` appears in either
-  document, although both are implemented and one of them works.
+* **Documentation debt this uncovered, paid with the implementation.**
+  `README.md`'s return-type table said `ident` returns `String` (it returns
+  `Symbol`) and `string` returns `String` (it borrows `&'a str`); both are
+  corrected, and `raw_ident` and `intern` are listed beside them.
+  `SYNTAX.md` gains an interning section: what a `Symbol` is, that `ident` is
+  `intern(raw_ident)`, that `intern` normalises nothing, and that `_state` is
+  where normalising belongs. `extern rule` remains undocumented - it works
+  (a hand-written parser reaches `i.state.interner` like any generated one),
+  and documenting it is its own change.

@@ -44,6 +44,24 @@
 
 ### Fixed
 
+- **`_state` in an action block did not compile.** The code generator injects a
+  binding for the `ParseContext` when an action names `_state`, and injected
+  `winnow::stream::Stateful::state_mut(input)` - a method winnow 0.7 does not
+  have (`Stateful` keeps its state in a public field). Every grammar that named
+  `_state` in an action failed with `no function or associated item named
+  'state_mut'`; no test named it and no document mentioned it, so the breakage
+  went unnoticed. The injection is now `&mut input.state`, and
+  `tests/state_action_test.rs` covers all three injection sites - a plain
+  variant, one with a span binding, and the left-recursive loop body. Note that
+  `_state.user_state` is still not usable from an action: a generated rule is
+  generic over the state type, so only the context's own fields (the interner
+  among them) have a known type there. See `docs/adr/adr18-interning-surface.md`
+  §2.
+
+- **`README.md` documented the wrong return types for two built-ins.** `ident`
+  returns `Symbol`, not `String`, and `string` borrows `&'a str` rather than
+  allocating a `String`.
+
 - **`Symbol`'s round-trip was off by one, so `resolve` returned the wrong text.**
   `Symbol::from_spur` stored `Spur::into_inner()` (the raw key, already
   `index + 1`) while `into_spur` passed that value to `Spur::try_from_usize`,
@@ -84,6 +102,30 @@
 - Action blocks may contain statements (`-> { let x = …; x }`).
 
 ### Added
+
+- **`intern(pattern)`: a `Symbol` from any text a grammar can parse.** ADR 18.
+  Interning used to be reachable only through `ident`, so a grammar that wanted
+  a symbol for a field value, a quoted string or a rule of its own had to leave
+  the DSL. `intern(p)` runs `p` and interns what it yields (anything
+  `AsRef<str>`): `intern(until(";"))`, `intern(string)`, `intern(my_rule)`.
+  **`ident` is now exactly `intern(raw_ident)`** - the same combinator
+  (`rt::intern`), not a second copy of it. `intern` normalises nothing; an
+  action block reaching the context as `_state` is where normalising belongs.
+  `intern` with any other number of arguments is a compile error pointing at
+  the word `intern`. It is also the first built-in besides `separated` and
+  `repeated` to take a positional argument, which is a hard-coded list in the
+  grammar parser because parsing runs before the backend is known; an arity on
+  `BuiltIn` is the general fix (`feature-requests.md` §1).
+
+- **The shared interner of ADR 14 has a worked example and a test.**
+  `parse_<rule>_pieces` calls its `new_context` closure once per piece, so
+  `ParseContext::default` - what every call site passed, including the
+  documentation - gives each piece an interner of its own, and symbols from two
+  pieces are not comparable: two different words can share an id, one word can
+  have two, and nothing fails. `tests/shared_interner_test.rs` shows the closure
+  that clones one interner into every piece, and pins the fresh-per-piece
+  behaviour beside it; `SYNTAX.md` gains the condition next to its
+  `parse_FILE_pieces` example. ADR 18 §3.
 
 - **`#[frame]` and `par_fold(rule, init, step, merge)`: parsing in pieces.**
   ADR 16. A rule marked `#[frame]` claims it can be found from any offset by

@@ -213,7 +213,9 @@ The following primitives are "portable" and expected to be available in all back
 
 | Parser | Description |
 |---|---|
-| `ident` | An identifier (e.g., variable name). |
+| `ident` | An identifier (e.g., variable name), interned - a `Symbol`. |
+| `raw_ident` | The same characters, borrowed from the input, not interned. |
+| `intern(p)` | Runs `p` and interns its text: `Symbol`. See below. |
 | `string` | A string literal (same as `lit_str`). |
 | `u32` | Unsigned 32-bit integer. |
 | `i32` | Signed 32-bit integer. |
@@ -225,6 +227,37 @@ The following primitives are "portable" and expected to be available in all back
 | `eof` | End of input. |
 
 *Note: Backends may provide additional specialized built-ins.*
+
+### Interning: `ident` and `intern(p)`
+
+`ident` returns a `Symbol` - a 4-byte id for the text, taken from the
+interner the `ParseContext` carries. Two occurrences of the same identifier
+in one parse are the same `Symbol`, so a consumer compares ids instead of
+strings; `ctx.interner.resolve(sym)` gives the text back.
+
+`intern(p)` is the general form, and `ident` is exactly `intern(raw_ident)`.
+The argument is an ordinary pattern whose output is text, so anything that
+yields `&str` can be interned - a field value, a quoted string, a rule of
+your own:
+
+```rust,ignore
+#[lexical]
+pub city -> Symbol = s:intern(until(";")) -> { s }
+pub key  -> Symbol = s:intern(string)     -> { s }
+```
+
+`intern` is a `Symbol` factory, nothing more: it does not trim, lower-case or
+otherwise normalise. An action block reaches the context directly as
+`_state` when you need that - `-> { _state.interner.intern_string(&s.to_lowercase()) }`.
+Note that `_state.user_state` is *not* usable from an action: a generated rule
+is generic over the state type, so only the context's own fields (the
+interner among them) have a known type there.
+
+Two properties come from the interner rather than from `intern`. An
+alternative that interns and then backtracks leaves its entry behind - no
+symbol is ever wrong, the interner just holds more than the result names. And
+a symbol is meaningful only against the interner that made it, which is what
+the `par_fold` note below is about.
 
 ## Operators
 
