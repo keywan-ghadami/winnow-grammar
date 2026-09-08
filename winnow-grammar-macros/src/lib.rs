@@ -22,6 +22,11 @@ impl Backend for WinnowBackend {
                 name: "raw_ident",
                 return_type: "&'a str",
             },
+            // Takes one argument - the pattern whose text is interned.
+            BuiltIn {
+                name: "intern",
+                return_type: "Symbol",
+            },
             BuiltIn {
                 name: "string",
                 return_type: "&'a str",

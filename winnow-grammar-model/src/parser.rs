@@ -1421,8 +1421,14 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
             } else {
                 String::new()
             };
-            let is_builtin =
-                is_simple_ident && (ident_str == "separated" || ident_str == "repeated");
+            // Which builtins may take positional arguments is a hard-coded
+            // list, because parsing happens before the backend is known
+            // (`parse_grammar` is generic over `B`, `syn::parse2` is not).
+            // The general fix is an arity on `BuiltIn` and disambiguation
+            // from the backend's own list - see `feature-requests.md` §1.
+            // Until then a builtin with an argument is added here.
+            let is_builtin = is_simple_ident
+                && (ident_str == "separated" || ident_str == "repeated" || ident_str == "intern");
 
             // Note: `is_scoped` (e.g. `foo::bar(...)`) is NO LONGER a heuristic for args.
             // Explicitly: only built-ins or named args or templates allowed.

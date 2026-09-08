@@ -666,16 +666,31 @@ impl<'a> Codegen<'a> {
         let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<E> };
         let input_type = quote_spanned! {span=> ::winnow_grammar::ParseInput<'a, S> };
 
+        // `raw_ident`'s characters, shared with `ident` - which is
+        // `intern(raw_ident)` and nothing else (ADR 18 §1).
+        let raw_ident = quote_spanned! {span=>
+            ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_')
+        };
+
         let p = match name_str.as_str() {
-            "raw_ident" => quote_spanned! {span=>
-                ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_')
-            },
-            "ident" => quote_spanned! {span=>
-                (|input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<_, ::winnow::error::ErrMode<E>> {
-                    let s: &str = ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_').parse_next(input)?;
-                    let symbol = input.state.interner.intern_string(s);
-                    Ok(symbol)
-                })
+            "raw_ident" => raw_ident,
+            "ident" => quote_spanned! {span=> ::winnow_grammar::rt::intern(#raw_ident) },
+            // `intern(p)`: the one builtin that takes an argument. The
+            // argument is an ordinary pattern, so `intern(until(";"))` and
+            // `intern(my_rule)` are the same shape as `intern(string)`.
+            "intern" => match args {
+                [arg] => {
+                    let inner = self.generate_argument_expr(arg, is_lexical);
+                    quote_spanned! {span=> ::winnow_grammar::rt::intern(#inner) }
+                }
+                _ => {
+                    let msg = format!(
+                        "`intern` takes exactly one pattern to intern, got {}",
+                        args.len()
+                    );
+                    return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg)
+                        .to_compile_error();
+                }
             },
             "string" => quote_spanned! {span=>
                  delimited(

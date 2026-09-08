@@ -537,6 +537,37 @@ where
     }
 }
 
+/// `intern(p)` - run `p` and intern what it yields, in the interner the
+/// context carries (ADR 14). The whole of `Symbol`'s value is that a parse
+/// which sees the same text twice returns the same 4-byte id twice, so the
+/// consumer compares ids instead of strings.
+///
+/// `ident` is `intern(raw_ident)`, and that is the whole of its definition:
+/// this combinator is the general form of a thing the `ident` builtin used
+/// to do in one hard-coded place (ADR 18).
+///
+/// The output only has to be `AsRef<str>`, so `intern(string)`,
+/// `intern(until(";"))` and `intern(alpha1)` all work; interning something
+/// that is not text is a type error at the call site.
+///
+/// Two properties the caller inherits, both from the interner and neither
+/// from here: a symbol means nothing against a *different* interner (see
+/// `rt::fold_pieces`, which builds one context per piece), and an
+/// alternative that interns and then backtracks leaves its entry behind -
+/// no symbol is ever wrong, the interner just holds more than the result
+/// names.
+pub fn intern<'a, S: Clone + std::fmt::Debug, O: AsRef<str>, P, E>(
+    mut p: P,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<crate::Symbol, ErrMode<E>>
+where
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+{
+    move |input| {
+        let text = p.parse_next(input)?;
+        Ok(input.state.interner.intern_string(text.as_ref()))
+    }
+}
+
 /// Gives a builtin an expectation (`identifier`, `integer literal`) if it
 /// failed without one - winnow's own primitives only report the position.
 pub fn expected<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(

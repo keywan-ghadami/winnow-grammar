@@ -1,0 +1,11 @@
+error: `intern` takes exactly one pattern to intern, got 0
+ --> tests/ui/intern_arity.rs:7:29
+  |
+7 |         pub r -> Symbol = s:intern() -> { s }
+  |                             ^^^^^^
+
+error: `intern` takes exactly one pattern to intern, got 2
+  --> tests/ui/intern_arity.rs:13:29
+   |
+13 |         pub r -> Symbol = s:intern(alpha1, digit1) -> { s }
+   |                             ^^^^^^
