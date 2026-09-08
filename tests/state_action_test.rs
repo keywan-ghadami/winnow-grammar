@@ -69,3 +69,36 @@ fn state_in_a_left_recursive_action() {
         .parse_test("a + b + c")
         .assert_success_with(|s, ctx| assert_eq!(ctx.interner.resolve(*s), "abc"));
 }
+
+// The binding is injected unconditionally, so the word `_state` in a comment
+// or a string literal is just text - it used to trigger the injection, and an
+// action that wanted the name for itself could not have it.
+grammar! {
+    grammar StateIsNotAKeyword {
+        pub mentions -> &'a str = w:alpha1 -> {
+            // _state in a comment
+            let _ = "_state in a string";
+            w
+        }
+
+        // An action may bind the name itself; the injected one is shadowed.
+        pub shadows -> usize = w:alpha1 -> {
+            let _state = w.len();
+            _state * 2
+        }
+    }
+}
+
+#[test]
+fn the_word_state_in_a_comment_or_a_string_is_just_text() {
+    StateIsNotAKeyword::parse_mentions()
+        .parse_test("abc")
+        .assert_success_is("abc");
+}
+
+#[test]
+fn an_action_may_bind_the_name_itself() {
+    StateIsNotAKeyword::parse_shadows()
+        .parse_test("abcd")
+        .assert_success_is(8);
+}

@@ -249,15 +249,77 @@ pub key  -> Symbol = s:intern(string)     -> { s }
 `intern` is a `Symbol` factory, nothing more: it does not trim, lower-case or
 otherwise normalise. An action block reaches the context directly as
 `_state` when you need that - `-> { _state.interner.intern_string(&s.to_lowercase()) }`.
-Note that `_state.user_state` is *not* usable from an action: a generated rule
-is generic over the state type, so only the context's own fields (the
-interner among them) have a known type there.
+Every action gets `_state`, whether or not it names one; the `_` prefix keeps
+an unused one quiet, and an action may bind the name itself, which shadows it.
+
+**What `_state` does not reach: `user_state`.** A generated rule is generic
+over the state type, so `_state.user_state` has type `S` in an action and
+nothing can be done with it - only the context's own fields (`interner`,
+`fold`, `diagnose`, `rules`) have a known type there. A grammar that has to
+touch its user state does it in a hand-written parser, declared as an
+`extern rule` (below), where the state type is concrete. Pinning `S` per
+grammar so that actions could use it is not implemented.
 
 Two properties come from the interner rather than from `intern`. An
 alternative that interns and then backtracks leaves its entry behind - no
 symbol is ever wrong, the interner just holds more than the result names. And
 a symbol is meaningful only against the interner that made it, which is what
 the `par_fold` note below is about.
+
+## Hand-written Parsers: `extern rule`
+
+A parser that is easier to write in Rust than in the DSL - a scanner of your
+own, whitespace handling with a rule the grammar cannot express, anything that
+has to touch the user state - is declared in the grammar and written next to
+it:
+
+```rust,ignore
+use winnow::token::take_till;
+use winnow::Parser;
+use winnow_grammar::{error::ParseError, grammar, ParseInput, Symbol};
+
+// The signature: winnow's own, over `ParseInput`, returning this crate's
+// `ParseError` - not `ErrMode<ParseError>`, and not the grammar's error type
+// parameter. The generated code converts it (`Diagnostics::from_parse_error`)
+// and drops it in the fast pass, so a hand-written parser costs nothing there.
+fn city<'a, S: Clone + std::fmt::Debug>(i: &mut ParseInput<'a, S>) -> Result<Symbol, ParseError> {
+    let s: &str = take_till(1.., ';').parse_next(i)?;
+    Ok(i.state.interner.intern_string(s))   // the context is reachable here
+}
+
+grammar! {
+    grammar Cities {
+        // Declares that `city` exists and what it returns. Without this the
+        // validator rejects the call as an undefined rule.
+        extern rule city -> Symbol;
+
+        pub row -> (Symbol, i32) = c:city ";" t:i32 -> { (c, t) }
+    }
+}
+```
+
+The declaration is `extern rule name -> Type;`, optionally with parameters
+(`extern rule pair(a, b) -> (A, B);`) and generics. It only tells the validator
+the name exists; the call site emits a plain path, so the function has to be in
+scope where the `grammar!` macro is.
+
+A hand-written parser runs in both passes of ADR 17 (the fast one and the
+diagnosing replay), so the same rules apply to it as to an action: it may
+intern freely - that is idempotent - and anything else it mutates has to
+tolerate running twice.
+
+## Backends
+
+The DSL is shared with other backends in principle - the model crate
+(`winnow-grammar-model`) parses and validates a grammar without knowing which
+one generates code. In practice **`winnow-grammar` is the only backend, and
+the DSL currently assumes it.** The clearest place this shows is the built-ins
+that take a positional argument: which names those are is a fixed list in the
+grammar parser (`separated`, `repeated`, `intern`), because parsing runs
+before the backend is known. A second backend with a different set would need
+that list to come from the backend - an arity on `BuiltIn` and a parse that
+carries it (`feature-requests.md` §1). Until such a backend exists, the list
+stays where it is.
 
 ## Operators
 

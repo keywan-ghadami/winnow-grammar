@@ -44,7 +44,8 @@
 
 ### Fixed
 
-- **`_state` in an action block did not compile.** The code generator injects a
+- **`_state` in an action block did not compile, and was detected by a text
+  search.** The code generator injects a
   binding for the `ParseContext` when an action names `_state`, and injected
   `winnow::stream::Stateful::state_mut(input)` - a method winnow 0.7 does not
   have (`Stateful` keeps its state in a public field). Every grammar that named
@@ -55,8 +56,12 @@
   variant, one with a span binding, and the left-recursive loop body. Note that
   `_state.user_state` is still not usable from an action: a generated rule is
   generic over the state type, so only the context's own fields (the interner
-  among them) have a known type there. See `docs/adr/adr18-interning-surface.md`
-  §2.
+  among them) have a known type there; a grammar that has to touch its user
+  state does it in an `extern rule`. The binding is now injected into *every*
+  action rather than into those whose token text contains `_state`: that search
+  fired on the word inside a string literal or a comment, and made the
+  binding's name a hidden part of the API. An action may bind the name itself,
+  which shadows the injected one. See `docs/adr/adr18-interning-surface.md` §2.
 
 - **`README.md` documented the wrong return types for two built-ins.** `ident`
   returns `Symbol`, not `String`, and `string` borrows `&'a str` rather than
@@ -116,6 +121,13 @@
   `repeated` to take a positional argument, which is a hard-coded list in the
   grammar parser because parsing runs before the backend is known; an arity on
   `BuiltIn` is the general fix (`feature-requests.md` §1).
+
+- **`extern rule` is documented.** The declaration existed and worked - a
+  hand-written parser reaches `i.state.interner` like any generated one - but
+  appeared in no document. SYNTAX.md gains the section, including the signature
+  it needs (`fn(&mut ParseInput<'a, S>) -> Result<O, ParseError>`, not
+  `ErrMode<ParseError>`) and the note that it runs in both passes of ADR 17.
+  `tests/extern_rule_test.rs` pins the documented shape.
 
 - **The shared interner of ADR 14 has a worked example and a test.**
   `parse_<rule>_pieces` calls its `new_context` closure once per piece, so

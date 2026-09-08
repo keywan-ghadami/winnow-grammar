@@ -42,15 +42,14 @@ impl<'a> Codegen<'a> {
             }
 
             let action = &v.action;
-            let action_str = action.to_string();
-            let state_injection = if action_str.contains("_state") {
-                // `Stateful` keeps its state in a public field; it has no
-                // `state_mut()`. The binding is `&mut` so that an action can
-                // both read the context and intern into it - ADR 18.
-                quote! { let _state = &mut #input.state; }
-            } else {
-                quote! {}
-            };
+            // Every action gets the context, whether or not it uses it: the
+            // `_` prefix silences the unused binding, and the alternative -
+            // searching the action's token text for `_state` - fired on the
+            // word inside a string literal or a comment and made the binding's
+            // name a hidden part of the API. `&mut` so that an action can both
+            // read the context and intern into it (ADR 18 §2). `Stateful`
+            // keeps its state in a public field; it has no `state_mut()`.
+            let state_injection = quote! { let _state = &mut #input.state; };
 
             let final_expr = if use_with_span && !is_explicit {
                 // Implicit action -> use WithSpan
@@ -104,15 +103,14 @@ impl<'a> Codegen<'a> {
             }
 
             let action = &v.action;
-            let action_str = action.to_string();
-            let state_injection = if action_str.contains("_state") {
-                // `Stateful` keeps its state in a public field; it has no
-                // `state_mut()`. The binding is `&mut` so that an action can
-                // both read the context and intern into it - ADR 18.
-                quote! { let _state = &mut #input.state; }
-            } else {
-                quote! {}
-            };
+            // Every action gets the context, whether or not it uses it: the
+            // `_` prefix silences the unused binding, and the alternative -
+            // searching the action's token text for `_state` - fired on the
+            // word inside a string literal or a comment and made the binding's
+            // name a hidden part of the API. `&mut` so that an action can both
+            // read the context and intern into it (ADR 18 §2). `Stateful`
+            // keeps its state in a public field; it has no `state_mut()`.
+            let state_injection = quote! { let _state = &mut #input.state; };
 
             let final_expr = if use_with_span && !is_explicit {
                 quote! {
@@ -211,15 +209,14 @@ impl<'a> Codegen<'a> {
             }
 
             let action = &v.action;
-            let action_str = action.to_string();
-            let state_injection = if action_str.contains("_state") {
-                // `Stateful` keeps its state in a public field; it has no
-                // `state_mut()`. The binding is `&mut` so that an action can
-                // both read the context and intern into it - ADR 18.
-                quote! { let _state = &mut #input.state; }
-            } else {
-                quote! {}
-            };
+            // Every action gets the context, whether or not it uses it: the
+            // `_` prefix silences the unused binding, and the alternative -
+            // searching the action's token text for `_state` - fired on the
+            // word inside a string literal or a comment and made the binding's
+            // name a hidden part of the API. `&mut` so that an action can both
+            // read the context and intern into it (ADR 18 §2). `Stateful`
+            // keeps its state in a public field; it has no `state_mut()`.
+            let state_injection = quote! { let _state = &mut #input.state; };
 
             let final_expr = if use_with_span && !is_explicit {
                 // If implicit action, use WithSpan.
