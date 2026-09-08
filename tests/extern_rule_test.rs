@@ -14,7 +14,7 @@ fn city<'a, S: Clone + std::fmt::Debug>(i: &mut ParseInput<'a, S>) -> Result<Sym
     let s: &str = take_till(1.., ';').parse_next(i)?;
     // The context is reachable from a hand-written parser like from any
     // generated one - this is the third path to the interner (ADR 18).
-    Ok(i.state.interner.intern_string(s))
+    Ok(i.state.intern(s))
 }
 
 grammar! {

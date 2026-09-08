@@ -249,6 +249,21 @@
   grammar parser because parsing runs before the backend is known; an arity on
   `BuiltIn` is the general fix (`feature-requests.md` §1).
 
+- **A lookup cache in front of the interner.** `ParseContext` carries a
+  direct-mapped table of 512 slots (8 KiB), and `ParseContext::intern` - what
+  `ident` and `intern(…)` call - answers from it before asking the interner.
+  A hit costs **9.4 ns against 22.9**, and a parse of identifier-heavy input
+  runs **43% faster** end to end (`benches/interning.rs`). A miss falls
+  through; the interner remains the only authority on what a `Symbol` is, so
+  the cache cannot make one wrong - `tests/interning_test.rs` checks that,
+  including words that share their first eight bytes, slots displaced 4000
+  times over, a context whose interner is replaced, and a clone.
+  - `_state.intern(…)` in an action is the cached path;
+    `_state.interner.intern_string(…)` still goes straight to the interner and
+    returns the same symbol.
+  - `ParseContext` gains a `#[doc(hidden)]` field for it. Code that builds the
+    struct with `..Default::default()` is unaffected.
+
 - **`state T;`: a grammar declares the state it needs** (ADR 20). Until now
   nothing a grammar could express touched `user_state`: rules are generic over
   the state type, so `_state.user_state` had type `S` in an action, and a

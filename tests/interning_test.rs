@@ -150,3 +150,107 @@ fn a_parse_hands_out_indices_a_caller_can_aggregate_with() {
             assert_eq!(ctx.interner.resolve(*a), "hamburg");
         });
 }
+
+// -----------------------------------------------------------------------------
+// The lookup cache in front of the interner (`TODO.md` §4). It is an
+// optimisation and must therefore be invisible: the same symbols, for every
+// input that could tell the two paths apart.
+// -----------------------------------------------------------------------------
+
+use winnow_grammar::{InternerContext, ParseContext};
+
+/// The interner's answer is the answer. Anything the cache does differently is
+/// a bug, so the test asks both for every word.
+fn agrees(words: &[&str]) {
+    let mut ctx = ParseContext::<()>::default();
+    let reference = InternerContext::new();
+
+    for w in words {
+        let cached = ctx.intern(w);
+        let direct = reference.intern_string(w);
+        assert_eq!(
+            cached.index(),
+            direct.index(),
+            "{w:?} got a different number through the cache"
+        );
+        assert_eq!(ctx.interner.resolve(cached), *w);
+    }
+    assert_eq!(ctx.interner.len(), reference.len());
+}
+
+#[test]
+fn the_cache_returns_what_the_interner_would() {
+    agrees(&["alpha", "beta", "alpha", "gamma", "beta", "alpha"]);
+}
+
+#[test]
+fn words_that_share_their_first_eight_bytes_are_not_confused() {
+    // The cache's tag is the first eight bytes and the length. These words
+    // share both prefix and length, so only the verification against the
+    // interned text can tell them apart - which is why texts longer than
+    // eight bytes are verified.
+    agrees(&[
+        "customer_id",
+        "customer_ip",
+        "customer_id",
+        "customer_ip",
+        "identifier_0001",
+        "identifier_0002",
+        "identifier_0001",
+    ]);
+}
+
+#[test]
+fn a_slot_that_gets_displaced_is_simply_interned_again() {
+    // 4000 distinct words through 512 slots: every slot is overwritten many
+    // times, and nothing may be lost by it.
+    let words: Vec<String> = (0..4000).map(|i| format!("w{i}")).collect();
+    let mut ctx = ParseContext::<()>::default();
+
+    let first: Vec<_> = words.iter().map(|w| ctx.intern(w)).collect();
+    let again: Vec<_> = words.iter().map(|w| ctx.intern(w)).collect();
+
+    assert_eq!(first, again, "a second pass must return the same symbols");
+    assert_eq!(ctx.interner.len(), words.len());
+    for (w, s) in words.iter().zip(&first) {
+        assert_eq!(ctx.interner.resolve(*s), w.as_str());
+    }
+}
+
+#[test]
+fn the_cache_does_not_survive_a_change_of_interner() {
+    // Two interners number from zero independently. A context whose interner
+    // is replaced must not answer from the old one's numbers; `begin_parse`
+    // is where that is noticed, and every parse calls it.
+    let a = InternerContext::new();
+    let b = InternerContext::new();
+    a.intern_string("first"); // so that "shared" gets 1 in `a` and 0 in `b`
+
+    let mut ctx = ParseContext::<()> {
+        interner: a.clone(),
+        ..Default::default()
+    };
+    ctx.begin_parse();
+    let in_a = ctx.intern("shared");
+    assert_eq!(in_a.index(), 1);
+
+    ctx.interner = b.clone();
+    ctx.begin_parse();
+    let in_b = ctx.intern("shared");
+    assert_eq!(in_b.index(), 0, "b numbers from zero");
+    assert_eq!(b.resolve(in_b), "shared");
+}
+
+#[test]
+fn a_cloned_context_answers_for_itself() {
+    // The clone starts with an empty cache - a piece of a `par_fold` has
+    // parsed nothing yet - but the interner is shared, so the symbols agree.
+    let mut ctx = ParseContext::<()>::default();
+    let alpha = ctx.intern("alpha");
+
+    let mut piece = ctx.clone();
+    piece.begin_parse();
+    assert_eq!(piece.intern("alpha"), alpha);
+    assert_eq!(piece.intern("beta").index(), 1);
+    assert_eq!(ctx.interner.len(), 2, "one interner behind both");
+}

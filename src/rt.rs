@@ -678,7 +678,7 @@ where
 {
     move |input| {
         let text = p.parse_next(input)?;
-        Ok(input.state.interner.intern_string(text.as_ref()))
+        Ok(input.state.intern(text.as_ref()))
     }
 }
 

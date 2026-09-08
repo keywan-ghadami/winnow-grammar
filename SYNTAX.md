@@ -286,7 +286,11 @@ bounded run (`intern(text(digit{3}))`) has no text of its own to give until
 
 `intern` is a `Symbol` factory, nothing more: it does not trim, lower-case or
 otherwise normalise. An action block reaches the context directly as
-`_state` when you need that - `-> { _state.interner.intern_string(&s.to_lowercase()) }`.
+`_state` when you need that - `-> { _state.intern(&s.to_lowercase()) }`.
+`_state.intern(…)` is what `ident` and `intern(…)` call: it goes through the
+context's lookup cache, where `_state.interner.intern_string(…)` goes straight
+to the interner and is ~2.5x slower on a word the parse has seen before. Both
+return the same symbol.
 Every action gets `_state`, whether or not it names one; the `_` prefix keeps
 an unused one quiet, and an action may bind the name itself, which shadows it.
 
@@ -416,7 +420,7 @@ use winnow_grammar::{error::ParseError, grammar, ParseInput, Symbol};
 // and drops it in the fast pass, so a hand-written parser costs nothing there.
 fn city<'a, S: Clone + std::fmt::Debug>(i: &mut ParseInput<'a, S>) -> Result<Symbol, ParseError> {
     let s: &str = take_till(1.., ';').parse_next(i)?;
-    Ok(i.state.interner.intern_string(s))   // the context is reachable here
+    Ok(i.state.intern(s))   // the context is reachable here, cache and all
 }
 
 grammar! {

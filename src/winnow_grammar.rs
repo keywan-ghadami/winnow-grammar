@@ -12,6 +12,8 @@ pub use winnow;
 
 /// The error type of the generated parsers and the selection between errors.
 pub mod error;
+#[doc(hidden)]
+pub mod intern_cache;
 pub mod interner;
 /// Runtime helpers for the generated code.
 pub mod rt;
@@ -79,6 +81,15 @@ pub struct FoldProgress {
 pub struct ParseContext<S = ()> {
     /// A thread-safe, shared string interner.
     pub interner: InternerContext,
+    /// A lookup cache in front of the interner, private to this context and
+    /// therefore to this parse - and, under a `par_fold`, to this piece. It
+    /// holds no authority: a miss goes to the interner, which decides.
+    ///
+    /// An implementation detail that has to be visible because callers build
+    /// this struct with a literal; `..Default::default()` fills it and nothing
+    /// else should touch it. See `TODO.md` §4.
+    #[doc(hidden)]
+    pub intern_cache: intern_cache::InternCache,
     /// A placeholder for user-defined state.
     pub user_state: S,
     /// The furthest failure position that a successful backtrack (`x?`, `x*`)
@@ -100,6 +111,7 @@ impl<S: Default> Default for ParseContext<S> {
     fn default() -> Self {
         Self {
             interner: InternerContext::new(),
+            intern_cache: intern_cache::InternCache::new(),
             user_state: S::default(),
             furthest: None,
             rules: Vec::new(),
@@ -119,6 +131,7 @@ impl<S> ParseContext<S> {
     pub fn with_state(user_state: S) -> Self {
         Self {
             interner: InternerContext::new(),
+            intern_cache: intern_cache::InternCache::new(),
             user_state,
             furthest: None,
             rules: Vec::new(),
@@ -158,6 +171,18 @@ impl<S> ParseContext<S> {
         self.furthest = None;
         self.rules.clear();
         self.fold = FoldProgress::default();
+        self.intern_cache.rebind(&self.interner);
+    }
+
+    /// The symbol for `text`, through this context's cache.
+    ///
+    /// What `ident` and `intern(…)` call, and what an action should call
+    /// instead of `_state.interner.intern_string(…)`: the interner is correct
+    /// either way, this one is faster on the words a parse sees more than once
+    /// (`TODO.md` §4).
+    #[inline]
+    pub fn intern(&mut self, text: &str) -> Symbol {
+        self.intern_cache.intern(&self.interner, text)
     }
 
     /// Records a discarded error - following the same ranking as

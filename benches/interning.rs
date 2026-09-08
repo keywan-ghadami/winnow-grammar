@@ -125,12 +125,15 @@ fn bench_interner(c: &mut Criterion) {
     let fresh: Vec<String> = (0..1024).map(|i| format!("identifier_{i}")).collect();
     g.throughput(Throughput::Elements(fresh.len() as u64));
     g.bench_function("cold_1024_distinct_inserts", |b| {
-        b.iter(|| {
-            let interner = InternerContext::new();
-            for w in &fresh {
-                black_box(interner.intern_string(black_box(w)));
-            }
-        })
+        b.iter_batched_ref(
+            InternerContext::new,
+            |interner| {
+                for w in &fresh {
+                    black_box(interner.intern_string(black_box(w)));
+                }
+            },
+            criterion::BatchSize::SmallInput,
+        )
     });
 
     // Long strings: hashing cost grows with length, lookup cost does not.
@@ -148,6 +151,52 @@ fn bench_interner(c: &mut Criterion) {
                 black_box(interner.intern_string(black_box(w)));
             }
         })
+    });
+
+    // The same two cases through `ParseContext::intern`, which is what a parse
+    // calls: the cache in front of the interner (`TODO.md` §4). The pair above
+    // is the control - it goes to the interner directly.
+    g.throughput(Throughput::Elements(words.len() as u64));
+    g.bench_function("cached_hot_set_1024_lookups_8_distinct", |b| {
+        let mut ctx = ParseContext::<()>::default();
+        for w in &words {
+            ctx.intern(w);
+        }
+        b.iter(|| {
+            for w in &words {
+                black_box(ctx.intern(black_box(w)));
+            }
+        })
+    });
+
+    // The verify path: longer than eight bytes, so a hit is confirmed against
+    // the interned text before it is believed.
+    g.throughput(Throughput::Elements(long.len() as u64));
+    g.bench_function("cached_hot_set_256_lookups_long_strings", |b| {
+        let mut ctx = ParseContext::<()>::default();
+        for w in &long {
+            ctx.intern(w);
+        }
+        b.iter(|| {
+            for w in &long {
+                black_box(ctx.intern(black_box(w)));
+            }
+        })
+    });
+
+    // Batched, because building the context allocates the cache and that is
+    // setup, not the miss path being measured.
+    g.throughput(Throughput::Elements(fresh.len() as u64));
+    g.bench_function("cached_cold_1024_distinct_inserts", |b| {
+        b.iter_batched_ref(
+            ParseContext::<()>::default,
+            |ctx| {
+                for w in &fresh {
+                    black_box(ctx.intern(black_box(w)));
+                }
+            },
+            criterion::BatchSize::SmallInput,
+        )
     });
 
     g.finish();

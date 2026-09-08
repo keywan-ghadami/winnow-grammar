@@ -63,6 +63,14 @@ impl Symbol {
     pub fn index(self) -> u32 {
         self.0.get() - 1
     }
+
+    /// The inverse of [`index`](Self::index). Deliberately not public: a
+    /// symbol built from a number nothing interned resolves to whatever
+    /// happens to be at that index, or panics. The cache uses it to rebuild
+    /// what it stored.
+    pub(crate) fn from_index(index: u32) -> Self {
+        Self(NonZeroU32::new(index + 1).expect("index + 1 is never zero"))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +104,13 @@ impl InternerContext {
     /// Whether nothing has been interned yet.
     pub fn is_empty(&self) -> bool {
         self.backend.is_empty()
+    }
+
+    /// Identifies the interner *behind* this handle: two clones of one
+    /// interner share it, two separate ones do not. Used to tell whether a
+    /// cache of symbols still belongs to the interner it was filled from.
+    pub(crate) fn id(&self) -> usize {
+        Arc::as_ptr(&self.backend) as usize
     }
 }
 

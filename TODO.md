@@ -60,38 +60,47 @@ actually beats the default, and that is a dependency decision, not a
 performance one - `ThreadedRodeo::with_hasher(ahash::RandomState::new())` is
 the whole change if we ever want it.
 
-### What should be checked next: a lookup cache in front of the interner
+### The lookup cache in front of the interner — **built**
 
-The hasher targets ~14 of the ~21 ns. A small cache targets **all of it**,
-including the shard lock, on the case that dominates a real parse - the same
-few names again and again.
+`ParseContext` carries a direct-mapped table of 512 slots (8 KiB), and
+`ParseContext::intern` - what `ident` and `intern(…)` call - answers from it
+before it asks the interner. A miss falls through; the interner stays the only
+authority on what a `Symbol` is, so nothing here can make one wrong.
 
-The shape to try, and what to check about it:
+Measured (`benches/interning.rs`, one machine):
 
-* **Where.** A field on `ParseContext`, not on `InternerContext`.
-  `intern_string` takes `&self` and the interner must stay `Sync`; the context
-  is per-parse and reachable as `&mut` from generated code. `rt::fold_pieces`
-  builds one context per piece, so a context-local cache is per-thread for
-  free - no lock, no `thread_local!`.
-* **Shape.** Direct-mapped, fixed size, one slot per bucket: on a miss or a
-  tag mismatch, overwrite and fall through to the interner. As a *cache* it
-  needs no collision handling and cannot be wrong - the interner remains the
-  only authority on what a `Symbol` is.
-* **Tag.** The first eight bytes as a `u64`, masked by length, is the cheap
-  comparison - but only as a fast reject, verified against the real text (or
-  by the interner fallback). `customer_id` and `customer_name` share their
-  first eight bytes. Note that reading eight bytes near the end of the input
-  is out of bounds: a `&'a str` from a caller carries no padding, so the tail
-  needs its own path.
-* **Size.** 32 KB is the wrong target: L1d is 32-48 KB *in total* and the
-  parse also wants the input bytes, the stack and the output in there. Start
-  at 512 entries (~8 KB) and measure 256/512/1024 - the bench has both a
-  small-vocabulary case (`parse/idents`, high hit rate) and the case a cache
-  cannot help (`interner/cold_1024_distinct_inserts`, every string new), which
-  is where its overhead shows.
-* **What to prove.** That the hit path is a few ns rather than ~21; that the
-  miss path costs no more than ~2-3 ns over today; and that symbols are
-  unchanged - the cache is an optimisation, not a semantic.
+| | interner | through the cache | |
+|---|---|---|---|
+| a hit, eight-byte words | 22.9 ns | **9.4 ns** | 2.4x |
+| a hit, 38-byte words (verified) | 30.6 ns | **21.1 ns** | 1.5x |
+| in a parse - `parse/idents/2000` | 162 µs | **97 µs** | **-43%** |
+| in a parse - `parse/rows` (1BRC shape) | 258 µs | **190 µs** | **-26%** |
+
+Two things the design turned on, both found by measuring rather than by
+thinking:
+
+* **The tail must not be copied.** Building the eight-byte tag of a short word
+  with `copy_from_slice` compiles to a call to `memcpy`, which cost more than
+  the whole rest of a lookup: 13.2 ns against 8.1 for the same cache with the
+  bytes folded in a loop instead. The same trap ate two hand-written hashers
+  in §4's first attempt.
+* **The tag needs both ends.** With only the first eight bytes,
+  `identifier_0001` and `identifier_0002` share a tag, so every miss between
+  such words paid a resolve and a comparison before interning anyway - +30 ns
+  on a miss. Mixing in the *last* eight bytes removed it.
+
+What was hoped for and not reached: the miss path was to cost "no more than
+2-3 ns over today". Across five runs it measured between nothing and ~20 ns
+per miss on a ~150 ns insert - a few percent, with part of it the first touch
+of a freshly allocated table, which a real parse pays once rather than per
+batch. Left as it is: the case it costs is the one where the interner's own
+insert dominates, and the case it pays for is every parse that sees a word
+twice.
+
+Not done, and deliberately: the cache is not consulted by
+`InternerContext::intern_string`, which stays the direct path. An action that
+calls `_state.interner.intern_string(…)` gets the interner; `_state.intern(…)`
+gets the cache. Both return the same symbol, and SYNTAX.md says which is which.
 
 ## 5. `fold.base` survived a parse — **fixed**
 
