@@ -114,3 +114,52 @@ fn intern_is_transparent_to_the_frame_check() {
             assert_eq!(ctx.interner.resolve(syms[1]), "Zurich");
         });
 }
+
+// -----------------------------------------------------------------------------
+// Interning is monotone: a branch that interns and then loses leaves its entry
+// behind. Asserted in ADR 18's consequences; here it is measured, because it is
+// also what ADR 20 has to say about writing to a state from an action.
+// -----------------------------------------------------------------------------
+
+grammar! {
+    grammar Backtracks {
+        // The first alternative interns and *then* fails; the second wins.
+        pub value -> Symbol =
+            s:intern(alpha1) "!" -> { s }
+          | s:intern(alpha1) "?" -> { s }
+    }
+}
+
+#[test]
+fn a_backtracked_alternative_has_still_interned() {
+    Backtracks::parse_value()
+        .parse_test("hello?")
+        .assert_success_with(|s, ctx| {
+            assert_eq!(ctx.interner.resolve(*s), "hello");
+            // Both alternatives interned the same text, so this says nothing
+            // yet - the point is the count.
+            assert_eq!(ctx.interner.len(), 1);
+        });
+}
+
+grammar! {
+    grammar Distinct {
+        // The losing branch interns something the winning one never sees.
+        pub value -> Symbol =
+            _a:intern(alpha1) "-" b:intern(alpha1) "!" -> { b }
+          | a:intern(alpha1) "-" _b:intern(digit1) "?" -> { a }
+    }
+}
+
+#[test]
+fn what_a_lost_branch_interned_stays_in_the_interner() {
+    Distinct::parse_value()
+        .parse_test("alpha-12?")
+        .assert_success_with(|s, ctx| {
+            assert_eq!(ctx.interner.resolve(*s), "alpha");
+            // "alpha" from both branches, plus "12" from the winner. If the
+            // losing branch had interned a word of its own it would be here
+            // too: interning is monotone, a backtrack does not undo it.
+            assert_eq!(ctx.interner.len(), 2, "alpha, 12");
+        });
+}

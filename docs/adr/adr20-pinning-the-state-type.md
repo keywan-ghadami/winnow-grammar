@@ -1,6 +1,8 @@
 # ADR 20: `state MyState;` — Giving the Grammar Its Own State Type
 
 **Status:** Proposed, not implemented. **Date:** 2026-09-08.
+**Feasibility:** `tests/adr20_design_test.rs` — the three claims this design
+turns on, compiled rather than argued.
 **Depends on:** ADR 14 (the shared context), ADR 17 (the replay and its
 side-effect contract), ADR 18 §2 (`_state`), ADR 19 §2 (`_pieces_with`).
 **Motivates:** `TODO.md` §6.
@@ -69,19 +71,53 @@ The declaration sits inside the grammar block, in the shape `extern rule`
 already established — a statement, not an attribute, so it is greppable and so
 it does not collide with the rule that an attribute nothing reads is an error.
 
-### What it changes in the generated code
+### `state T;` declares a *requirement*, not an identity
+
+The obvious reading — substitute `T` for `S` everywhere and drop the parameter
+— is the wrong one, and this is the ADR's central choice. Substituting makes
+two grammars with different states permanently incompatible: neither can call
+the other, and no state can serve both. A **bound** costs the same and does
+not:
+
+```rust
+// In the crate, once:
+#[diagnostic::on_unimplemented(
+    message = "the grammar declares `state {T}`, but this parse's state does not provide one",
+    note = "give the parse a state of type `{T}`, or one that implements `StateOf<{T}>`"
+)]
+pub trait StateOf<T> { fn state(&mut self) -> &mut T; }
+impl<T> StateOf<T> for T { fn state(&mut self) -> &mut T { self } }
+
+// What `state Table;` generates:
+fn parse_row_inner<'a, S: Debug + Clone + StateOf<Table>, E>(…)
+```
+
+The blanket impl means a state that simply *is* the table satisfies its own
+bound with nothing to write. A composite state satisfies several, so two
+grammars, each declaring its own `state`, run over one context:
+
+```rust
+struct App { a: TableA, b: TableB }
+impl StateOf<TableA> for App { … }
+impl StateOf<TableB> for App { … }
+```
+
+Both are compiled in `tests/adr20_design_test.rs`, including the coherence
+question the blanket impl raises — `StateOf<App> for App` and
+`StateOf<TableA> for App` are different instantiations and do not overlap.
 
 `S` appears in about thirty places in the code generator, but the *parameter
 lists* are built in three: the inner rule's generics, the outer entry point's,
-and `parse_<rule>_pieces`. Pinning is one substitution — a `state_ty` on the
-code generator that is either the parameter `S` (today's behaviour, when no
-`state` is declared) or the named type, with the parameter dropped from those
-three lists. Every other mention of `S` is a *use*, and becomes a use of the
-named type.
+and `parse_<rule>_pieces`. The change is one added bound in those three, plus
+a `_user` binding injected beside `_state` in actions — `&mut Table`, so an
+action writes `_user.slot(s)` and never spells the trait. `Clone + Debug` stay
+where they are; the declared type inherits them.
 
-The bounds do not move: `Clone + Debug` are what the runtime needs of a state,
-so a pinned type must satisfy them, and the error when it does not should name
-that rather than appearing inside expanded code.
+Rules staying generic is not only about composition. It means
+`parse_<rule>_pieces` and its `new_context` closure keep their signatures
+exactly, `parse_<rule>()` keeps its shape, and a grammar that declares nothing
+generates what it generates today — the feature adds a bound to some
+signatures and changes nothing else.
 
 ### What it unlocks
 
@@ -99,49 +135,92 @@ A grammar without `state` generates exactly what it generates today, generic
 `S` included. Nothing existing changes, which is why this ADR does not need a
 migration section.
 
-## The costs, which are not zero
+## The costs, and what each one is met with
 
-**1. Composition becomes one-directional.** A grammar generic in `S` can be
-called with any state, a pinned one only with its own. So a pinned grammar may
-call a generic one; a generic grammar cannot call a pinned one. That is sound
-but it is a new way for two grammars to be incompatible, and it must fail with
-a message that says so — an unresolved type parameter inside macro-expanded
-code is not a diagnosis. The validator knows both grammars' declarations and
-should check it.
+Every cost below was checked against a compiler rather than estimated, and
+each is followed by what removes or bounds it. Two of the four turned out
+smaller than the first draft of this ADR claimed.
 
-**2. `parse_test` stops applying.** The test helper is fixed to
-`ParseContext<()>` on purpose (so that tests need no turbofish). A pinned
-grammar with a non-`()` state needs a sibling that takes the state, and the
-existing helper should keep its signature rather than grow a parameter.
+**1. Two grammars with different states cannot compose.** *Met by the design
+above.* With a bound instead of a substitution, a composite state satisfies
+several requirements at once, and a grammar that wants to call another simply
+declares the same `state T;` — a requirement composes where an identity does
+not. What remains is that a grammar declaring nothing cannot call one that
+declares something: the caller has to say what it needs. That is the same rule
+as everywhere else in Rust, and the failure is a trait error, not an
+unresolved type parameter inside expanded code. `#[diagnostic::on_unimplemented]`
+puts it in the grammar's own words — verified on rustc 1.94:
 
-**3. `Default` is no longer a given.** `ParseContext::default()` requires
-`S: Default`. A state that cannot be defaulted means the caller builds the
-context by hand — fine for `parse_<rule>()`, but it is the second thing after
-`parse_test` that assumes a state can be conjured.
+```text
+error[E0277]: the grammar declares `state Table`, but this parse's state does
+              not provide one
+   = note: give the parse a state of type `Table`, or one that implements
+           `StateOf<Table>`
+```
 
-**4. The replay clones the state — and it matters less than it looks.**
-`rt::entry` and `rt::entry_framed` snapshot `user_state` before the fast pass
-under `Diagnose::Replay`, so a pinned state is cloned once per parse, or once
-per piece. Checked: the snapshot is taken *before* the parse, when a table
-built by that parse is still empty, so the clone is cheap in the case this ADR
-is for. It is not cheap for a caller who hands in a pre-filled state, and such
-a grammar should choose `ReplayInPlace` or `Off` — ADR 17's side-effect
-contract already says the second half of this, and gains the first.
+**2. `parse_test` stops applying.** *Met by a sibling, not a change.* The
+helper is deliberately fixed to `ParseContext<()>` so tests need no turbofish;
+a second trait with a different method — `parse_test_in(state, input)`, blanket
+over every state — coexists with it, and the state argument determines the type
+so neither call becomes ambiguous. Compiled, both calls, in the design test.
 
-**5. It makes `user_state` load-bearing.** Today it is inert, so nothing
-depends on how it interacts with backtracking. Once a grammar writes to it
-from an action or a hand-written parser, ADR 17's contract applies with teeth:
-an alternative that writes and then backtracks has still written, and the
-diagnosing replay runs the write again. A slot table tolerates that — assigning
-a slot twice yields the same slot, exactly as interning does — but the ADR
-should say so where a reader will look, because a counter does not.
+**3. `Default` stops being a given.** *Met by a constructor.* This one bites
+immediately: `ParseContext { user_state, ..Default::default() }` does not
+compile for a state that is not `Default`, which a pre-sized table need not be.
+Naming every field instead requires nothing of `S`, so the fix is
+`ParseContext::with_state(user_state)` wrapping exactly that. The design test
+writes it out.
+
+**4. `user_state` becomes load-bearing under ADR 17's replay.** *Half of this
+was overstated, and the other half is real.*
+
+The half that is handled: a failed parse under `Diagnose::Replay` — the
+default — snapshots the state before the fast pass and restores it before
+diagnosing, so an action that writes runs *once* as far as the state is
+concerned. That is ADR 17's contract, and
+`tests/lazy_diagnostics_test.rs::an_action_runs_once_under_replay_twice_in_place_once_when_eager_or_off`
+already proves it. A counter is safe there; the first draft of this ADR implied
+it was not.
+
+The half that is real: **backtracking inside a successful parse undoes
+nothing.** There is no snapshot at alternative granularity, so a branch that
+writes and then loses has still written. Measured on the one writable
+per-parse state that exists today — the interner — in
+`tests/intern_test.rs::what_a_lost_branch_interned_stays_in_the_interner`.
+`state` extends that exposure from interning to arbitrary data.
+
+Three things bound it, in the order a grammar should reach for them:
+
+* **Prefer idempotent writes.** Assigning a slot twice yields the same slot,
+  exactly as interning does, so the high-end case this ADR exists for is
+  unaffected by construction. This is the shape to design for, not a
+  workaround.
+* **Accumulate in the returned value, not in the state.** A count or a sum
+  belongs in what a rule returns and what `fold`/`par_fold` combines — a path
+  that backtracking handles correctly because a lost branch's value is
+  discarded with it.
+* **Write after a cut.** `=>` turns a later failure into `ErrMode::Cut`, which
+  an enclosing `alt` does not catch, so no enclosing alternative can retry past
+  a write that follows one.
+
+**5. A pre-sized state is copied per piece.** *New in this review, small.*
+`Diagnose::Replay` clones `user_state` at every entry — once per parse, once
+per piece. For a state built empty and filled by the parse this is a copy of
+nothing, which is the case this ADR is for. For a caller who hands in a table
+pre-sized to 1024 buckets it is a real copy per piece; a batch job that wants
+neither diagnostics nor the copy sets `Diagnose::Off`, which is the mode that
+workload wants anyway.
 
 ## Alternatives
 
+**Substituting the type instead of bounding it** — the first draft's reading of
+`state`. Rejected above: it costs the same and makes two grammars with
+different states permanently incompatible, with no state able to serve both.
+
 **A type parameter with a default** (`grammar M<S = Table>`) instead of a
-statement. Rejected: the DSL has no generics on the grammar itself, and the
-default would still leave every signature generic, which is what the type error
-above is about.
+statement. Rejected: the DSL has no generics on the grammar itself, and a
+default on the parameter does not give an action anything to call — the bound
+is what does that.
 
 **Make only the interner pluggable** (`TODO.md` §6c). It serves the
 high-end interner and nothing else, and it costs a second type parameter on the
