@@ -254,10 +254,16 @@ an unused one quiet, and an action may bind the name itself, which shadows it.
 **What `_state` does not reach: `user_state`.** A generated rule is generic
 over the state type, so `_state.user_state` has type `S` in an action and
 nothing can be done with it - only the context's own fields (`interner`,
-`fold`, `diagnose`, `rules`) have a known type there. A grammar that has to
-touch its user state does it in a hand-written parser, declared as an
-`extern rule` (below), where the state type is concrete. Pinning `S` per
-grammar so that actions could use it is not implemented.
+`fold`, `diagnose`, `rules`) have a known type there.
+
+A hand-written parser does not get around this: it is called from that same
+generic code, so it too has to be generic over `S`, and naming a concrete
+state in its signature is a type error (`expected Table, found type parameter
+S`). **Today the user state is the caller's, not the grammar's** - set it
+before the parse, read it after, but nothing the grammar can express touches
+it in between. The one piece of mutable per-parse state a grammar can reach is
+the interner. Pinning `S` per grammar, which is what would open the rest, is
+not implemented.
 
 Two properties come from the interner rather than from `intern`. An
 alternative that interns and then backtracks leaves its entry behind - no
@@ -268,9 +274,10 @@ the `par_fold` note below is about.
 ## Hand-written Parsers: `extern rule`
 
 A parser that is easier to write in Rust than in the DSL - a scanner of your
-own, whitespace handling with a rule the grammar cannot express, anything that
-has to touch the user state - is declared in the grammar and written next to
-it:
+own, a token the grammar cannot express, a lookup in the interner - is
+declared in the grammar and written next to it. Note what it does *not* buy:
+it is called from generic code, so it is generic over the state type too and
+cannot reach a concrete `user_state`.
 
 ```rust,ignore
 use winnow::token::take_till;

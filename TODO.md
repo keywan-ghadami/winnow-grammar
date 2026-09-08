@@ -111,3 +111,56 @@ a nested entry point, because that composition does not exist: `rt::finish`
 fails a parse with input left over, so an entry point called inside another
 parse already fails with `expected end of input`. Wanted with it: a test that
 parses twice through one context and gets the same message both times.
+
+## 6. The high-end path: a bespoke interner, and why a grammar cannot have one
+
+A 1BRC-class solution does not want a general interner. It wants the slot
+number *itself*: one open-addressed table per thread, the first eight bytes as
+the probe key, and the number handed back used directly as the index into the
+accumulator array - no central map, no lock, no `resolve`, and no second
+lookup at aggregation time. `benches/where.rs` measures that shape against
+ours on the same workload: **~7 ns against ~21 ns**, and the ~7 ns includes
+the trick that makes it: a name of eight bytes or fewer is entirely inside the
+tag, length included, so a hit needs no string comparison at all.
+
+Three things stand between a grammar and that, in the order they bite.
+
+### 6a. The state type is not the grammar's (blocks everything else)
+
+A bespoke table lives in `user_state`. Nothing the grammar can express
+reaches it: a generated rule is generic over `S`, so `_state.user_state` has
+type `S` in an action, **and a hand-written parser is no way round it** - it
+is called from that same generic code, so naming a concrete state in its
+signature is a type error (`expected Table, found type parameter S`).
+Verified. Today `user_state` is the caller's: set before, read after,
+untouchable in between.
+
+What would open it: a grammar-level declaration of the state type - `state
+MyState;` or an attribute - so that the generated rules are concrete in `S`.
+Then an action reaches `_state.user_state` and a hand-written parser can take
+`&mut ParseInput<'a, MyState>`, which is the whole high-end path: the parser
+computes a slot, the fold aggregates by it, `par_fold` gives each piece its
+own table through `new_context`, and the merge combines them. Note that this
+is also the case ADR 19 §2 calls an "escape hatch": for this class of
+workload the *fresh* context per piece is the point, not the exception.
+
+### 6b. `Symbol` hides the number it already has
+
+Short of a bespoke table, the built-in interner nearly does the job: lasso's
+keys are dense and `Symbol` stores `index + 1`. A caller could index its own
+`Vec<Stats>` with it - except the index is not public (`from_spur`/`into_spur`
+are `#[doc(hidden)]`, and there is no `index()`). Exposing it, with the
+contract written down (dense, assigned in first-seen order, meaningful only
+against the interner that made it), is a small change that gets a good part of
+the pattern without a custom interner: `intern` gives the number, the caller
+aggregates by it. Cost stays ours - ~21 ns per name, or whatever §4's cache
+makes of it.
+
+### 6c. The interner type is fixed
+
+`ParseContext` names `InternerContext` concretely, so even a caller who has a
+better interner cannot put it where `ident` and `intern` will find it. Making
+it pluggable means a trait and a second type parameter on the context, which
+lands in every generated signature - the same infection `S` already is, and
+worth doing only together with 6a, if at all. Recorded so the three are
+weighed as one question rather than three.

@@ -145,7 +145,13 @@ does move.
   with a CHANGELOG that already carries breaking entries, this is the moment.
 * A caller who wants an interner per piece — legitimate when symbols never
   leave their piece — says so by calling `_pieces_with`. The surprising thing
-  becomes the one you have to name, which is the right way round.
+  becomes the one you have to name, which is the right way round. One caveat
+  on the word "escape hatch": for a 1BRC-class grammar, a table per piece is
+  not an exception but the whole design (`TODO.md` §6), so `_pieces_with` is
+  that workload's ordinary entry point and should read like one, not like a
+  footnote. It is not reachable today for a different reason — the state type
+  is not the grammar's — but the signature should not be written as if that
+  case were rare.
 * `tests/shared_interner_test.rs` changes shape: its first test becomes the
   plain call; the second, which pins today's silent incomparability, becomes a
   test of `_pieces_with` and documents what asking for fresh contexts means.
