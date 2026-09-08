@@ -1,8 +1,9 @@
 # ADR 18: Interning — One Builtin, Two Escape Hatches, No Operator
 
 **Status:** Proposed. **Date:** 2026-09-08.
-**Tests:** none yet. The three paths below were verified by hand against the
-current tree; `tests/interning_test.rs` covers only the first of them.
+**Tests:** `tests/shared_interner_test.rs` (§3). The three paths below were
+verified by hand against the current tree; `tests/interning_test.rs` covers
+only the first of them.
 
 ## Context
 
@@ -128,7 +129,63 @@ be to inject unconditionally and let the `_`-prefix silence the warning; that
 is a separate change, and it should be measured against compile time before it
 is made.
 
-### 3. What is not decided here
+### 3. The shared interner gets a worked example and a test
+
+ADR 14's central claim is that the interner is long-lived and shared. ADR 16
+§3 says how a `par_fold` keeps that shape: `rt::fold_pieces` takes a
+`new_context` closure, and the caller shares the interner by cloning it in
+there. **Nothing in the repository ever did.** Every call site — the tests
+(`tests/frames_test.rs:386`, `:444`) and the example in `SYNTAX.md:445` —
+passes `ParseContext::<()>::default`, and `rt::parse_piece` calls that closure
+once per piece (`src/rt.rs:260`), so each piece builds a *fresh* interner and
+numbers its strings from one. The mechanism the ADRs are built on has never
+been exercised.
+
+It went unnoticed because no grammar in the suite crosses a piece boundary
+with a symbol: `tests/frames_test.rs` is the 1BRC-shaped grammar, and its
+`NAME` rule returns `&'a str`. Nothing in the suite binds `ident` under a
+`par_fold`. A grammar that does gets no error, no warning and no panic — the
+symbols are well-formed and resolvable *inside their own piece*, and wrong
+everywhere else. Reproduced on the current tree, four rows cut into two
+pieces:
+
+```text
+pieces = ["Hamburg;1\nZurich;2\n", "Zurich;3\nZurich;4\n"]
+syms   = [Symbol(1),       Symbol(2),     Symbol(1),      Symbol(1)]
+             Hamburg         Zurich         Zurich          Zurich
+```
+
+Piece 2 hands `Zurich` the id piece 1 gave `Hamburg`. Two different cities
+now compare equal, and one city compares unequal to itself. Both are silent,
+and a `merge` that counts by symbol produces a plausible, wrong answer.
+
+The decision is that both halves are pinned by a test, and that the sharing
+half is the one the documentation shows:
+
+```rust
+let interner = InternerContext::new();
+let new_context = {
+    let interner = interner.clone();          // an Arc clone: one interner
+    move || ParseContext::<()> { interner: interner.clone(), ..Default::default() }
+};
+let syms = Cities::parse_FILE_pieces(input, new_context, Parallelism::Pieces(2))?;
+// every symbol resolves against `interner`, in every piece
+```
+
+`tests/shared_interner_test.rs` holds this example and, next to it, the
+fresh-per-piece case with its broken comparisons asserted on purpose — so
+that a later change which makes ids meaningful across pieces, or which
+rejects the mismatch, has to say so. `SYNTAX.md`'s `parse_FILE_pieces`
+example keeps `ParseContext::default` for a grammar that returns no symbols,
+but gains the sentence that names the condition.
+
+Not decided here, because both cost more than the example does: a debug
+assertion that pieces share an interner (`InternerContext` would need
+identity, e.g. `Arc::ptr_eq` on the backend), and tying `Symbol` to its
+interner in the type system. The second is the real fix and the expensive
+one — it is what would turn a silent wrong answer into a compile error.
+
+### 4. What is not decided here
 
 **No return-type coercion.** A rule declared `-> Symbol` whose body yields
 `&str` could intern implicitly. Rejected: it would make the interner reachable
@@ -159,18 +216,9 @@ only for identifiers) without depending on it in either direction.
 * **ADR 17's replay is unaffected.** That ADR already promises interning is
   idempotent: the fast pass and the diagnosing replay intern the same text and
   get the same symbol. `intern` inherits the promise unchanged.
-* **Symbols are meaningful only against the interner that made them.** IDs
-  are assignment-ordered, so they depend on parse order and, across the pieces
-  of a `par_fold`, on thread interleaving. Two rules follow, and this ADR
-  states them because `intern` puts symbols in front of many more users than
-  `ident` did: never compare or resolve a symbol against a different
-  `InternerContext`, and never rely on the numeric order of two symbols. The
-  trap has teeth in `rt::fold_pieces`, whose `new_context` closure builds a
-  *fresh* `ParseContext` per piece — a closure that calls
-  `InternerContext::new()` instead of cloning a shared one gives every piece
-  its own numbering, and the merge then compares symbols that mean nothing to
-  each other. ADR 16 describes cloning the `Arc`; nothing enforces it. Worth a
-  documented example next to `Parallelism`, and possibly a debug assertion.
+* **Symbols are meaningful only against the interner that made them** — see
+  §3, which this ADR promotes from a footnote to a decision because `intern`
+  puts symbols in front of many more grammars than `ident` did.
 * **Documentation debt this uncovered, to be paid with the implementation.**
   `README.md` lists `ident` as returning `String` — it returns `Symbol`.
   `SYNTAX.md`'s builtin table describes `ident` as "an identifier" without

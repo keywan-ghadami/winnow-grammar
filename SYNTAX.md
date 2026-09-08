@@ -448,6 +448,29 @@ The sequential `parse_FILE()` over the whole input gives the same answer, which
 is what `tests/frames_test.rs` asserts — on inputs it accepts and on inputs it
 rejects.
 
+**If your rule returns `Symbol`, share the interner.** `new_context` is called
+once *per piece*, so `ParseContext::default` — as above — gives every piece an
+interner of its own, and each numbers its strings from one. Symbols from two
+pieces are then not comparable: two different words can share an id, and one
+word can have two. Nothing fails; the answer is just wrong. The example above
+is safe because `FILE` returns no symbols. A grammar that binds `ident` (or any
+rule that interns) under a `par_fold` clones one interner into every piece
+instead:
+
+```rust,ignore
+use winnow_grammar::{rt::Parallelism, InternerContext, ParseContext};
+
+let interner = InternerContext::new();
+let new_context = {
+    let interner = interner.clone();       // an Arc clone: one interner
+    move || ParseContext::<()> { interner: interner.clone(), ..Default::default() }
+};
+let names = Cities::parse_FILE_pieces(&input, new_context, Parallelism::Auto)?;
+// every symbol in `names` resolves against `interner`
+```
+
+`tests/shared_interner_test.rs` shows both halves side by side.
+
 **What a frame cannot say yet.** A boundary is a byte string. A format whose
 cut points need more than a search — CSV with quoted newlines (quote parity),
 records recognisable by how they *start*, escaped boundaries, a scanner of
