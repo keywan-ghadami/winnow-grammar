@@ -161,4 +161,19 @@ grammar! {
     }
 }
 
+// A frame may now *end* in a rule that is its boundary - `is_terminator`
+// resolves it (TODO §8b) - but the rule is still walked as an interior rule of
+// its own, where its literal is the boundary. Making this compile needs
+// position-sensitive reachability: knowing that `NL` is reached only as the
+// terminator, which is the position the interior check already excludes.
+grammar! {
+    grammar EndsInARule {
+        WS -> () = "" -> { () }
+        NL -> () = "\n" -> { () }
+
+        #[frame(boundary = "\n")]
+        LINE -> &'a str = s:until(NL) NL -> { s }
+    }
+}
+
 fn main() {}

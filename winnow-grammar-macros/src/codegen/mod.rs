@@ -5,7 +5,7 @@ pub mod variants;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use winnow_grammar_model::frame::Frames;
 use winnow_grammar_model::model::GrammarDefinition;
 use winnow_grammar_model::ParsedGrammar;
@@ -58,6 +58,10 @@ pub struct Codegen<'a> {
     /// `generate_rule`, read where a `frame_end` is met. It resolves a name
     /// the grammar wrote; it never changes a pattern the grammar did not.
     pub current_boundary: RefCell<Option<String>>,
+    /// Rules that match nothing but literals - a terminator may be one, and
+    /// then it is scanned for like the literal it is. The frame check reads
+    /// the same map, so the two cannot disagree about what a terminator is.
+    pub literal_rules: HashMap<String, Vec<String>>,
 }
 
 impl Codegen<'_> {
@@ -81,6 +85,7 @@ impl<'a> Codegen<'a> {
             input_ident: format_ident!("input", span = Span::call_site()),
             frames,
             current_boundary: RefCell::new(None),
+            literal_rules: winnow_grammar_model::analysis::literal_rules(grammar),
         }
     }
 

@@ -1,4 +1,4 @@
-use crate::model::{Argument, GrammarDefinition, ModelPattern, RuleVariant};
+use crate::model::{Argument, GrammarDefinition, ModelPattern, Rule, RuleVariant};
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1219,5 +1219,132 @@ mod tests {
         let lit: syn::LitStr = parse_quote!("fn");
         let types = resolve_token_types(&lit, &kws).unwrap();
         assert_eq!(types.len(), 1);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Rules that are a literal
+// -----------------------------------------------------------------------------
+
+/// For every rule that matches nothing but literals, the literals it matches.
+///
+/// A terminator is *scanned* for (`memchr`) rather than tried at every
+/// position when its match is a fixed string, and until this map existed a
+/// rule of one's own never qualified - `until(";")` scanned and
+/// `until(SEP)`, with `SEP -> () = ";"`, did not, at 2.7x the cost on
+/// eight-character fields and 7.3x on forty-character ones. Under a `#[frame]`
+/// it was not slow but rejected: the frame check could not see that the
+/// terminator covered the boundary. Both sides read this map, so that the code
+/// generator and the frame check cannot disagree about what a terminator is.
+///
+/// A rule qualifies when **every** variant is a single literal, or a group of
+/// alternatives that are, or a call to another rule that qualifies. Chains
+/// resolve; a cycle does not qualify.
+///
+/// **Only a lexical rule qualifies**, and that is not a detail. A syntactic
+/// rule skips whitespace before its elements, so `sep -> () = ";"` matches
+/// ` ;` as well - it begins where the whitespace begins, which is not where
+/// the literal is. Scanning for `;` would stop in a different place, and under
+/// a frame the whitespace could consume the boundary. Name the rule in
+/// uppercase (`SEP`) to get the fast path.
+pub fn literal_rules(grammar: &GrammarDefinition) -> HashMap<String, Vec<String>> {
+    let by_name: HashMap<String, &Rule> = grammar
+        .rules
+        .iter()
+        .map(|r| (r.name.to_string(), r))
+        .collect();
+
+    let mut out = HashMap::new();
+    for rule in &grammar.rules {
+        let mut visiting = HashSet::new();
+        if let Some(lits) = rule_literals(rule, &by_name, &mut visiting) {
+            out.insert(rule.name.to_string(), lits);
+        }
+    }
+    out
+}
+
+fn rule_literals(
+    rule: &Rule,
+    by_name: &HashMap<String, &Rule>,
+    visiting: &mut HashSet<String>,
+) -> Option<Vec<String>> {
+    // A syntactic rule begins with whitespace, so it is not its literal.
+    if !rule.is_lexical || !rule.params.is_empty() {
+        return None;
+    }
+    let name = rule.name.to_string();
+    if !visiting.insert(name.clone()) {
+        return None; // a cycle matches nothing fixed
+    }
+
+    let mut lits = Vec::new();
+    let mut ok = true;
+    for v in &rule.variants {
+        let [single] = v.pattern.as_slice() else {
+            ok = false;
+            break;
+        };
+        if !collect_literals(single, by_name, visiting, &mut lits) {
+            ok = false;
+            break;
+        }
+    }
+
+    visiting.remove(&name);
+    (ok && !lits.is_empty()).then_some(lits)
+}
+
+fn collect_literals(
+    p: &ModelPattern,
+    by_name: &HashMap<String, &Rule>,
+    visiting: &mut HashSet<String>,
+    out: &mut Vec<String>,
+) -> bool {
+    match p {
+        ModelPattern::Lit { lit, .. } => match lit {
+            syn::Lit::Str(s) => {
+                push_unique(out, s.value());
+                true
+            }
+            syn::Lit::Char(c) => {
+                push_unique(out, c.value().to_string());
+                true
+            }
+            _ => false,
+        },
+        ModelPattern::RuleCall {
+            rule_path,
+            generics,
+            args,
+            ..
+        } if generics.is_empty() && args.is_empty() => {
+            let Some(name) = rule_path.segments.last().map(|s| s.ident.to_string()) else {
+                return false;
+            };
+            let Some(target) = by_name.get(&name) else {
+                return false; // a builtin or a hand-written parser
+            };
+            match rule_literals(target, by_name, visiting) {
+                Some(lits) => {
+                    for l in lits {
+                        push_unique(out, l);
+                    }
+                    true
+                }
+                None => false,
+            }
+        }
+        ModelPattern::Group { alts, .. } => alts.iter().all(|(seq, _, _)| match seq.as_slice() {
+            [single] => collect_literals(single, by_name, visiting, out),
+            _ => false,
+        }),
+        _ => false,
+    }
+}
+
+fn push_unique(out: &mut Vec<String>, text: String) {
+    if !out.contains(&text) {
+        out.push(text);
     }
 }

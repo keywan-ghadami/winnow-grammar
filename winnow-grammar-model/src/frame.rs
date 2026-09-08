@@ -41,7 +41,7 @@
 //! independently and combined. This module also checks that use.
 
 use crate::model::{Argument, GrammarDefinition, ModelPattern, Rule};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use syn::spanned::Spanned;
 
 /// The `#[frame]` attribute as written on a rule.
@@ -164,6 +164,9 @@ pub const FRAME_END: &str = "frame_end";
 pub fn check(grammar: &GrammarDefinition, builtins: &HashSet<String>) -> syn::Result<Frames> {
     let mut out = Frames::default();
     let user_rules: HashSet<String> = grammar.rules.iter().map(|r| r.name.to_string()).collect();
+    // Rules that match nothing but literals: a terminator may be one of them,
+    // and then it is the literals it matches - see `analysis::literal_rules`.
+    let literal_rules = crate::analysis::literal_rules(grammar);
     let has_user_ws = user_rules.contains("WS");
 
     // 1. Frame rules and their boundaries.
@@ -179,7 +182,7 @@ pub fn check(grammar: &GrammarDefinition, builtins: &HashSet<String>) -> syn::Re
         if attr.unchecked {
             unchecked.insert(rule.name.to_string());
         } else {
-            check_terminators(rule, &boundary, &user_rules)?;
+            check_terminators(rule, &boundary, &user_rules, &literal_rules)?;
         }
         out.frames.insert(rule.name.to_string(), boundary);
     }
@@ -227,6 +230,7 @@ pub fn check(grammar: &GrammarDefinition, builtins: &HashSet<String>) -> syn::Re
                 frame: frame_name,
                 boundary,
                 user_rules: &user_rules,
+                literal_rules: &literal_rules,
                 builtins,
                 has_user_ws,
             };
@@ -338,7 +342,12 @@ fn infer_boundary(rule: &Rule, attr_span: proc_macro2::Span) -> syn::Result<Stri
 /// boundary: the literal, `line_ending` for a newline boundary, `eof`, or a
 /// group of those. That is what makes every frame end exactly at a boundary,
 /// so that the piece that finds a frame's end is the one that owns it.
-fn check_terminators(rule: &Rule, boundary: &str, user_rules: &HashSet<String>) -> syn::Result<()> {
+fn check_terminators(
+    rule: &Rule,
+    boundary: &str,
+    user_rules: &HashSet<String>,
+    literal_rules: &HashMap<String, Vec<String>>,
+) -> syn::Result<()> {
     for v in &rule.variants {
         let Some(last) = v.pattern.last() else {
             return Err(syn::Error::new(
@@ -349,7 +358,7 @@ fn check_terminators(rule: &Rule, boundary: &str, user_rules: &HashSet<String>) 
                 ),
             ));
         };
-        if !is_terminator(last, boundary, user_rules) {
+        if !is_terminator(last, boundary, user_rules, literal_rules) {
             return Err(syn::Error::new(
                 last.span(),
                 format!(
@@ -363,7 +372,12 @@ fn check_terminators(rule: &Rule, boundary: &str, user_rules: &HashSet<String>) 
     Ok(())
 }
 
-fn is_terminator(p: &ModelPattern, boundary: &str, user_rules: &HashSet<String>) -> bool {
+fn is_terminator(
+    p: &ModelPattern,
+    boundary: &str,
+    user_rules: &HashSet<String>,
+    literal_rules: &HashMap<String, Vec<String>>,
+) -> bool {
     match p {
         ModelPattern::Lit { .. } => literal_text(p).as_deref() == Some(boundary),
         ModelPattern::RuleCall {
@@ -374,15 +388,19 @@ fn is_terminator(p: &ModelPattern, boundary: &str, user_rules: &HashSet<String>)
         } if generics.is_empty() && args.is_empty() => {
             let name = rule_path.segments.last().map(|s| s.ident.to_string());
             match name.as_deref() {
-                Some(n) if user_rules.contains(n) => false,
+                // A rule that is the boundary literal ends the frame as the
+                // literal does.
+                Some(n) if user_rules.contains(n) => literal_rules
+                    .get(n)
+                    .is_some_and(|lits| lits.iter().all(|l| l == boundary)),
                 Some("eof") | Some(FRAME_END) => true,
                 Some("line_ending") => boundary == "\n" || boundary == "\r\n",
                 _ => false,
             }
         }
-        ModelPattern::Group { alts, .. } => alts
-            .iter()
-            .all(|(seq, _, _)| seq.len() == 1 && is_terminator(&seq[0], boundary, user_rules)),
+        ModelPattern::Group { alts, .. } => alts.iter().all(|(seq, _, _)| {
+            seq.len() == 1 && is_terminator(&seq[0], boundary, user_rules, literal_rules)
+        }),
         _ => false,
     }
 }
@@ -409,7 +427,11 @@ fn literal_text(p: &ModelPattern) -> Option<String> {
 /// `line_ending`, `eof`, or a group of such. `None` if any alternative is
 /// something else (a rule call, a repetition) — its stopping points are not
 /// known here.
-fn terminator_alternatives(p: &ModelPattern, user_rules: &HashSet<String>) -> Option<Vec<TermAlt>> {
+fn terminator_alternatives(
+    p: &ModelPattern,
+    user_rules: &HashSet<String>,
+    literal_rules: &HashMap<String, Vec<String>>,
+) -> Option<Vec<TermAlt>> {
     match p {
         ModelPattern::Lit { .. } => literal_text(p).map(|t| vec![TermAlt::Lit(t)]),
         ModelPattern::RuleCall {
@@ -420,7 +442,10 @@ fn terminator_alternatives(p: &ModelPattern, user_rules: &HashSet<String>) -> Op
         } if generics.is_empty() && args.is_empty() => {
             let name = rule_path.segments.last()?.ident.to_string();
             if user_rules.contains(&name) {
-                return None;
+                // A rule of one's own is its literals, when it has any.
+                return literal_rules
+                    .get(&name)
+                    .map(|lits| lits.iter().cloned().map(TermAlt::Lit).collect());
             }
             match name.as_str() {
                 "line_ending" => Some(vec![TermAlt::LineEnding]),
@@ -435,7 +460,7 @@ fn terminator_alternatives(p: &ModelPattern, user_rules: &HashSet<String>) -> Op
                 let [single] = seq.as_slice() else {
                     return None;
                 };
-                out.extend(terminator_alternatives(single, user_rules)?);
+                out.extend(terminator_alternatives(single, user_rules, literal_rules)?);
             }
             Some(out)
         }
@@ -472,6 +497,7 @@ struct Cx<'a> {
     frame: &'a str,
     boundary: &'a str,
     user_rules: &'a HashSet<String>,
+    literal_rules: &'a HashMap<String, Vec<String>>,
     builtins: &'a HashSet<String>,
     has_user_ws: bool,
 }
@@ -594,7 +620,7 @@ fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::
         // before it; the terminator itself is not consumed, so its text is
         // not the concern here.
         ModelPattern::Until { pattern, .. } => {
-            let covered = terminator_alternatives(pattern, cx.user_rules)
+            let covered = terminator_alternatives(pattern, cx.user_rules, cx.literal_rules)
                 .is_some_and(|alts| covers(&alts, cx.boundary));
             if covered {
                 Ok(())

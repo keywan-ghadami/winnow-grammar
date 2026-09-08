@@ -481,7 +481,20 @@ impl<'a> Codegen<'a> {
                     return false;
                 };
                 if self.user_rules.contains(&name) {
-                    return false;
+                    // A rule that matches nothing but literals is scanned for
+                    // as those literals. Only a lexical one qualifies - a
+                    // syntactic rule begins with whitespace, so it does not
+                    // start where its literal does. See
+                    // `analysis::literal_rules`.
+                    let Some(lits) = self.literal_rules.get(&name) else {
+                        return false;
+                    };
+                    for l in lits {
+                        if !set.lits.contains(l) {
+                            set.lits.push(l.clone());
+                        }
+                    }
+                    return true;
                 }
                 match name.as_str() {
                     "line_ending" => {

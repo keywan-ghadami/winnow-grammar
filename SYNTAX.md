@@ -779,16 +779,34 @@ reasoning and the contract are in `docs/adr/adr17-lazy-diagnostics.md`.
 ## Advanced Features
 
 > **How `until` and `recover` skip.** Where the terminator's match is a fixed
-> string — a literal, the built-in `line_ending`, or the built-in `eof` — the
-> skip is a **scan** (via `memchr`: SIMD where the target has it, the same
-> word-at-a-time trick in portable code where it does not); `until(eof)` is
-> simply the rest of the input. Any other terminator has to be *tried* at every
-> position, a parser call per character; that path still exists and yields the
-> same value, it is only slower. Over 4 MiB the difference measures seconds
-> against milliseconds.
+> string the skip is a **scan** (via `memchr`: SIMD where the target has it,
+> the same word-at-a-time trick in portable code where it does not). Any other
+> terminator has to be *tried* at every position, a parser call per character;
+> that path yields the same value, it is only slower — and it is slower in
+> proportion to the field, so it grows with the input rather than sitting at a
+> constant factor. Measured on 2000 rows of `name;digits`: 2.7x with
+> eight-character names, 7.3x with forty-character ones.
 >
-> A rule of your own named `line_ending` or `eof` is that rule, not the
-> built-in, and takes the slow path.
+> **A terminator's match is a fixed string when it is** a string or char
+> literal; the built-in `line_ending` or `eof` (`until(eof)` is simply the rest
+> of the input); `frame_end`, which stands for the enclosing frame's boundary;
+> **a lexical rule of your own that matches nothing but literals** — directly
+> (`SEP -> () = ";"`), through alternatives (`SEP -> () = ";" | "|"`), or
+> through a chain of such rules; or a group of alternatives **all** of which
+> are one of these. One alternative that is not drops the scan for the whole
+> group.
+>
+> Two exclusions are worth knowing because neither is visible in the grammar:
+>
+> * **A syntactic rule does not qualify**, even with the same body. A
+>   syntactic rule skips whitespace before its elements, so `sep -> () = ";"`
+>   matches `  ;` — it begins where the whitespace begins, not where the
+>   literal is, and `until(sep)` therefore stops in a different place than
+>   `until(";")` would. That is a difference in *meaning*, not in speed, so it
+>   is kept. Name the rule in uppercase (`SEP`) when you want the literal and
+>   the fast path.
+> * A rule of your own named `line_ending` or `eof` is that rule, not the
+>   built-in; it qualifies only under the same conditions as any other rule.
 
 ### Rule Arguments
 Rules can accept arguments to pass context or configuration.

@@ -257,19 +257,13 @@ The text operator makes the inline type pointless: a borrowed slice beats a
 stack buffer, and it needs no new container type at all. Do the text operator
 first; `dec` is then an ergonomics and overflow question, not a speed one.
 
-## 8. Scanning terminators: which ones, and the cliff between them
+## 8. Scanning terminators: which ones, and the cliff between them — **done**
 
 `until(…)` and `recover(…)` skip either by **scanning** - `find_slice`, which
 is `memchr` with SIMD where the target has it - or by *trying* the terminator
-at every position, one parser call per character. `Codegen::collect_scan_set`
-decides which, and the rule it applies today is: a string or char literal,
-`line_ending`, `eof`, `frame_end` (resolved to the frame's boundary), or a
-group whose alternatives are *all* of those. Anything else, including **a rule
-of your own whose body is a single literal**, takes the slow path.
-
-That last exclusion is one line in `collect_scan_set`
-(`if self.user_rules.contains(&name) { return false; }`) and it costs this,
-measured on 2000 rows of `name;digits\n` parsed sequentially:
+at every position, one parser call per character. A rule of one's own never
+qualified for the scan, even when its body was a single literal, which cost
+this on 2000 rows of `name;digits\n`:
 
 | | `until(";")` | `until(SEP)`, `SEP -> () = ";"` | |
 |---|---|---|---|
@@ -277,49 +271,30 @@ measured on 2000 rows of `name;digits\n` parsed sequentially:
 | 40-character names | 36.3 µs | 263.3 µs | **7.3x** |
 
 The scanned path barely moves with the field length; the tried path is linear
-in it, which is the shape of the difference rather than its size. Note also
-that a group scans only if *every* alternative does, so one named alternative
-in `until(SEP | frame_end)` drops the whole scan.
+in it, so the factor grows with the input rather than sitting still.
 
-Three pieces of work, and they belong together because doing one without the
-others leaves the language saying different things in different places.
+**`analysis::literal_rules`** now resolves a rule that matches nothing but
+literals - directly, through alternatives, or through a chain of such rules -
+and **both** the code generator (§8a) and the frame check (§8b) read that one
+map, so they cannot disagree about what a terminator is. Under a `#[frame]`,
+`until(SEP | frame_end)` used to be *rejected* rather than slow, because the
+check could not see the boundary alternative it was handed; it compiles now.
+`tests/scan_terminator_test.rs` covers both, and asserts that the pieces of a
+`par_fold` still agree with the whole.
 
-### 8a. Resolve a rule to its literal, in the code generator
+The condition that keeps it correct, and that §8c wrote into SYNTAX.md: **only
+a lexical rule is its literal.** A syntactic rule skips whitespace before its
+elements, so `sep -> () = ";"` matches `  ;` and does not begin where its
+literal does - `until(sep)` and `until(";")` stop in different places, and the
+test pins both answers for the same input. Under a frame that whitespace could
+also swallow the boundary.
 
-A rule whose every variant is a single string or char literal is, for the
-purpose of scanning, those literals. Resolving one level is enough for the
-shape that occurs (`SEP -> () = ";"`); resolving transitively is the same walk
-with a visited set, and the cycle guard already exists for other reasons.
+### What is left, and it is a different question
 
-### 8b. The same resolution in the frame check
-
-This half is not a cliff but a wall: under a `#[frame]`, a named terminator is
-**rejected at compile time**. `frame::terminator_alternatives` refuses a user
-rule (`Some(n) if user_rules.contains(n) => false`), and because it then yields
-`None`, `covers` never sees the `frame_end` alternative that was written right
-next to it:
-
-```text
-error: `until(…)` in rule `ROW` can run through the boundary "\n" of frame
-       `ROW`; add the boundary as an alternative of the terminator so the scan
-       stops there: `until(… | frame_end)`
-```
-
-The boundary *was* an alternative. So a 1BRC-shaped grammar cannot factor its
-separator into a named rule at all - it has to repeat the literal at every use.
-Whatever 8a resolves, this must resolve identically, or the code generator and
-the frame check disagree about what a terminator is.
-
-### 8c. Write the conditions down
-
-SYNTAX.md's `until`/`recover` note already says a literal, `line_ending` and
-`eof` scan and that "any other terminator has to be tried at every position".
-What it does not say is that `frame_end` scans, that a group needs *all* its
-alternatives to scan, and - the one that costs people time - that naming a
-literal in a rule silently leaves the fast path. After 8a and 8b the condition
-becomes short enough to state precisely, which is the point: a performance
-cliff that is invisible in the grammar has to be visible in the documentation.
-
-**Worth doing?** 8b is a correctness-shaped defect - a grammar that should
-compile does not - and it is the one to fix first. 8a is a measured 2.7-7.3x on
-a shape data formats actually have. 8c is what keeps either from being folklore.
+A frame may now *end* in a rule that is its boundary as far as `is_terminator`
+is concerned, but such a grammar still does not compile: the rule is also
+walked as an interior rule of its own, where its literal is the boundary and is
+flagged. Making it compile needs position-sensitive reachability - knowing that
+`NL` is reached only as the terminator, which is the one position the interior
+check already excludes. Pinned as a rejection in `tests/ui/frames.rs` so the
+message says what it is.

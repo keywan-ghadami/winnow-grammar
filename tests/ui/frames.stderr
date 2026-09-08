@@ -105,3 +105,9 @@ error: `until(…)` in rule `ROW` can run through the boundary "\n" of frame `RO
     |
 160 |         ROW -> winnow_grammar::Symbol = c:intern(until(";")) ";" "\n" -> { c }
     |                                                  ^^^^^
+
+error: the literal "\n" in rule `NL` can consume the boundary "\n" of frame `LINE`; cutting the input at the next boundary would then land inside a frame
+   --> tests/ui/frames.rs:172:20
+    |
+172 |         NL -> () = "\n" -> { () }
+    |                    ^^^^
