@@ -3,9 +3,8 @@ use winnow_grammar::testing::WinnowTestExt;
 
 grammar! {
     grammar WsRepro {
-        // Suppress unused warning because 'WS' is used implicitly by the parser generator
-        // for whitespace handling, but rustc might not see the direct call.
-        #[allow(dead_code)]
+        // The generated `WS` carries its own `#[allow(dead_code)]`; the rule
+        // needs none of its own.
         WS = multispace0
 
         pub test -> String = "a" -> { "a".to_string() }

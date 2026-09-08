@@ -62,6 +62,8 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<Validate
 
     validate_argument_counts(grammar)?;
 
+    validate_attributes(grammar)?;
+
     // Frames: `#[frame]` rules, what they reach, and `par_fold`.
     let frames = crate::frame::check(grammar, &builtin_names)?;
 
@@ -130,6 +132,44 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<Validate
     }
 
     Ok(Validated { frames, analysis })
+}
+
+/// The attributes a rule may carry. `frame` is read by [`crate::frame::check`];
+/// `doc` is forwarded to the generated parser. Anything else is a mistake:
+/// nothing in the generator would look at it, so accepting it silently turns a
+/// typo (`#[frmae(boundary = "\n")]`) into a rule that quietly is not a frame.
+const RULE_ATTRS: &[&str] = &["frame", "doc"];
+
+fn validate_attributes(grammar: &GrammarDefinition) -> syn::Result<()> {
+    let check = |attrs: &[syn::Attribute], what: &str| -> syn::Result<()> {
+        for attr in attrs {
+            if RULE_ATTRS.iter().any(|k| attr.path().is_ident(k)) {
+                continue;
+            }
+            let name = attr
+                .path()
+                .segments
+                .iter()
+                .map(|s| s.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            return Err(syn::Error::new(
+                attr.path().span(),
+                format!(
+                    "unknown attribute `{name}` on {what}; a rule takes `#[frame(…)]` and doc comments, \
+                     and nothing else here reads an attribute"
+                ),
+            ));
+        }
+        Ok(())
+    };
+    for rule in &grammar.rules {
+        check(&rule.attrs, &format!("rule `{}`", rule.name))?;
+    }
+    for er in &grammar.extern_rules {
+        check(&er.attrs, &format!("extern rule `{}`", er.name))?;
+    }
+    Ok(())
 }
 
 fn validate_rule(rule: &Rule, all_defs: &HashSet<String>) -> syn::Result<()> {

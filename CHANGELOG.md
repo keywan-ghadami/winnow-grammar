@@ -44,6 +44,16 @@
 
 ### Fixed
 
+- **A rule that only lookahead reaches is no longer checked against a frame
+  boundary.** `peek(…)` and `not(…)` consume nothing, so nothing they contain
+  can carry the parser past the boundary - but the reachability walk followed
+  them anyway and rejected sound grammars (a rule whose body is `multispace0`,
+  used only as `peek(BLANKS)` under a `"\n"` frame). The walk that resolves
+  `frame_end` still follows lookahead, because `peek(frame_end)` names the
+  boundary as much as consuming it does. `check_pattern` had always treated
+  lookahead *written inside* a rule this way; the walk now agrees for a rule
+  reached *through* it.
+
 - **`_state` in an action block did not compile, and was detected by a text
   search.** The code generator injects a
   binding for the `ParseContext` when an action names `_state`, and injected
@@ -107,6 +117,19 @@
 - Action blocks may contain statements (`-> { let x = …; x }`).
 
 ### Added
+
+- **An attribute a rule carries must be one the generator reads.** `#[frame(…)]`
+  and doc comments are it; anything else is now a spanned error instead of
+  being dropped in silence, so a typo (`#[frmae(boundary = "\n")]`) no longer
+  leaves a rule quietly not a frame. Doc comments are forwarded to the
+  generated parser rather than discarded. The check found three of these in
+  this repository's own tests and one in `SYNTAX.md`: `#[lexical]`, which
+  never did anything - a rule is lexical because its name starts with a
+  capital - and two `#[allow(dead_code)]` on `WS`, which the generator already
+  emits itself. **Migration**: delete the attribute; none of them had an
+  effect. `#[allow(…)]` is not forwarded, deliberately - the generated module
+  already allows the lints a grammar runs into, and each forwarded attribute
+  would be a promise about which of the generated items it lands on.
 
 - **`winnow`'s `simd` feature is enabled**, so the scans behind `until(…)` and
   `recover(…)` go through `memchr` as this crate's own documentation already

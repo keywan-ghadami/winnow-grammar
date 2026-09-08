@@ -31,7 +31,6 @@ grammar! {
             }
           | w:word -> { w }
 
-        #[lexical]
         rule word -> Symbol = s:alpha1 -> { _state.interner.intern_string(s) }
     }
 }

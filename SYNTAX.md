@@ -241,8 +241,7 @@ yields `&str` can be interned - a field value, a quoted string, a rule of
 your own:
 
 ```rust,ignore
-#[lexical]
-pub city -> Symbol = s:intern(until(";")) -> { s }
+pub CITY -> Symbol = s:intern(until(";")) -> { s }
 pub key  -> Symbol = s:intern(string)     -> { s }
 ```
 
@@ -307,6 +306,9 @@ A hand-written parser runs in both passes of ADR 17 (the fast one and the
 diagnosing replay), so the same rules apply to it as to an action: it may
 intern freely - that is idempotent - and anything else it mutates has to
 tolerate running twice.
+
+Under a `#[frame]` the check cannot see into it, so whether it is safe to cut
+around is yours to know - see *Where the check stops* under Frames.
 
 ## Backends
 
@@ -503,6 +505,20 @@ unlike every other rule's: the parser runs once per piece, and whitespace
 skipped there would be skipped at every cut rather than once at the start of
 the input. A frame that begins with a space keeps the space; whitespace-only
 text between two frames is a failure, in pieces and in one go alike.
+
+**Where the check stops.** It reasons about what the grammar says. A parser it
+cannot see into — a hand-written one reached by path (`super::word`), an
+`extern rule`, or any bare name in a grammar with a glob `use …::*` — is not
+walked, because whether it can consume the boundary is a fact about Rust the
+grammar does not contain. **For those the guarantee is yours, not the
+checker's:** a `par_fold` over a frame that reaches one is exactly as sound as
+that parser is. There is no key to declare it safe, because such a key would
+read like a checked claim while being an unverifiable promise; `unchecked` on
+the frame already says "the author asserts this", and says it greppably.
+
+A rule that only `peek(…)`/`not(…)` reaches is not checked against the
+boundary: lookahead consumes nothing, so nothing it contains can carry the
+parser past one.
 
 **What is generated.** The grammar gets, next to the parsers:
 

@@ -144,6 +144,35 @@ invented later. `rt::frames_bytes` is the primitive each of those scanners
 would replace or wrap. Until one exists, a grammar for such a format uses
 `unchecked` and says so in the grammar.
 
+### 5a. Where the check stops: opaque parsers are the author's responsibility
+
+The walk reasons about what the *grammar* says. Three things it cannot see
+into, and does not pretend to:
+
+- a **hand-written parser reached by path** (`super::word`, `Alias::rule`) —
+  the documented way to plug Rust into a grammar;
+- an **`extern rule`** — a name and a return type, with the parser supplied
+  elsewhere;
+- **any bare name** in a grammar with a glob `use …::*`, because that already
+  switches off the "undefined rule" check that would otherwise resolve it.
+
+For these the check has nothing to walk: the parser is Rust, and whether it can
+consume the boundary is a fact about code the grammar does not contain. So the
+frame guarantee covers the grammar and stops at that edge — **whether such a
+parser is safe to cut around is the developer's to know, not winnow-grammar's
+to certify.** A `par_fold` over a frame that reaches one is only as sound as
+that parser is.
+
+There will be no key to declare it safe. A `consumes_no_newline` annotation
+would read like a checked claim while being exactly the opposite — an
+unverifiable promise, and a second one next to `unchecked`, which already says
+"the author asserts this" for the whole frame and is greppable. One escape
+hatch that is honest beats two that look like guarantees.
+
+What the check *can* do at that edge it does: a rule the grammar defines is
+walked, and a built-in it does not know is assumed to consume anything
+(`builtin_may_consume`'s `_ => true`).
+
 ### 6. Where the check runs — once
 
 `frame::check` runs in the model's validator, where its errors are reported.
@@ -157,7 +186,13 @@ diagnostics and generation consume: one analysis, one result, passed on.
 ## Consequences
 
 - A grammar that says `#[frame]` either compiles and can be cut soundly, or
-  names the construct that stops it and what to write instead.
+  names the construct that stops it and what to write instead — for every
+  construct the grammar itself contains. Where it reaches opaque Rust
+  (§5a), the guarantee is the author's, not the checker's.
+- A rule that only lookahead (`peek(…)`, `not(…)`) reaches is not checked for
+  the boundary: it consumes nothing, so it cannot carry the parser past one.
+  The walk that resolves `frame_end` still follows lookahead, because
+  `peek(frame_end)` names the boundary as much as consuming it does.
 - The generated parser of a rule does not depend on frames anywhere in the
   grammar.
 - `until(…)` accepts an alternation as its terminator, and one with up to
