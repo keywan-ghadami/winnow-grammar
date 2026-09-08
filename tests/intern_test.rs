@@ -87,3 +87,32 @@ fn ident_is_intern_raw_ident() {
             assert_eq!(ctx.interner.resolve(*a), "hello");
         });
 }
+
+// `intern` inside a `#[frame]` rule: the frame check looks through it to the
+// argument, which is where the boundary is or is not covered. An opaque
+// `intern` would reject this grammar.
+grammar! {
+    grammar Framed {
+        WS -> () = "" -> { () }
+
+        #[frame(boundary = "\n")]
+        pub ROW -> Symbol = c:intern(until(";" | frame_end)) ";" digit1 frame_end -> { c }
+
+        pub FILE -> Vec<Symbol> = s:par_fold(
+            ROW,
+            Vec::new,
+            |mut acc: Vec<Symbol>, c: Symbol| { acc.push(c); acc },
+            |mut a: Vec<Symbol>, b: Vec<Symbol>| { a.extend(b); a }
+        ) -> { s }
+    }
+}
+
+#[test]
+fn intern_is_transparent_to_the_frame_check() {
+    Framed::parse_FILE()
+        .parse_test("Hamburg;1\nZurich;2\n")
+        .assert_success_with(|syms, ctx| {
+            assert_eq!(ctx.interner.resolve(syms[0]), "Hamburg");
+            assert_eq!(ctx.interner.resolve(syms[1]), "Zurich");
+        });
+}

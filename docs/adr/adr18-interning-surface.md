@@ -232,7 +232,7 @@ evidence: the factory has been there since ADR 16 and nothing has ever shared
 anything through it.
 
 It is worth noticing that the factory is not forced by the sharing
-requirement either. `ParseContext` is `Clone` and `S: Clone` is already a
+requirement either - ADR 19 proposes taking it up on that. `ParseContext` is `Clone` and `S: Clone` is already a
 bound, so an API taking one context and cloning it per piece would carry the
 interner's `Arc` into every piece *by default*, and the trap in §3 would not
 exist. What the factory buys instead is a `user_state` that starts fresh per

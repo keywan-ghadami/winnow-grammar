@@ -31,4 +31,13 @@ paste = "1.0"
 rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 trybuild = "1.0.116"
+
+[[bench]]
+name = "interning"
+harness = false
+
+[[bench]]
+name = "where"
+harness = false

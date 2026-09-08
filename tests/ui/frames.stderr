@@ -99,3 +99,9 @@ error: the frame boundary is a non-empty string or char literal: `boundary = "\n
     |
 150 |         #[frame(boundary = 3)]
     |                            ^
+
+error: `until(…)` in rule `ROW` can run through the boundary "\n" of frame `ROW`; add the boundary as an alternative of the terminator so the scan stops there: `until(… | frame_end)`
+   --> tests/ui/frames.rs:160:50
+    |
+160 |         ROW -> winnow_grammar::Symbol = c:intern(until(";")) ";" "\n" -> { c }
+    |                                                  ^^^^^

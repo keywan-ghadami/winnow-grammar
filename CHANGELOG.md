@@ -122,6 +122,14 @@
   grammar parser because parsing runs before the backend is known; an arity on
   `BuiltIn` is the general fix (`feature-requests.md` §1).
 
+- **Benchmarks.** `benches/interning.rs` measures interning where it happens -
+  the interner alone, an identifier-heavy grammar, and the 1BRC shape with
+  `intern`, sequential and cut into pieces. `benches/where.rs` takes a single
+  `intern_string` apart: of ~21 ns, ~14 ns is hashing and probing, ~6 ns the
+  dashmap shard lock. `TODO.md` §4 reasons from those numbers - including
+  three hasher replacements that measured *slower* than the default, and the
+  lookup cache that is the thing worth trying next.
+
 - **`extern rule` is documented.** The declaration existed and worked - a
   hand-written parser reaches `i.state.interner` like any generated one - but
   appeared in no document. SYNTAX.md gains the section, including the signature

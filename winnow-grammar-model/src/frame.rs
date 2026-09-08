@@ -701,6 +701,12 @@ fn builtin_may_consume(name: &str, c: char) -> bool {
         "space0" | "space1" => c == ' ' || c == '\t',
         "multispace0" | "multispace1" => c.is_whitespace(),
         "line_ending" => c == '\n' || c == '\r',
+        // `intern(p)` consumes exactly what `p` consumes and nothing besides:
+        // it is a map over its argument, and the argument is checked on its
+        // own in the `RuleCall` arm above. Judging it opaque would reject
+        // `intern(until(";" | frame_end))`, whose inner scan does stop at the
+        // boundary.
+        "intern" => false,
         // `string`, `char`, `any`, and anything not listed.
         _ => true,
     }

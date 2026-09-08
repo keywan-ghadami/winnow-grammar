@@ -152,4 +152,13 @@ grammar! {
     }
 }
 
+// `intern` is transparent to the frame check, so an argument that runs
+// through the boundary is still rejected - at the argument.
+grammar! {
+    grammar InternedUntilRunsThrough {
+        #[frame(boundary = "\n")]
+        ROW -> winnow_grammar::Symbol = c:intern(until(";")) ";" "\n" -> { c }
+    }
+}
+
 fn main() {}
