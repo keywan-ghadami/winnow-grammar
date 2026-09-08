@@ -159,3 +159,56 @@ it pluggable means a trait and a second type parameter on the context, which
 lands in every generated signature - the same infection `S` already is, and
 worth doing only together with 6a, if at all. Recorded so the three are
 weighed as one question rather than three.
+
+## 5. The 1BRC temperature: where its time goes, and what is left
+
+`benches/repetition.rs` takes `TENTHS` apart. Read differences, not absolutes -
+every case pays the same stream construction and context clone. One machine,
+`-12.3` parsed as a top-level rule:
+
+| case | ns |
+|---|---|
+| `FLOOR` - an empty rule | 20.9 |
+| `ONE_DIGIT` - `d:digit` | 23.9 |
+| `TWO_DIGITS` - `a:digit b:digit`, no repetition | 26.0 |
+| `BOUNDED_DISCARDED` - `digit{1,2}`, counted, not collected | 25.9 |
+| `BOUNDED_BOUND` - `digit{1,2}`, collected into a `Vec` | 45.5 |
+| `TENTHS` - the whole temperature | 60.6 |
+| `tenths/by_hand` - one scan and a fold, written in Rust | 35.2 |
+
+What that says:
+
+* **The repetition loop is free.** Collecting nothing (25.9) costs what two
+  separate `digit` parses cost (26.0). Checkpoints, the bound test and the
+  loop itself do not show up.
+* **One heap allocation for two `char`s costs ~20 ns** - the gap between
+  collecting and counting the same two digits (45.5 vs 25.9).
+* **The generated temperature is 1.7x the hand-written one** (60.6 vs 35.2),
+  and ~20 of those 25 ns are that one allocation. Closing it would land within
+  a few ns of hand-written **without** SIMD, SWAR or register arithmetic. The
+  1BRC-shaped win is not clever numerics; it is not putting two characters on
+  the heap.
+* In a real `par_fold` the floor is not paid per record - the fold calls
+  `parse_<rule>_inner`, not the public entry - so the allocation is a *larger*
+  share of the per-record cost than the table suggests.
+
+### What that leaves open
+
+The allocation cannot be removed while the binding yields `Vec<char>`: the
+type is the contract with the action, and `for d in whole` / `d.iter()` rely
+on it. Two ways out, neither taken yet:
+
+* **`dec(p)`** - an operator over a pattern, the shape ADR 18 established for
+  `intern(p)`, adding one name to the fixed list in `parser.rs`. `dec(digit{1,2})`
+  has no intermediate at all: the codegen sees the bound and accumulates
+  straight into an integer. Opt-in, so nothing existing changes, and the
+  declared bound does real work (no overflow check inside the loop). Output
+  type via the existing call generics: `dec<i32>(digit{1,2})`.
+* **Inline storage for a small known bound** - `digit{1,2}` keeps its meaning
+  but yields a stack-backed type. No new syntax, but it *is* a type change:
+  actions that name `Vec<char>` break, and the binding type would differ
+  between `{1,2}` and `{2,}`.
+
+If `dec` lands, the inline type earns little: in this repository exactly one
+binding of a bounded digit run does something other than build a number
+(`d.iter().collect()` into a `String`). Do `dec` first, then re-ask.

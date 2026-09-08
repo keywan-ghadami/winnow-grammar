@@ -10,7 +10,30 @@ use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
 use winnow::stream::LocatingSlice;
 use winnow::Parser;
+use winnow_grammar::error::ParseError;
 use winnow_grammar::{grammar, ParseContext, ParseInput};
+
+/// The ceiling: the same temperature read by hand, one scan and a fold.
+/// Not a proposal - a number to hold the generated forms against.
+fn tenths_by_hand<'a, S: Clone + std::fmt::Debug>(
+    i: &mut ParseInput<'a, S>,
+) -> Result<i32, ParseError> {
+    let s: &str =
+        winnow::token::take_while(1.., |c: char| c == '-' || c == '.' || c.is_ascii_digit())
+            .parse_next(i)?;
+    let mut b = s.as_bytes();
+    let neg = b[0] == b'-';
+    if neg {
+        b = &b[1..];
+    }
+    let mut v: i32 = 0;
+    for &c in b {
+        if c != b'.' {
+            v = v * 10 + (c - b'0') as i32;
+        }
+    }
+    Ok(if neg { -v } else { v })
+}
 
 grammar! {
     grammar Rep {
@@ -35,6 +58,15 @@ grammar! {
                 v = v * 10 + (frac as i32 - '0' as i32);
                 if neg.is_some() { -v } else { v }
             }
+
+        // Where TENTHS's time goes. `FLOOR` is entry and `finish` with no
+        // pattern to speak of; `TWO_DIGITS` is the same two digits without any
+        // repetition machinery, so the gap to `BOUNDED_BOUND` is what the
+        // bounded repetition itself costs.
+        pub FLOOR -> () = "" -> { () }
+        pub ONE_DIGIT -> i32 = d:digit -> { d as i32 - 48 }
+        pub TWO_DIGITS -> i32 = a:digit b:digit -> { (a as i32 - 48) * 10 + (b as i32 - 48) }
+        pub BY_HAND -> i32 = v:super::tenths_by_hand -> { v }
 
         // The pair that isolates the collection: the same pattern, once with
         // its elements named and once without.
@@ -89,6 +121,14 @@ fn bench_repetition(c: &mut Criterion) {
     g.finish();
 }
 
+/// Where the time in the 1BRC temperature goes.
+///
+/// Read the **differences**, not the absolute numbers: every case pays the
+/// same stream construction and context clone, which on an input this short
+/// is most of what the clock sees. (A case that only builds the stream and
+/// `black_box`es it measures *higher* than one that parses an empty rule -
+/// forcing the whole struct to memory costs more than using it - so there is
+/// no honest floor to subtract, only pairs to compare.)
 fn bench_bounded(c: &mut Criterion) {
     let mut g = c.benchmark_group("bounded");
 
@@ -112,7 +152,11 @@ fn bench_bounded(c: &mut Criterion) {
         };
     }
 
+    case!("floor", Rep::parse_FLOOR(), "");
+    case!("one_digit", Rep::parse_ONE_DIGIT(), "1");
+    case!("two_digits", Rep::parse_TWO_DIGITS(), "12");
     case!("tenths", Rep::parse_TENTHS(), "-12.3");
+    case!("tenths/by_hand", Rep::parse_BY_HAND(), "-12.3");
     case!("bound", Rep::parse_BOUNDED_BOUND(), "12");
     case!("discarded", Rep::parse_BOUNDED_DISCARDED(), "12");
     case!("short/bound", Rep::parse_SHORT_BOUND(), "12345");
