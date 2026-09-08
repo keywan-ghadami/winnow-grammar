@@ -191,6 +191,23 @@ What that says:
   `parse_<rule>_inner`, not the public entry - so the allocation is a *larger*
   share of the per-record cost than the table suggests.
 
+### Measured: what removing the allocation is worth
+
+`benches/repetition.rs` carries a stand-in for a text-capture operator - the
+digit run as a borrowed slice instead of a `Vec<char>`, which is winnow's
+`.take()` under another name:
+
+| case | ns |
+|---|---|
+| `TENTHS` today, `Vec<char>` | 59.4 |
+| the same with the run borrowed | **36.0** |
+| written by hand, one scan and a fold | 34.0 |
+
+Two nanoseconds from hand-written, with no SIMD, no SWAR and no register
+arithmetic - only by not copying two characters onto the heap. That is the
+whole of the 1BRC-shaped win, and it is a language question, not an
+optimisation.
+
 ### What that leaves open
 
 The allocation cannot be removed while the binding yields `Vec<char>`: the
