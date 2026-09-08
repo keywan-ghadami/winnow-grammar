@@ -492,6 +492,40 @@ where
     }
 }
 
+/// `dec<T>(p)` - the text `p` matched, read as a `T`.
+///
+/// Not a faster way to parse a number: measured, it is what
+/// [`repeat_recording_bounded`]'s text plus a fold in an action costs
+/// (`benches/repetition.rs`). It is here so that the fold is not written out
+/// at every numeric field, and because a value the format does not fit
+/// becomes a parse error with the reason attached rather than a silent wrap.
+///
+/// The reason is why this is not winnow's `parse_to`: that discards the
+/// `FromStr` error and reports a bare position, so "number too large to fit
+/// in target type" would be lost.
+pub fn dec<'a, S, T, P, E>(mut p: P) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<T, ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+    P: Parser<ParseInput<'a, S>, &'a str, ErrMode<E>>,
+    E: RtError<'a, S>,
+{
+    move |input| {
+        let cp = input.checkpoint();
+        let text = p.parse_next(input)?;
+        match text.parse::<T>() {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                // The number is the whole of what was matched, so the error
+                // belongs at its start, not after it.
+                input.reset(&cp);
+                Err(ErrMode::Backtrack(E::external(input, e)))
+            }
+        }
+    }
+}
+
 /// `fold(pattern, init, step)` - a repetition that threads an accumulator
 /// instead of collecting.
 ///

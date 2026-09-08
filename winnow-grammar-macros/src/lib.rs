@@ -33,6 +33,12 @@ impl Backend for WinnowBackend {
                 name: "text",
                 return_type: "&'a str",
             },
+            // Takes one argument - the pattern whose matched text is read as
+            // a number. The type is the one the call names, `dec<u32>(..)`.
+            BuiltIn {
+                name: "dec",
+                return_type: "T",
+            },
             BuiltIn {
                 name: "string",
                 return_type: "&'a str",

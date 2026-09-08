@@ -228,6 +228,41 @@ The following primitives are "portable" and expected to be available in all back
 
 *Note: Backends may provide additional specialized built-ins.*
 
+### Capturing text: `text(p)` and `dec<T>(p)`
+
+A repetition yields its elements, so `digit{1,2}` yields a `Vec<char>`. That is
+right when the elements are what you want, and a heap allocation when they are
+not. **`text(p)`** hands back the input `p` consumed instead - `&'a str`,
+borrowed from the input, no allocation, whatever `p` is:
+
+```rust,ignore
+NAME  -> &'a str = s:text(alpha1 digit*)  -> { s }
+CODE  -> Symbol  = s:intern(text(digit{3})) -> { s }
+```
+
+Several patterns inside it are a **sequence**, not several arguments, and go
+through the ordinary sequence machinery - so the whitespace between them is
+whatever it would be outside the `text`.
+
+**`dec<T>(p)`** goes one step further and reads that text as a number:
+
+```rust,ignore
+TENTHS -> i32 =
+    neg:"-"? whole:dec<i32>(digit{1,2}) "." frac:dec<i32>(digit)
+    -> { let v = whole * 10 + frac; if neg.is_some() { -v } else { v } }
+```
+
+It is not a faster way to parse a number - it costs what `text(p)` plus the
+same fold written in the action costs. It is there so that fold is not written
+out at every numeric field, and because **a value the named type cannot hold
+is a parse error** ("number too large to fit in target type") rather than a
+`v * 10 + d` that wraps in release and panics in debug. The type is the one
+the call names; without one it is inferred from the action.
+
+Where this matters most: a bounded run of digits that becomes a number used to
+copy its characters onto the heap first. Not doing that is worth about 40% of
+a small numeric rule - see `benches/repetition.rs` and TODO.md §5.
+
 ### Interning: `ident` and `intern(p)`
 
 `ident` returns a `Symbol` - a 4-byte id for the text, taken from the
@@ -244,6 +279,10 @@ your own:
 pub CITY -> Symbol = s:intern(until(";")) -> { s }
 pub key  -> Symbol = s:intern(string)     -> { s }
 ```
+
+Anything yielding text can be interned, which is what `text(p)` is for: a
+bounded run (`intern(text(digit{3}))`) has no text of its own to give until
+`text` borrows it.
 
 `intern` is a `Symbol` factory, nothing more: it does not trim, lower-case or
 otherwise normalise. An action block reaches the context directly as
