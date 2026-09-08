@@ -309,11 +309,17 @@ impl<'a> Codegen<'a> {
                 ModelPattern::SpanBinding(_, span_var, _) => quote_spanned! {span=>
                     let (#name, #span_var) = #parser_expr.with_span().parse_next(#input)?;
                 },
-                ModelPattern::Repeat(_, _)
-                | ModelPattern::Plus(_, _)
-                | ModelPattern::Bounded { .. } => quote_spanned! {span=>
-                    let #name: Vec<_> = #parser_expr.parse_next(#input)?;
-                },
+                // A repetition collects, so the annotation helps inference -
+                // unless it is a run of characters, which is text.
+                ModelPattern::Repeat(inner, _)
+                | ModelPattern::Plus(inner, _)
+                | ModelPattern::Bounded { pattern: inner, .. }
+                    if !self.is_char_class(inner) =>
+                {
+                    quote_spanned! {span=>
+                        let #name: Vec<_> = #parser_expr.parse_next(#input)?;
+                    }
+                }
                 // A fold's value is the accumulator, whose type comes from
                 // `init`, and a count's is the `usize` it mapped to - neither
                 // is a collection, so neither must be annotated as one.
@@ -919,6 +925,83 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// Does this pattern match exactly one character of a built-in class?
+    ///
+    /// A repetition of one is a **run** of characters, and a run is text. The
+    /// `{n,m}` syntax is borrowed from regular expressions, where `\d{1,2}`
+    /// matches text and not a list of characters, and a `Vec<char>` there is
+    /// a copy of input the parser already walked over. Every other repetition
+    /// yields its elements, because those are values the parser built.
+    ///
+    /// The list is written out rather than read off the built-in table,
+    /// because the property is not "yields a `char`". `char` yields one and
+    /// is **not** here: it parses a character *literal*, so `'\n'` is four
+    /// characters of input and one of value - its text and its value are
+    /// different things, and taking the text would hand back the escape
+    /// rather than what it stands for. A new built-in belongs here only if it
+    /// consumes exactly one character and yields that character unchanged.
+    ///
+    /// Shadowing counts: a grammar that defines its own `digit` means that
+    /// one, and it is a rule like any other.
+    fn is_char_class(&self, p: &ModelPattern) -> bool {
+        const CHAR_CLASSES: &[&str] = &["digit", "any"];
+        let ModelPattern::RuleCall {
+            rule_path, args, ..
+        } = p
+        else {
+            return false;
+        };
+        if !args.is_empty() {
+            return false;
+        }
+        let Some(name) = rule_path.get_ident().map(|i| i.to_string()) else {
+            return false;
+        };
+        if self.user_rules.contains(&name) {
+            return false;
+        }
+        CHAR_CLASSES.contains(&name.as_str())
+    }
+
+    /// `x*`, `x+` and `x{n,m}`: one generator, three spellings of the bounds.
+    ///
+    /// What it yields depends on what is repeated and on whether anyone named
+    /// it. A run of characters ([`is_char_class`](Self::is_char_class)) is the
+    /// text it matched - in a syntactic rule that includes the whitespace
+    /// between the elements, because that is what the parser consumed, which
+    /// is one more reason a numeric run belongs in a lexical rule. Anything
+    /// else yields its elements. A repetition nobody named yields nothing and
+    /// collects nothing either way.
+    fn generate_repetition(
+        &self,
+        inner: &ModelPattern,
+        min: usize,
+        max: Option<usize>,
+        is_lexical: bool,
+        is_discarded: bool,
+    ) -> TokenStream {
+        let span = Span::mixed_site();
+        let p = self.generate_parser_expr(inner, is_lexical, false);
+        let elem = if is_lexical {
+            quote_spanned! {span=> #p }
+        } else {
+            // `WS` is a function and `preceded` wants a parser.
+            quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p) }
+        };
+        let max = match max {
+            Some(m) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
+            None => quote_spanned! {span=> ::core::option::Option::None },
+        };
+        let counting = quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting_bounded(#min, #max, #elem) };
+        if is_discarded {
+            quote_spanned! {span=> #counting.map(|_| ()) }
+        } else if self.is_char_class(inner) {
+            quote_spanned! {span=> ::winnow::Parser::take(#counting) }
+        } else {
+            quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording_bounded(#min, #max, #elem) }
+        }
+    }
+
     pub fn generate_parser_expr(
         &self,
         pattern: &ModelPattern,
@@ -971,53 +1054,14 @@ impl<'a> Codegen<'a> {
                 quote_spanned! {span=> ::winnow_grammar::rt::opt_recording(#p) }
             }
             ModelPattern::Repeat(inner, _span) => {
-                let p = self.generate_parser_expr(inner, is_lexical, false);
-                if !is_lexical {
-                    if is_discarded {
-                        // Using |i: &mut _| WS(i) explicitly since WS is a function and preceded requires a Parser.
-                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
-                    } else {
-                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
-                    }
-                } else if is_discarded {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, #p).map(|_| ()) }
-                } else {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(0, #p) }
-                }
+                self.generate_repetition(inner, 0, None, is_lexical, is_discarded)
             }
             ModelPattern::Plus(inner, _span) => {
-                let p = self.generate_parser_expr(inner, is_lexical, false);
-                if !is_lexical {
-                    if is_discarded {
-                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(1, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)).map(|_| ()) }
-                    } else {
-                        quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(1, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
-                    }
-                } else if is_discarded {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(1, #p).map(|_| ()) }
-                } else {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording(1, #p) }
-                }
+                self.generate_repetition(inner, 1, None, is_lexical, is_discarded)
             }
             ModelPattern::Bounded {
                 pattern, min, max, ..
-            } => {
-                let p = self.generate_parser_expr(pattern, is_lexical, false);
-                let max = match max {
-                    Some(m) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
-                    None => quote_spanned! {span=> ::core::option::Option::None },
-                };
-                let inner = if is_lexical {
-                    quote_spanned! {span=> #p }
-                } else {
-                    quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p) }
-                };
-                if is_discarded {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting_bounded(#min, #max, #inner).map(|_| ()) }
-                } else {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording_bounded(#min, #max, #inner) }
-                }
-            }
+            } => self.generate_repetition(pattern, *min, *max, is_lexical, is_discarded),
             ModelPattern::Parenthesized(inner, _) => {
                 self.generate_delimited_expr(inner, "(", ")", is_lexical)
             }

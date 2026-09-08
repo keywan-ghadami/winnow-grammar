@@ -63,7 +63,7 @@ grammar! {
             neg:"-"? whole:digit{1,2} "." frac:digit
             -> {
                 let mut v: i32 = 0;
-                for d in whole { v = v * 10 + (d as i32 - '0' as i32); }
+                for b in whole.bytes() { v = v * 10 + (b - b'0') as i32; }
                 v = v * 10 + (frac as i32 - '0' as i32);
                 if neg.is_some() { -v } else { v }
             }

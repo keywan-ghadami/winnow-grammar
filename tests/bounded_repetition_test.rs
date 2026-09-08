@@ -12,14 +12,15 @@ grammar! {
     grammar Bounds {
         // Exactly two digits, then whatever follows.
         pub PAIR -> String = d:digit{2} rest:raw_ident -> {
-            format!("{}{}-{}", d[0], d[1], rest)
+            format!("{d}-{rest}")
         }
 
-        // One or two digits.
-        pub SHORT -> String = d:digit{1,2} -> { d.iter().collect() }
+        // One or two digits. A run of a character class is the text it
+        // matched, so there is nothing to collect.
+        pub SHORT -> String = d:digit{1,2} -> { d.to_string() }
 
         // Two or more.
-        pub OPEN -> String = d:digit{2,} -> { d.iter().collect() }
+        pub OPEN -> String = d:digit{2,} -> { d.to_string() }
     }
 }
 
@@ -90,7 +91,7 @@ grammar! {
             neg:"-"? whole:digit{1,2} "." frac:digit
             -> {
                 let mut value: i32 = 0;
-                for d in whole { value = value * 10 + (d as i32 - '0' as i32); }
+                for b in whole.bytes() { value = value * 10 + (b - b'0') as i32; }
                 value = value * 10 + (frac as i32 - '0' as i32);
                 if neg.is_some() { -value } else { value }
             }
@@ -170,6 +171,8 @@ fn bounds_count_elements_not_characters() {
 grammar! {
     grammar Edges {
         // A lower bound of zero is the `*` case: the bound may match nothing.
+        // `len()` on the run is its byte length, which for digits is how
+        // many there were.
         pub ZERO_MIN -> usize = d:digit{0,2} -> { d.len() }
 
         // A bound over a group counts group matches, not characters.

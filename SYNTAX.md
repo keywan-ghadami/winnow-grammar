@@ -119,7 +119,7 @@ one rather than scanned:
     neg:"-"? whole:digit{1,2} "." frac:digit
     -> {
         let mut v: i32 = 0;
-        for d in whole { v = v * 10 + (d as i32 - '0' as i32); }
+        for b in whole.bytes() { v = v * 10 + (b - b'0') as i32; }
         v = v * 10 + (frac as i32 - '0' as i32);
         if neg.is_some() { -v } else { v }
     }
@@ -127,6 +127,24 @@ one rather than scanned:
 #     }
 # }
 ```
+
+**What a repetition yields.** Its elements, as a `Vec` — *unless* the element
+is a character class, in which case it yields the text it matched (`&'a str`).
+`{n,m}` is borrowed from regular expressions, where `\d{1,2}` matches text and
+not a list of characters, and a `Vec<char>` there would copy input the parser
+has already walked over. So `whole` above is a `&str`, and `digit*` is the
+`digit0` the built-in table never had, `digit+` the `digit1` it has.
+
+The character classes are `digit` and `any`: they consume exactly one
+character and yield that character unchanged. `char` is **not** one, although
+it yields a `char` — it parses a character *literal*, so `'\n'` is four
+characters of input and one of value, and its text is not its value; `char{2}`
+still yields a `Vec<char>`. A repetition of a rule likewise yields its
+elements, because those are values the parser built.
+
+In a syntactic (lowercase) rule the text includes the whitespace between the
+elements, since that is what the parser consumed — one more reason a numeric
+run belongs in a lexical rule, as it already did.
 
 Bounds are **greedy and possessive**, like `*` and `+`: the repetition takes as
 many elements as it can up to the upper bound and never gives one back to help a
