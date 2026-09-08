@@ -94,9 +94,9 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 // Whitespace handling (similar to syn)
                 #[allow(dead_code)]
-                fn WS<'a, S: std::fmt::Debug + Clone>(
+                fn WS<'a, S: std::fmt::Debug + Clone, E: ::winnow_grammar::rt::RtError<'a, S>>(
                     #input: &mut ::winnow_grammar::ParseInput<'a, S>,
-                ) -> ::winnow::Result<(), ::winnow::error::ErrMode<::winnow_grammar::ParseError>> {
+                ) -> ::winnow::Result<(), ::winnow::error::ErrMode<E>> {
                     use ::winnow::Parser;
                     ::winnow::ascii::multispace0.parse_next(#input).map(|_| ())
                 }

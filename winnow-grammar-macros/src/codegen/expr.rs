@@ -638,8 +638,7 @@ impl<'a> Codegen<'a> {
                     combined_lexical,
                     true,
                 );
-                let inner_err_type =
-                    quote_spanned! {span=> ::winnow::error::ErrMode<::winnow_grammar::ParseError> };
+                let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<E> };
                 let input_var = &self.input_ident; // <-- NEW: use the defined identifier
 
                 return quote_spanned! {span=>
@@ -664,8 +663,7 @@ impl<'a> Codegen<'a> {
             }
         }
 
-        let inner_err_type =
-            quote_spanned! {span=> ::winnow::error::ErrMode<::winnow_grammar::ParseError> };
+        let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<E> };
         let input_type = quote_spanned! {span=> ::winnow_grammar::ParseInput<'a, S> };
 
         let p = match name_str.as_str() {
@@ -673,7 +671,7 @@ impl<'a> Codegen<'a> {
                 ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_')
             },
             "ident" => quote_spanned! {span=>
-                (|input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<_, ::winnow::error::ErrMode<::winnow_grammar::ParseError>> {
+                (|input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<_, ::winnow::error::ErrMode<E>> {
                     let s: &str = ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_').parse_next(input)?;
                     let symbol = input.state.interner.intern_string(s);
                     Ok(symbol)
@@ -820,12 +818,14 @@ impl<'a> Codegen<'a> {
             },
             _ => {
                 if args.is_empty() {
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow::Parser::parse_next(&mut #rule_path, i).map_err(::winnow::error::ErrMode::Backtrack)) }
+                    // A hand-written parser returns `ParseError` whatever the
+                    // grammar's error type is; the fast pass drops it.
+                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow::Parser::parse_next(&mut #rule_path, i).map_err(|e| ::winnow::error::ErrMode::Backtrack(<E as ::winnow_grammar::Diagnostics>::from_parse_error(e)))) }
                 } else {
                     let arg_exprs = args
                         .iter()
                         .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #rule_path(i, #(#arg_exprs),*).map_err(::winnow::error::ErrMode::Backtrack)) }
+                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #rule_path(i, #(#arg_exprs),*).map_err(|e| ::winnow::error::ErrMode::Backtrack(<E as ::winnow_grammar::Diagnostics>::from_parse_error(e)))) }
                 }
             }
         };
@@ -986,13 +986,21 @@ impl<'a> Codegen<'a> {
                 pattern,
                 init,
                 step,
+                merge,
                 ..
             } => {
                 let p = self.generate_parser_expr(pattern, is_lexical, false);
-                if !is_lexical {
-                    quote_spanned! {span=> ::winnow_grammar::rt::fold_recording(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p), #init, #step) }
+                // The fold of a `par_fold` rule leaves a trail for the replay
+                // of a failed fast pass (`rt::entry_framed`).
+                let fold = if merge.is_some() {
+                    quote_spanned! {span=> ::winnow_grammar::rt::par_fold_recording }
                 } else {
-                    quote_spanned! {span=> ::winnow_grammar::rt::fold_recording(0, #p, #init, #step) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::fold_recording }
+                };
+                if !is_lexical {
+                    quote_spanned! {span=> #fold(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p), #init, #step) }
+                } else {
+                    quote_spanned! {span=> #fold(0, #p, #init, #step) }
                 }
             }
             ModelPattern::Fail { message, .. } => match message {

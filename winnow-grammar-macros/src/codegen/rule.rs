@@ -1,7 +1,6 @@
 use super::Codegen;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
-use syn;
 use winnow_grammar_model::{
     analysis,
     model::{Rule, RuleVariant},
@@ -25,65 +24,27 @@ impl<'a> Codegen<'a> {
         let inner_fn_name = format_ident!("parse_{}_inner", rule_name, span = span);
         let ret_type = &rule.return_type;
         let input = &self.input_ident;
+        // The public parser reports `ParseError`; inside, the rule is generic
+        // over its error type `E` (ADR 17): the entry point instantiates it
+        // twice, once with `EmptyError` for the fast pass and once with
+        // `ParseError` for the diagnosing one.
         let err_type = quote_spanned! { span=> ::winnow_grammar::ParseError };
-        let inner_err_type = quote_spanned! { span=> ::winnow::error::ErrMode<#err_type> };
+        let inner_err_type = quote_spanned! { span=> ::winnow::error::ErrMode<E> };
 
         let mut params_tokens = Vec::new();
         let mut inner_params_tokens = Vec::new();
         let mut arg_names = Vec::new();
-        let mut extra_generics = Vec::<syn::Ident>::new();
-        let mut param_wrappers = Vec::new();
 
+        // Only value parameters get here: a rule with a parser-typed or an
+        // untyped parameter is a template (`is_template`) and is inlined at
+        // its call sites instead of compiled to a function.
         for param in &rule.params {
             let name = &param.name;
             let ty = &param.ty;
-
-            match ty {
-                Some(t) => {
-                    let mut actual_ty = quote! { #t };
-                    let mut is_parser = false;
-                    if let syn::Type::Path(type_path) = t {
-                        if let Some(segment) = type_path.path.segments.last() {
-                            if segment.ident == "Rule" {
-                                is_parser = true;
-                                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-                                {
-                                    let inner_args = &args.args;
-                                    actual_ty = quote! { impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #inner_args, #err_type> };
-                                }
-                            }
-                        }
-                    }
-                    params_tokens.push(quote! { mut #name: #actual_ty });
-                    if is_parser {
-                        let wrapper_name = format_ident!("{}_wrapper", name, span = span);
-                        param_wrappers.push(quote_spanned! {span=>
-                            let mut #wrapper_name = |i: &mut _| {
-                                ::winnow::Parser::parse_next(&mut #name, i).map_err(::winnow::error::ErrMode::Backtrack)
-                            };
-                        });
-                        inner_params_tokens.push(quote! { #wrapper_name: &mut impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, _, #inner_err_type> });
-                        arg_names.push(quote! { &mut #wrapper_name });
-                    } else {
-                        inner_params_tokens.push(quote! { #name: #actual_ty });
-                        arg_names.push(quote! { #name.clone() });
-                    }
-                }
-                None => {
-                    let output_type = format_ident!("Output_{}", name, span = Span::mixed_site());
-                    extra_generics.push(output_type.clone());
-                    let actual_ty = quote! { impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, #err_type> };
-
-                    params_tokens.push(quote! { mut #name: #actual_ty });
-                    let wrapper_name = format_ident!("{}_wrapper", name, span = span);
-                    param_wrappers.push(quote_spanned! {span=>
-                        let mut #wrapper_name = |i: &mut _| {
-                            ::winnow::Parser::parse_next(&mut #name, i).map_err(::winnow::error::ErrMode::Backtrack)
-                        };
-                    });
-                    inner_params_tokens.push(quote! { #wrapper_name: &mut impl ::winnow::Parser<::winnow_grammar::ParseInput<'a, S>, #output_type, #inner_err_type> });
-                    arg_names.push(quote! { &mut #wrapper_name });
-                }
+            if let Some(t) = ty {
+                params_tokens.push(quote! { mut #name: #t });
+                inner_params_tokens.push(quote! { #name: #t });
+                arg_names.push(quote! { #name.clone() });
             }
         }
 
@@ -131,10 +92,8 @@ impl<'a> Codegen<'a> {
         let gen_params = &rule.generics.params;
         let gen_where = &rule.generics.where_clause;
 
-        let mut all_generics = quote! { 'a, S: std::fmt::Debug + Clone };
-        if !extra_generics.is_empty() {
-            all_generics.extend(quote! {, #(#extra_generics),* });
-        }
+        let mut all_generics =
+            quote! { 'a, S: std::fmt::Debug + Clone, E: ::winnow_grammar::rt::RtError<'a, S> };
         if !gen_params.is_empty() {
             all_generics.extend(quote! {, #gen_params});
         }
@@ -149,7 +108,7 @@ impl<'a> Codegen<'a> {
         let ws_shadow = if is_ws_rule {
             quote_spanned! {span=>
                 #[allow(dead_code)]
-                fn WS<'a, S: std::fmt::Debug + Clone>(_: &mut ::winnow_grammar::ParseInput<'a, S>) -> ::winnow::Result<(), #inner_err_type> {
+                fn WS<'a, S: std::fmt::Debug + Clone, E>(_: &mut ::winnow_grammar::ParseInput<'a, S>) -> ::winnow::Result<(), ::winnow::error::ErrMode<E>> {
                     Ok(())
                 }
             }
@@ -175,8 +134,11 @@ impl<'a> Codegen<'a> {
 
                 // The rule name sits on the live stack for the duration of the
                 // body, so that an error RECORDED along the way picks it up.
-                // Errors passed out collect it via `.context(Label)`.
-                #input.state.rules.push(#rule_name_str);
+                // Errors passed out collect it via `.context(Label)`. The fast
+                // pass records nothing and keeps no stack.
+                if <E as ::winnow_grammar::Diagnostics>::RECORDING {
+                    #input.state.rules.push(#rule_name_str);
+                }
                 let result = {
                     #[cfg(feature = "trace")]
                     {
@@ -187,15 +149,14 @@ impl<'a> Codegen<'a> {
                         parser.parse_next(#input)
                     }
                 };
-                #input.state.rules.pop();
+                if <E as ::winnow_grammar::Diagnostics>::RECORDING {
+                    #input.state.rules.pop();
+                }
                 result
             }
         };
 
         let mut outer_generics = quote! {'a, S: std::fmt::Debug + Clone };
-        if !extra_generics.is_empty() {
-            outer_generics.extend(quote! {, #(#extra_generics),* });
-        }
         if !gen_params.is_empty() {
             outer_generics.extend(quote! {, #gen_params});
         }
@@ -218,8 +179,6 @@ impl<'a> Codegen<'a> {
 
         let outer_fn_body = quote! {
             move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
-                #(#param_wrappers)*
-
                 // Entry point: the recorded error belongs to THIS run.
                 input.state.furthest = None;
 
