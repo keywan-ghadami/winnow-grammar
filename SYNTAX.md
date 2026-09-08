@@ -265,6 +265,24 @@ it in between. The one piece of mutable per-parse state a grammar can reach is
 the interner. Pinning `S` per grammar, which is what would open the rest, is
 not implemented.
 
+**The symbol is a number you can use.** `Symbol::index()` is its position in
+the interner: dense, zero-based, in the order the interner first saw each
+string. The `n` distinct strings it holds have the indices `0..n`
+(`InternerContext::len()`), so a caller's own table is a plain `Vec` addressed
+in one step - no second lookup at aggregation time:
+
+```rust,ignore
+let i = sym.index() as usize;
+if i >= totals.len() { totals.resize(i + 1, 0); }
+totals[i] += temp;
+```
+
+The index means nothing outside the interner that produced it: it depends on
+the order strings were first seen, so it differs between runs over different
+input, between two interners over the same input, and - when the pieces of a
+`par_fold` share one interner - on how the threads interleaved. Do not persist
+it and do not read order into it. `resolve` is the way back to the text.
+
 Two properties come from the interner rather than from `intern`. An
 alternative that interns and then backtracks leaves its entry behind - no
 symbol is ever wrong, the interner just holds more than the result names. And

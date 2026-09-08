@@ -154,6 +154,17 @@
   grammar parser because parsing runs before the backend is known; an arity on
   `BuiltIn` is the general fix (`feature-requests.md` §1).
 
+- **`Symbol::index()`, and `InternerContext::len()`/`is_empty()`.** A symbol's
+  position in its interner is dense, zero-based and assigned in first-seen
+  order, so the `n` distinct strings an interner holds have the indices `0..n`.
+  That makes a symbol the row number for a caller's own `Vec` of accumulated
+  data - the aggregation shape, with no second lookup - and `len()` is the size
+  that `Vec` needs. The number was there all along (`Symbol` stores
+  `index + 1`); only `#[doc(hidden)]` conversions could reach it. The contract
+  is documented with it: the index means nothing outside the interner that
+  produced it, it depends on the order strings were first seen, and it is not
+  to be persisted. See `TODO.md` §6.
+
 - **Benchmarks.** `benches/interning.rs` measures interning where it happens -
   the interner alone, an identifier-heavy grammar, and the 1BRC shape with
   `intern`, sequential and cut into pieces. `benches/where.rs` takes a single

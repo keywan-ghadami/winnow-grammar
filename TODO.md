@@ -144,17 +144,15 @@ own table through `new_context`, and the merge combines them. Note that this
 is also the case ADR 19 §2 calls an "escape hatch": for this class of
 workload the *fresh* context per piece is the point, not the exception.
 
-### 6b. `Symbol` hides the number it already has
+### 6b. `Symbol` hides the number it already has — **done**
 
-Short of a bespoke table, the built-in interner nearly does the job: lasso's
-keys are dense and `Symbol` stores `index + 1`. A caller could index its own
-`Vec<Stats>` with it - except the index is not public (`from_spur`/`into_spur`
-are `#[doc(hidden)]`, and there is no `index()`). Exposing it, with the
-contract written down (dense, assigned in first-seen order, meaningful only
-against the interner that made it), is a small change that gets a good part of
-the pattern without a custom interner: `intern` gives the number, the caller
-aggregates by it. Cost stays ours - ~21 ns per name, or whatever §4's cache
-makes of it.
+`Symbol::index()` and `InternerContext::len()`/`is_empty()` are public, with
+the contract written down: dense, zero-based, first-seen order, meaningful
+only against the interner that made it, not to be persisted. A caller
+aggregates into a plain `Vec` addressed by the index, with no second lookup -
+`tests/interning_test.rs` has the worked case. What this does *not* change is
+the cost of getting the number: ~21 ns per name, or whatever §4's cache makes
+of it.
 
 ### 6c. The interner type is fixed
 

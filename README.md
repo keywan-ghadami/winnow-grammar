@@ -222,9 +222,11 @@ Portable built-ins map to specific `winnow` return types:
 | `bool` | `bool` | |
 | `char`, `any`, `digit` | `char` | |
 
-A `Symbol` is a 4-byte id; `ctx.interner.resolve(sym)` gives the text back.
-Symbols are only meaningful against the interner that made them - see the
-`par_fold` note in [SYNTAX.md](SYNTAX.md).
+A `Symbol` is a 4-byte id; `ctx.interner.resolve(sym)` gives the text back, and
+`sym.index()` is its dense position in the interner (`0..interner.len()`) - the
+row number for a caller's own `Vec` of accumulated data. Symbols and indices
+are only meaningful against the interner that made them - see the `par_fold`
+note in [SYNTAX.md](SYNTAX.md).
 
 ## Diagnostics
 
