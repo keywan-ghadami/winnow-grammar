@@ -678,6 +678,29 @@ impl<'a> Codegen<'a> {
             // `intern(p)`: the one builtin that takes an argument. The
             // argument is an ordinary pattern, so `intern(until(";"))` and
             // `intern(my_rule)` are the same shape as `intern(string)`.
+            // `text(p)`: run `p` and hand back the input it consumed. winnow's
+            // `.take()` - the value `p` produced is dropped, the span is not.
+            // No allocation: the result borrows the input.
+            //
+            // Several patterns are a sequence, not several arguments:
+            // `text(digit{2} raw_ident)` captures both, and through the
+            // ordinary sequence generator, so the whitespace between them is
+            // whatever it would be outside the `text`.
+            "text" => {
+                if args.is_empty() {
+                    let msg = "`text` takes the pattern whose input to capture, and got none";
+                    return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg)
+                        .to_compile_error();
+                }
+                let seq: Vec<ModelPattern> = args
+                    .iter()
+                    .map(|a| match a {
+                        Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
+                    })
+                    .collect();
+                let inner = self.generate_sequence_parser(&seq, is_lexical);
+                quote_spanned! {span=> ::winnow::Parser::take(#inner) }
+            }
             "intern" => match args {
                 [arg] => {
                     let inner = self.generate_argument_expr(arg, is_lexical);

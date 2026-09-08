@@ -27,6 +27,12 @@ impl Backend for WinnowBackend {
                 name: "intern",
                 return_type: "Symbol",
             },
+            // Takes one argument - the pattern whose matched input is
+            // handed back instead of its value.
+            BuiltIn {
+                name: "text",
+                return_type: "&'a str",
+            },
             BuiltIn {
                 name: "string",
                 return_type: "&'a str",
