@@ -17,4 +17,15 @@ grammar! {
     }
 }
 
+// The declaration routes to `ExternRule` even behind an attribute, so the
+// attribute check reaches it too.
+grammar! {
+    grammar OnExtern {
+        #[frmae(boundary = "\n")]
+        extern rule outside -> usize;
+
+        pub B -> usize = d:digit1 -> { d.len() }
+    }
+}
+
 fn main() {}
