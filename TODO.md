@@ -1,6 +1,12 @@
 # Remaining High-Priority Tasks
 
-This file tracks critical technical debt and optimization opportunities identified during development. These items represent features that are either partially implemented, stubbed out, or require significant refinement to meet production standards.
+This file tracks critical technical debt and optimization opportunities
+identified during development.
+
+An item is closed here only with what closed it: the change, the test that
+would fail without it, or - where the answer was that nothing should change -
+the measurement or the behaviour that says so. Three of the items below are
+closed that second way, and they are not lesser answers than the others.
 
 ## 1. The cut operator — **verified, no change**
 
@@ -75,7 +81,7 @@ Making the span type *configurable* is what remains conceivable and is not
 proposed: it would put a type parameter in every rule that binds a span, for
 something a caller can compute from the offsets in one call.
 
-## 4. Interning: where the time goes, and what is still open
+## 4. Interning: where the time goes — **cache built, hasher rejected**
 
 `benches/interning.rs` (interning in place) and `benches/where.rs` (the same
 call taken apart) exist so that this is decided on numbers. What they say
@@ -173,7 +179,7 @@ fail without the fix; that was checked by reverting it, not assumed.
 ADR 19 §2 - `parse_<rule>_pieces` taking a context rather than a factory - was
 blocked on this and is now open.
 
-## 6. The high-end path: a bespoke interner, and why a grammar cannot have one
+## 6. The high-end path: a bespoke interner — **reachable now**
 
 A 1BRC-class solution does not want a general interner. It wants the slot
 number *itself*: one open-addressed table per thread, the first eight bytes as
@@ -220,14 +226,23 @@ aggregates into a plain `Vec` addressed by the index, with no second lookup -
 the cost of getting the number: ~21 ns per name, or whatever §4's cache makes
 of it.
 
-### 6c. The interner type is fixed
+### 6c. The interner type is fixed — **answered by 6a, not by a type parameter**
 
-`ParseContext` names `InternerContext` concretely, so even a caller who has a
-better interner cannot put it where `ident` and `intern` will find it. Making
-it pluggable means a trait and a second type parameter on the context, which
-lands in every generated signature - the same infection `S` already is, and
-worth doing only together with 6a, if at all. Recorded so the three are
-weighed as one question rather than three.
+`ParseContext` names `InternerContext` concretely, and the question was whether
+to make it pluggable: a trait and a second type parameter on the context,
+landing in every generated signature - the same infection `S` already is.
+
+`state T;` answers it without any of that. A caller who has a better interner
+puts it *in the state* and reaches it from a hand-written parser, which is
+exactly the shape `tests/state_test.rs` already runs: a table whose slot
+numbers are the identity, assigned in an `extern rule`, aggregated by a fold.
+A bespoke interner is a bespoke table with `resolve` on it; nothing about it
+needs to live in the field `ident` reads.
+
+What stays fixed is what `ident` and `intern(…)` use, and that is right: they
+are the built-ins, they should mean one thing, and the grammar that wants
+something else says so by writing it. Closed - not by building the type
+parameter, but by the feature that made it unnecessary.
 
 ## 7. The 1BRC temperature: where its time goes, and what is left
 
