@@ -136,7 +136,11 @@ Verified. Today `user_state` is the caller's: set before, read after,
 untouchable in between.
 
 What would open it: a grammar-level declaration of the state type - `state
-MyState;` or an attribute - so that the generated rules are concrete in `S`.
+MyState;` - so that the generated rules are concrete in `S`. **Designed in
+`docs/adr/adr20-pinning-the-state-type.md`**, with the costs it is not free of:
+composition between a pinned and a generic grammar becomes one-directional,
+`parse_test` stops applying, and `user_state` becomes load-bearing under ADR
+17's replay.
 Then an action reaches `_state.user_state` and a hand-written parser can take
 `&mut ParseInput<'a, MyState>`, which is the whole high-end path: the parser
 computes a slot, the fold aggregates by it, `par_fold` gives each piece its
