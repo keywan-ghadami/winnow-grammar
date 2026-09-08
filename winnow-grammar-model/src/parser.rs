@@ -45,6 +45,7 @@ pub mod kw {
     syn::custom_keyword!(par_fold);
     syn::custom_keyword!(lex);
     syn::custom_keyword!(spaced);
+    syn::custom_keyword!(state);
 }
 
 fn parse_path_no_args(input: ParseStream) -> Result<Path> {
@@ -144,6 +145,8 @@ pub struct GrammarDefinition {
     pub uses: Vec<ItemUse>,
     pub rules: Vec<Rule>,
     pub extern_rules: Vec<ExternRule>,
+    /// `state T;` - the user state this grammar declares it needs (ADR 20).
+    pub state: Option<Type>,
     pub imports: Vec<ImportedGrammar>,
 }
 
@@ -179,12 +182,27 @@ impl Parse for GrammarDefinition {
         let mut rules = Vec::new();
         let mut extern_rules = Vec::new();
         let mut nested_imports = Vec::new();
+        let mut state: Option<Type> = None;
 
         while !content.is_empty() {
             if content.peek(Token![use]) {
                 uses.push(content.parse()?);
             } else if content.peek(kw::import) {
                 nested_imports.push(content.parse()?);
+            } else if content.peek(kw::state) && !content.peek2(Token![->]) {
+                // `state T;` - a declaration, not a rule named `state`.
+                let kw = content.parse::<kw::state>()?;
+                let ty: Type = content.parse()?;
+                let _ = content.parse::<Token![;]>()?;
+                if state.is_some() {
+                    return Err(syn::Error::new(
+                        kw.span,
+                        "a grammar declares at most one `state`; a grammar that \
+                         needs two things in its state declares the type that \
+                         holds both",
+                    ));
+                }
+                state = Some(ty);
             } else if peek_extern_rule(&content) {
                 extern_rules.push(content.parse()?);
             } else {
@@ -202,6 +220,7 @@ impl Parse for GrammarDefinition {
             uses,
             rules,
             extern_rules,
+            state,
             imports,
         })
     }

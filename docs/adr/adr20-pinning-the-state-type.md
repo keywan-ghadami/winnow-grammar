@@ -1,8 +1,10 @@
 # ADR 20: `state MyState;` — Giving the Grammar Its Own State Type
 
-**Status:** Proposed, not implemented. **Date:** 2026-09-08.
-**Feasibility:** `tests/adr20_design_test.rs` — the three claims this design
-turns on, compiled rather than argued.
+**Status:** Accepted, implemented. **Date:** 2026-09-08.
+**Tests:** `tests/state_test.rs` (an action writing to the state, one composite
+state serving two grammars, the hand-written parser that assigns slots out of
+it, a declared state under `par_fold` pieces, and a grammar that declares
+nothing behaving as before), `tests/ui/state.rs` (the two rejections).
 **Depends on:** ADR 14 (the shared context), ADR 17 (the replay and its
 side-effect contract), ADR 18 §2 (`_state`), ADR 19 §2 (`_pieces_with`).
 **Motivates:** `TODO.md` §6.
@@ -102,15 +104,19 @@ impl StateOf<TableA> for App { … }
 impl StateOf<TableB> for App { … }
 ```
 
-Both are compiled in `tests/adr20_design_test.rs`, including the coherence
-question the blanket impl raises — `StateOf<App> for App` and
-`StateOf<TableA> for App` are different instantiations and do not overlap.
+Both are exercised in `tests/state_test.rs`, including the coherence question
+the blanket impl raises — `StateOf<App> for App` and `StateOf<TableA> for App`
+are different instantiations and do not overlap.
 
 `S` appears in about thirty places in the code generator, but the *parameter
 lists* are built in three: the inner rule's generics, the outer entry point's,
 and `parse_<rule>_pieces`. The change is one added bound in those three, plus
-a `_user` binding injected beside `_state` in actions — `&mut Table`, so an
-action writes `_user.slot(s)` and never spells the trait. `Clone + Debug` stay
+a grammar-local accessor so an action writes `_state.user()` and never spells
+the trait. It is deliberately a *method* rather than a second injected
+binding: a binding would hold a `&mut` into the context for its whole live
+range, and an action that also touched `_state.interner` would not compile. A
+method borrows only for its own expression, so both are usable in one action
+in any order — `tests/state_test.rs` pins that. `Clone + Debug` stay
 where they are; the declared type inherits them.
 
 Rules staying generic is not only about composition. It means
@@ -160,16 +166,17 @@ error[E0277]: the grammar declares `state Table`, but this parse's state does
 
 **2. `parse_test` stops applying.** *Met by a sibling, not a change.* The
 helper is deliberately fixed to `ParseContext<()>` so tests need no turbofish;
-a second trait with a different method — `parse_test_in(state, input)`, blanket
-over every state — coexists with it, and the state argument determines the type
-so neither call becomes ambiguous. Compiled, both calls, in the design test.
+`WinnowTestExtWith::parse_test_in(state, input)` is blanket over every state
+and coexists with it, the state argument determining the type so neither call
+becomes ambiguous. Both are used in the suite.
 
-**3. `Default` stops being a given.** *Met by a constructor.* This one bites
-immediately: `ParseContext { user_state, ..Default::default() }` does not
-compile for a state that is not `Default`, which a pre-sized table need not be.
-Naming every field instead requires nothing of `S`, so the fix is
-`ParseContext::with_state(user_state)` wrapping exactly that. The design test
-writes it out.
+**3. `Default` stops being a given.** *Met by a constructor.* This one bit
+immediately while writing the test: `ParseContext { user_state,
+..Default::default() }` does not compile for a state that is not `Default`,
+which a pre-sized table need not be. Naming every field requires nothing of
+`S`, and that is now `ParseContext::with_state(user_state)` — with
+`with_state_and_interner` beside it for the ADR 14 shape, where the interner
+outlives the parse.
 
 **4. `user_state` becomes load-bearing under ADR 17's replay.** *Half of this
 was overstated, and the other half is real.*

@@ -15,6 +15,7 @@ pub mod error;
 pub mod interner;
 /// Runtime helpers for the generated code.
 pub mod rt;
+pub mod state;
 pub mod test_result;
 pub mod testing;
 
@@ -23,6 +24,7 @@ pub use error::{
 };
 
 pub use interner::{InternerContext, Symbol};
+pub use state::StateOf;
 
 /// When and how a failing parse produces its diagnostics.
 ///
@@ -108,6 +110,33 @@ impl<S: Default> Default for ParseContext<S> {
 }
 
 impl<S> ParseContext<S> {
+    /// A context around a user state, with a fresh interner and the default
+    /// diagnostics settings.
+    ///
+    /// [`Default`] cannot serve here: it requires `S: Default`, which a state
+    /// that carries a pre-sized table or a handle need not be. Naming every
+    /// field requires nothing of `S` - see ADR 20.
+    pub fn with_state(user_state: S) -> Self {
+        Self {
+            interner: InternerContext::new(),
+            user_state,
+            furthest: None,
+            rules: Vec::new(),
+            diagnose: Diagnose::default(),
+            fold: FoldProgress::default(),
+        }
+    }
+
+    /// [`with_state`](Self::with_state) with an interner the caller already
+    /// has - the shape ADR 14 asks for when one interner outlives the parse,
+    /// and what the pieces of a `par_fold` share.
+    pub fn with_state_and_interner(user_state: S, interner: InternerContext) -> Self {
+        Self {
+            interner,
+            ..Self::with_state(user_state)
+        }
+    }
+
     /// Records a discarded error - following the same ranking as
     /// [`ParseError::merge`].
     pub fn record(&mut self, e: &ParseError) {

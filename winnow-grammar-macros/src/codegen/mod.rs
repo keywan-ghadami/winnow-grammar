@@ -3,7 +3,7 @@ pub mod rule;
 pub mod variants;
 
 use proc_macro2::{Span, TokenStream};
-use quote::{format_ident, quote_spanned};
+use quote::{format_ident, quote, quote_spanned};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use winnow_grammar_model::frame::Frames;
@@ -60,6 +60,18 @@ pub struct Codegen<'a> {
     pub current_boundary: RefCell<Option<String>>,
 }
 
+impl Codegen<'_> {
+    /// The extra bound `state T;` puts on a rule's state parameter, empty for
+    /// a grammar that declares none. A bound rather than a substitution, so
+    /// rules stay generic and one state can serve two grammars - ADR 20.
+    pub fn state_bound(&self) -> TokenStream {
+        match &self.grammar.state {
+            Some(ty) => quote! { + ::winnow_grammar::StateOf<#ty> },
+            None => quote! {},
+        }
+    }
+}
+
 impl<'a> Codegen<'a> {
     pub fn new(grammar: &'a GrammarDefinition, frames: Frames) -> Self {
         let user_rules = grammar.rules.iter().map(|r| r.name.to_string()).collect();
@@ -83,6 +95,24 @@ impl<'a> Codegen<'a> {
         let rules = self.grammar.rules.iter().map(|r| self.generate_rule(r));
 
         let use_super = quote_spanned! {Span::call_site()=> use super::*; };
+
+        // `state T;`: a grammar-local extension trait, so that an action
+        // writes `_state.user()` and gets a `&mut T` with no turbofish and no
+        // second live borrow of the context - ADR 20.
+        let state_accessor = match &self.grammar.state {
+            Some(ty) => quote_spanned! {Span::call_site()=>
+                trait __UserState { fn user(&mut self) -> &mut #ty; }
+                impl<S: ::winnow_grammar::StateOf<#ty>> __UserState
+                    for ::winnow_grammar::ParseContext<S>
+                {
+                    #[inline]
+                    fn user(&mut self) -> &mut #ty {
+                        ::winnow_grammar::StateOf::state(&mut self.user_state)
+                    }
+                }
+            },
+            None => quote! {},
+        };
 
         // If user defined WS, we alias WS to parse_WS_inner so that internal usage (and wrappers) call the inner parser directly.
         let ws_parser = if has_user_ws {
@@ -114,6 +144,8 @@ impl<'a> Codegen<'a> {
 
                 // User-defined use statements
                 #(#use_statements)*
+
+                #state_accessor
 
                 use ::winnow::prelude::*;
                 use ::winnow::token::literal;

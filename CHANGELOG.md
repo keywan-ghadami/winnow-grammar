@@ -161,6 +161,29 @@
   grammar parser because parsing runs before the backend is known; an arity on
   `BuiltIn` is the general fix (`feature-requests.md` §1).
 
+- **`state T;`: a grammar declares the state it needs** (ADR 20). Until now
+  nothing a grammar could express touched `user_state`: rules are generic over
+  the state type, so `_state.user_state` had type `S` in an action, and a
+  hand-written parser - called from that same generic code - could not name a
+  concrete state either. A grammar now declares one, and an action reaches it
+  as `_state.user()`.
+
+  The declaration is a **bound, not a substitution**: rules stay generic and
+  require only that the state provides a `T`, so a state that *is* a `T`
+  satisfies it with nothing to write, and one composite state serves several
+  grammars at once by implementing `StateOf<T>` for each. Nothing existing
+  changes - a grammar that declares no state generates what it generated
+  before, `parse_<rule>_pieces` and its `new_context` closure included.
+
+  With it: `winnow_grammar::StateOf`, `ParseContext::with_state` and
+  `with_state_and_interner` (`Default` is not required of a state), and
+  `testing::WinnowTestExtWith::parse_test_in(state, input)` beside the
+  `()`-fixed `parse_test`. A state that provides nothing of the sort is
+  rejected in the grammar's own words rather than as an unresolved type
+  parameter. This is what makes the 1BRC shape expressible: a hand-written
+  parser assigns slots out of the declared state and the fold aggregates by
+  them - `tests/state_test.rs`.
+
 - **`Symbol::index()`, and `InternerContext::len()`/`is_empty()`.** A symbol's
   position in its interner is dense, zero-based and assigned in first-seen
   order, so the `n` distinct strings an interner holds have the indices `0..n`.

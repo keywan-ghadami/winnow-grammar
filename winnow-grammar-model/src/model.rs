@@ -9,6 +9,10 @@ pub struct GrammarDefinition {
     pub name: Ident,
     pub rules: Vec<Rule>,
     pub extern_rules: Vec<ExternRule>,
+    /// `state T;` - the state type this grammar's rules require (ADR 20).
+    /// `None` keeps them generic over any state, which is what a grammar that
+    /// does not declare one has always been.
+    pub state: Option<syn::Type>,
     pub imports: Vec<ImportedGrammar>,
     pub uses: Vec<syn::ItemUse>,
 }
@@ -181,6 +185,7 @@ impl From<parser::GrammarDefinition> for GrammarDefinition {
             extern_rules: p.extern_rules.into_iter().map(Into::into).collect(),
             imports: p.imports.into_iter().map(Into::into).collect(),
             uses,
+            state: p.state,
         }
     }
 }

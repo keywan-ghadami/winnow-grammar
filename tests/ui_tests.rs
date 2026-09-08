@@ -8,5 +8,6 @@ fn ui() {
     t.compile_fail("tests/ui/bounds.rs");
     t.compile_fail("tests/ui/frames.rs");
     t.compile_fail("tests/ui/intern_arity.rs");
+    t.compile_fail("tests/ui/state.rs");
     t.compile_fail("tests/ui/attrs.rs");
 }

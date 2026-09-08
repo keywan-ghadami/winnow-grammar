@@ -251,19 +251,11 @@ otherwise normalise. An action block reaches the context directly as
 Every action gets `_state`, whether or not it names one; the `_` prefix keeps
 an unused one quiet, and an action may bind the name itself, which shadows it.
 
-**What `_state` does not reach: `user_state`.** A generated rule is generic
-over the state type, so `_state.user_state` has type `S` in an action and
-nothing can be done with it - only the context's own fields (`interner`,
-`fold`, `diagnose`, `rules`) have a known type there.
-
-A hand-written parser does not get around this: it is called from that same
-generic code, so it too has to be generic over `S`, and naming a concrete
-state in its signature is a type error (`expected Table, found type parameter
-S`). **Today the user state is the caller's, not the grammar's** - set it
-before the parse, read it after, but nothing the grammar can express touches
-it in between. The one piece of mutable per-parse state a grammar can reach is
-the interner. Pinning `S` per grammar, which is what would open the rest, is
-not implemented.
+**Reaching the user state: declare it.** A rule is generic over the state
+type, so `_state.user_state` has type `S` in an action and nothing can be done
+with it. A grammar that wants its own state says so - see
+[Declaring a state](#declaring-a-state-state-t) below - and then writes
+`_state.user()`.
 
 **The symbol is a number you can use.** `Symbol::index()` is its position in
 the interner: dense, zero-based, in the order the interner first saw each
@@ -289,13 +281,90 @@ symbol is ever wrong, the interner just holds more than the result names. And
 a symbol is meaningful only against the interner that made it, which is what
 the `par_fold` note below is about.
 
+## Declaring a State: `state T;`
+
+A grammar that has to keep something of its own while parsing - a symbol table
+with scopes, an arena, a slot table whose numbers index an accumulator - names
+the type once:
+
+```rust,ignore
+#[derive(Clone, Debug, Default)]
+struct Seen { words: usize }
+
+grammar! {
+    grammar Counting {
+        state Seen;
+
+        pub word -> usize = w:alpha1 -> {
+            _state.user().words += 1;      // `&mut Seen`
+            w.len()
+        }
+    }
+}
+```
+
+`_state.user()` is the accessor; it is a method rather than a second binding,
+so it holds no borrow across the rest of the action and the context's own
+fields (`_state.interner`, …) stay usable in the same action, in any order.
+
+The declaration is a **bound, not a substitution**: a rule still takes any
+state, and requires only that it provides a `Seen`. A state that *is* a `Seen`
+satisfies that with nothing to write, and one state can satisfy several
+grammars at once by implementing `StateOf` for each:
+
+```rust,ignore
+struct App { seen: Seen, names: Names }
+impl StateOf<Seen>  for App { fn state(&mut self) -> &mut Seen  { &mut self.seen } }
+impl StateOf<Names> for App { fn state(&mut self) -> &mut Names { &mut self.names } }
+```
+
+A parse then runs with `ParseContext::with_state(App::default())` and both
+grammars find their part. A state that provides nothing of the sort is
+rejected where it is passed, in the grammar's own words:
+
+```text
+error: the grammar declares `state Table`, but this parse's state does not
+       provide one
+   = note: parse with a state of type `Table`, or implement `StateOf<Table>`
+           for the state you have
+```
+
+A grammar declares at most one `state`; a grammar that needs two things names
+the type that holds both. A grammar that declares none is generic over the
+state exactly as before - the declaration adds a bound and changes nothing
+else, `parse_<rule>_pieces` and its `new_context` closure included.
+
+**Testing.** `parse_test` is fixed to `ParseContext<()>` so that the common
+test needs no turbofish; a grammar with a state uses `parse_test_in(state,
+input)` beside it (`winnow_grammar::testing::WinnowTestExtWith`).
+
+**What backtracking does to it.** Nothing, in the sense that matters: a branch
+that writes to the state and then loses has still written. There is no
+snapshot at alternative granularity, so state that a grammar writes wants to
+be *idempotent* - assigning a slot twice yields the same slot, exactly as
+interning does. A count or a sum belongs in what a rule returns and what
+`fold` combines, where a lost branch's value is discarded with it; or after a
+cut (`=>`), which no enclosing alternative retries past. A failed *parse* is a
+different matter and is handled: under the default `Diagnose::Replay` the
+state is restored before the diagnosing pass, so an action runs once.
+
 ## Hand-written Parsers: `extern rule`
 
 A parser that is easier to write in Rust than in the DSL - a scanner of your
 own, a token the grammar cannot express, a lookup in the interner - is
-declared in the grammar and written next to it. Note what it does *not* buy:
-it is called from generic code, so it is generic over the state type too and
-cannot reach a concrete `user_state`.
+declared in the grammar and written next to it. It is called from generic
+code, so it is generic over the state type too - which is exactly how it
+reaches a declared state: bound it with `StateOf<T>` and call `.state()`.
+
+```rust,ignore
+fn city<'a, S>(i: &mut ParseInput<'a, S>) -> Result<usize, ParseError>
+where
+    S: Clone + std::fmt::Debug + StateOf<Slots>,
+{
+    let name: &str = take_till(1.., ';').parse_next(i)?;
+    Ok(i.state.user_state.state().slot(name))
+}
+```
 
 ```rust,ignore
 use winnow::token::take_till;

@@ -1,0 +1,29 @@
+error: a grammar declares at most one `state`; a grammar that needs two things in its state declares the type that holds both
+  --> tests/ui/state.rs:25:9
+   |
+25 |         state Unrelated;
+   |         ^^^^^
+
+error[E0277]: the grammar declares `state Table`, but this parse's state does not provide one
+  --> tests/ui/state.rs:32:13
+   |
+32 |     let _ = Needs::parse_r().parse_test_in(Unrelated, "abc");
+   |             ^^^^^^^^^^^^^^^^ no `Table` in this state
+   |
+help: the trait `StateOf<Table>` is not implemented for `Unrelated`
+  --> tests/ui/state.rs:12:1
+   |
+12 | pub struct Unrelated;
+   | ^^^^^^^^^^^^^^^^^^^^
+   = note: parse with a state of type `Table`, or implement `StateOf<Table>` for the state you have
+note: required by a bound in `parse_r`
+  --> tests/ui/state.rs:14:1
+   |
+14 | / grammar! {
+15 | |     grammar Needs {
+16 | |         state Table;
+17 | |         pub r -> usize = _w:alpha1 -> { _state.user().n += 1; _state.user().n }
+18 | |     }
+19 | | }
+   | |_^ required by this bound in `parse_r`
+   = note: this error originates in the macro `grammar` (in Nightly builds, run with -Z macro-backtrace for more info)

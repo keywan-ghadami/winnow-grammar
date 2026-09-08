@@ -43,6 +43,65 @@ where
     }
 }
 
+/// [`WinnowTestExt`] for a grammar that declares a `state` - ADR 20.
+///
+/// The trait above is fixed to `ParseContext<()>` on purpose, so that the
+/// common test needs no turbofish; a grammar with a state of its own cannot
+/// use it. This one is blanket over every state and takes it as an argument,
+/// which is also what determines the type - so neither call is ambiguous and
+/// both live side by side.
+///
+/// ```
+/// use winnow_grammar::grammar;
+/// use winnow_grammar::testing::WinnowTestExtWith;
+///
+/// #[derive(Clone, Debug, Default)]
+/// struct Seen(usize);
+///
+/// grammar! {
+///     grammar Counting {
+///         state Seen;
+///         pub word -> usize = w:alpha1 -> { _state.user().0 += w.len(); _state.user().0 }
+///     }
+/// }
+///
+/// fn main() {
+///     Counting::parse_word()
+///         .parse_test_in(Seen::default(), "hello")
+///         .assert_success_is(5);
+/// }
+/// ```
+pub trait WinnowTestExtWith<'a, O, S> {
+    /// Parse `input` with `state` as the grammar's user state.
+    fn parse_test_in(&mut self, state: S, input: &'a str)
+        -> TestResult<O, String, ParseContext<S>>;
+}
+
+impl<'a, P, O, S> WinnowTestExtWith<'a, O, S> for P
+where
+    P: Parser<ParseInput<'a, S>, O, crate::ParseError>,
+    S: Clone + std::fmt::Debug,
+    O: std::fmt::Debug,
+{
+    fn parse_test_in(
+        &mut self,
+        state: S,
+        input: &'a str,
+    ) -> TestResult<O, String, ParseContext<S>> {
+        let mut stream = ParseInput {
+            input: LocatingSlice::new(input),
+            state: ParseContext::with_state(state),
+        };
+
+        let result = self.parse_next(&mut stream).map_err(|e| e.render(input));
+        let final_context = stream.state;
+
+        TestResult::new(result)
+            .with_source(input)
+            .with_state(final_context)
+    }
+}
+
 /// A macro to define a test case using the winnow backend.
 #[macro_export]
 macro_rules! test_case {

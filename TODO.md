@@ -125,30 +125,21 @@ tag, length included, so a hit needs no string comparison at all.
 
 Three things stand between a grammar and that, in the order they bite.
 
-### 6a. The state type is not the grammar's (blocks everything else)
+### 6a. The state type is the grammar's to declare — **done**
 
-A bespoke table lives in `user_state`. Nothing the grammar can express
-reaches it: a generated rule is generic over `S`, so `_state.user_state` has
-type `S` in an action, **and a hand-written parser is no way round it** - it
-is called from that same generic code, so naming a concrete state in its
-signature is a type error (`expected Table, found type parameter S`).
-Verified. Today `user_state` is the caller's: set before, read after,
-untouchable in between.
+`state T;` in a grammar block makes the state reachable: an action writes
+`_state.user()`, and a hand-written parser bounds itself with `StateOf<T>` and
+calls `.state()`. The declaration is a bound rather than a substitution, so
+rules stay generic, `parse_<rule>_pieces` keeps its signature, and one
+composite state serves several grammars at once. ADR 20 has the design and
+what each cost is met with; `tests/state_test.rs` has the high-end shape
+end to end - a parser assigning slots out of the declared state under a
+`#[frame]`/`par_fold` grammar.
 
-What would open it: a grammar-level declaration of the state type -
-`state MyState;` - read as a **bound** on `S`, not a substitution, so rules
-stay generic and a composite state can serve two grammars at once. Designed in
-`docs/adr/adr20-pinning-the-state-type.md`; its feasibility claims are compiled
-in `tests/adr20_design_test.rs`, and its costs each carry what meets them. The
-one that stays real: backtracking inside a successful parse undoes nothing, so
-a state written from an action wants idempotent writes - measured today on the
-interner.
-Then an action reaches `_state.user_state` and a hand-written parser can take
-`&mut ParseInput<'a, MyState>`, which is the whole high-end path: the parser
-computes a slot, the fold aggregates by it, `par_fold` gives each piece its
-own table through `new_context`, and the merge combines them. Note that this
-is also the case ADR 19 §2 calls an "escape hatch": for this class of
-workload the *fresh* context per piece is the point, not the exception.
+What remains open around it: slot numbers are per state, exactly as symbols
+are per interner, so a `par_fold` cut into pieces merges counts and not
+identities unless the merge is keyed by name. That is the same shape as ADR
+19's problem and is not solved by either.
 
 ### 6b. `Symbol` hides the number it already has — **done**
 

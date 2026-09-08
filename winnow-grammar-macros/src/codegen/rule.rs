@@ -8,6 +8,7 @@ use winnow_grammar_model::{
 
 impl<'a> Codegen<'a> {
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
+        let state_bound = self.state_bound();
         if super::is_template(rule) {
             // Template rules are not compiled as functions of their own.
             // They are inlined directly at the call site in expr.rs via AST substitution.
@@ -92,8 +93,7 @@ impl<'a> Codegen<'a> {
         let gen_params = &rule.generics.params;
         let gen_where = &rule.generics.where_clause;
 
-        let mut all_generics =
-            quote! { 'a, S: std::fmt::Debug + Clone, E: ::winnow_grammar::rt::RtError<'a, S> };
+        let mut all_generics = quote! { 'a, S: std::fmt::Debug + Clone #state_bound, E: ::winnow_grammar::rt::RtError<'a, S> };
         if !gen_params.is_empty() {
             all_generics.extend(quote! {, #gen_params});
         }
@@ -156,7 +156,7 @@ impl<'a> Codegen<'a> {
             }
         };
 
-        let mut outer_generics = quote! {'a, S: std::fmt::Debug + Clone };
+        let mut outer_generics = quote! {'a, S: std::fmt::Debug + Clone #state_bound };
         if !gen_params.is_empty() {
             outer_generics.extend(quote! {, #gen_params});
         }
@@ -256,6 +256,7 @@ impl<'a> Codegen<'a> {
     ///   the `rayon` feature the pieces run in parallel, without it in
     ///   sequence - same cut, same answer.
     fn generate_frame_fns(&self, rule: &Rule) -> TokenStream {
+        let state_bound = self.state_bound();
         let span = Span::mixed_site();
         let rule_name_str = rule.name.to_string();
         let vis = if rule.is_pub {
@@ -317,7 +318,7 @@ impl<'a> Codegen<'a> {
                     /// through it; see ADR 14). A piece's error is reported at
                     /// its offset in `input`.
                     #[allow(dead_code)]
-                    #vis fn #pieces_fn<'a, S>(
+                    #vis fn #pieces_fn<'a, S: std::fmt::Debug + Clone #state_bound>(
                         input: &'a str,
                         new_context: impl Fn() -> ::winnow_grammar::ParseContext<S> + Sync,
                         how: ::winnow_grammar::rt::Parallelism,
