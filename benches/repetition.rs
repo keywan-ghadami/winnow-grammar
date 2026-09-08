@@ -13,6 +13,16 @@ use winnow::Parser;
 use winnow_grammar::error::ParseError;
 use winnow_grammar::{grammar, ParseContext, ParseInput};
 
+/// What `text(digit{1,2})` would generate: the matched run as a borrowed
+/// slice instead of a `Vec<char>`. Winnow's `.take()` under another name -
+/// this stands in for the operator so the design can be measured before it
+/// is designed.
+fn digits_1_2<'a, S: Clone + std::fmt::Debug>(
+    i: &mut ParseInput<'a, S>,
+) -> Result<&'a str, ParseError> {
+    winnow::token::take_while(1..=2, |c: char| c.is_ascii_digit()).parse_next(i)
+}
+
 /// The ceiling: the same temperature read by hand, one scan and a fold.
 /// Not a proposal - a number to hold the generated forms against.
 fn tenths_by_hand<'a, S: Clone + std::fmt::Debug>(
@@ -67,6 +77,17 @@ grammar! {
         pub ONE_DIGIT -> i32 = d:digit -> { d as i32 - 48 }
         pub TWO_DIGITS -> i32 = a:digit b:digit -> { (a as i32 - 48) * 10 + (b as i32 - 48) }
         pub BY_HAND -> i32 = v:super::tenths_by_hand -> { v }
+
+        // The same rule, with only the digit run changed from `Vec<char>` to
+        // the borrowed slice a text-capture operator would give it.
+        pub TENTHS_TEXT -> i32 =
+            neg:"-"? whole:super::digits_1_2 "." frac:digit
+            -> {
+                let mut v: i32 = 0;
+                for &b in whole.as_bytes() { v = v * 10 + (b - b'0') as i32; }
+                v = v * 10 + (frac as i32 - '0' as i32);
+                if neg.is_some() { -v } else { v }
+            }
 
         // The pair that isolates the collection: the same pattern, once with
         // its elements named and once without.
@@ -156,6 +177,7 @@ fn bench_bounded(c: &mut Criterion) {
     case!("one_digit", Rep::parse_ONE_DIGIT(), "1");
     case!("two_digits", Rep::parse_TWO_DIGITS(), "12");
     case!("tenths", Rep::parse_TENTHS(), "-12.3");
+    case!("tenths/via_text", Rep::parse_TENTHS_TEXT(), "-12.3");
     case!("tenths/by_hand", Rep::parse_BY_HAND(), "-12.3");
     case!("bound", Rep::parse_BOUNDED_BOUND(), "12");
     case!("discarded", Rep::parse_BOUNDED_DISCARDED(), "12");
