@@ -154,34 +154,40 @@ impl Parallelism {
 }
 
 /// The driver behind `parse_<rule>_pieces` on a `par_fold` rule: cut `input`
-/// at `boundary` into the pieces `how` asks for, parse each with `parse`
-/// under a context from `new_context`, and fold the results with `merge`,
-/// first piece first. A piece's error is shifted to its offset in `input`,
-/// so it renders against the whole input; when several pieces fail, the
-/// first one's error is the one returned.
+/// at `boundary` into the pieces `how` asks for, parse each under a context
+/// from `new_context`, and fold the results with `merge`, first piece first.
+/// A piece's error is shifted to its offset in `input`, so it renders against
+/// the whole input; when several pieces fail, the first one's error is the
+/// one returned.
+///
+/// `fast` and `diagnose` are the rule's parser instantiated with `EmptyError`
+/// and with [`ParseError`]; each piece goes through [`entry_framed`], so a
+/// failing piece is diagnosed from the item its fast pass stopped in.
 ///
 /// With the `rayon` feature the pieces are parsed on rayon's global pool;
 /// without it, in sequence - the same cut and the same answer, which is what
 /// lets a test check the split without threads.
 #[cfg(not(feature = "rayon"))]
-pub fn fold_pieces<'a, S, T, P, M, C>(
+pub fn fold_pieces<'a, S, T, F, D, M, C>(
     input: &'a str,
     boundary: &str,
     how: Parallelism,
     new_context: C,
-    parse: P,
+    fast: F,
+    diagnose: D,
     merge: M,
 ) -> Result<T, ParseError>
 where
     S: Clone + std::fmt::Debug,
     C: Fn() -> crate::ParseContext<S>,
-    P: Fn(&mut ParseInput<'a, S>) -> Result<T, ParseError>,
+    F: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<EmptyError>>,
+    D: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<ParseError>>,
     M: Fn(T, T) -> T,
 {
     let ranges = piece_ranges(input, boundary, how);
     let mut acc: Option<T> = None;
     for r in ranges {
-        let v = parse_piece(input, r, &new_context, &parse)?;
+        let v = parse_piece(input, r, &new_context, &fast, &diagnose)?;
         acc = Some(match acc {
             Some(a) => merge(a, v),
             None => v,
@@ -194,26 +200,28 @@ where
 /// global pool. Configure that pool (`rayon::ThreadPoolBuilder`) to bound
 /// the threads; `Parallelism` bounds the pieces.
 #[cfg(feature = "rayon")]
-pub fn fold_pieces<'a, S, T, P, M, C>(
+pub fn fold_pieces<'a, S, T, F, D, M, C>(
     input: &'a str,
     boundary: &str,
     how: Parallelism,
     new_context: C,
-    parse: P,
+    fast: F,
+    diagnose: D,
     merge: M,
 ) -> Result<T, ParseError>
 where
     S: Clone + std::fmt::Debug,
     T: Send,
     C: Fn() -> crate::ParseContext<S> + Sync,
-    P: Fn(&mut ParseInput<'a, S>) -> Result<T, ParseError> + Sync,
+    F: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<EmptyError>> + Sync,
+    D: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<ParseError>> + Sync,
     M: Fn(T, T) -> T,
 {
     use rayon::prelude::*;
     let ranges = piece_ranges(input, boundary, how);
     let results: Vec<Result<T, ParseError>> = ranges
         .into_par_iter()
-        .map(|r| parse_piece(input, r, &new_context, &parse))
+        .map(|r| parse_piece(input, r, &new_context, &fast, &diagnose))
         .collect();
     let mut acc: Option<T> = None;
     for res in results {
@@ -233,24 +241,28 @@ fn piece_ranges(input: &str, boundary: &str, how: Parallelism) -> Vec<std::ops::
     }
 }
 
-fn parse_piece<'a, S, T, P, C>(
+fn parse_piece<'a, S, T, F, D, C>(
     input: &'a str,
     range: std::ops::Range<usize>,
     new_context: &C,
-    parse: &P,
+    fast: &F,
+    diagnose: &D,
 ) -> Result<T, ParseError>
 where
     S: Clone + std::fmt::Debug,
     C: Fn() -> crate::ParseContext<S>,
-    P: Fn(&mut ParseInput<'a, S>) -> Result<T, ParseError>,
+    F: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<EmptyError>>,
+    D: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<ParseError>>,
 {
     let start = range.start;
     let mut piece = ParseInput {
         input: winnow::stream::LocatingSlice::new(&input[range]),
         state: new_context(),
     };
-    parse(&mut piece).map_err(|mut e| {
-        e.offset += start;
+    entry_framed(&mut piece, fast, diagnose).map_err(|mut e| {
+        if !e.is_undiagnosed() {
+            e.offset += start;
+        }
         e
     })
 }

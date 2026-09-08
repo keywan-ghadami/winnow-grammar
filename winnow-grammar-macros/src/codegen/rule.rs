@@ -177,21 +177,37 @@ impl<'a> Codegen<'a> {
             (quote! { WS(input)?; }, quote! { WS(input)?; })
         };
 
-        let outer_fn_body = quote! {
-            move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
-                // Entry point: the recorded error belongs to THIS run.
-                input.state.furthest = None;
-
-                let result: ::winnow::Result<#ret_type, ::winnow::error::ErrMode<#err_type>> = (|| {
+        // The entry point runs the rule twice at most: a fast pass with
+        // `EmptyError`, and - only if that fails - the diagnosing pass with
+        // `ParseError`, whose error is the one reported (ADR 17). The typed
+        // `let` names the error type of each pass; a turbofish could not,
+        // because it would have to spell every generic of the rule.
+        let fast_err =
+            quote_spanned! {span=> ::winnow::error::ErrMode<::winnow::error::EmptyError> };
+        let slow_err = quote_spanned! {span=> ::winnow::error::ErrMode<#err_type> };
+        let pass = |err: &TokenStream| {
+            quote! {
+                |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err> {
                     #ws_before
-                    let result = #inner_fn_name(input, #(#arg_names),*)?;
+                    let result: ::winnow::Result<#ret_type, #err> = #inner_fn_name(input, #(#arg_names),*);
+                    let result = result?;
                     #ws_after
                     Ok(result)
-                })();
+                }
+            }
+        };
+        let fast = pass(&fast_err);
+        let slow = pass(&slow_err);
+        // A `par_fold` rule replays from the item the fast pass stopped in.
+        let entry = if is_par_fold {
+            quote_spanned! {span=> ::winnow_grammar::rt::entry_framed }
+        } else {
+            quote_spanned! {span=> ::winnow_grammar::rt::entry }
+        };
 
-                // Error selection against the recorded error and check for
-                // leftover input - see `rt::finish`.
-                ::winnow_grammar::rt::finish(input, result)
+        let outer_fn_body = quote! {
+            move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
+                #entry(input, #fast, #slow)
             }
         };
 
@@ -273,7 +289,7 @@ impl<'a> Codegen<'a> {
             Some(m) => {
                 let merge_fn = format_ident!("merge_{}", rule.name, span = span);
                 let pieces_fn = format_ident!("parse_{}_pieces", rule.name, span = span);
-                let parse_fn = format_ident!("parse_{}", rule.name, span = span);
+                let inner_fn = format_ident!("parse_{}_inner", rule.name, span = span);
                 let ret_type = &rule.return_type;
                 quote_spanned! {span=>
                     /// The merge given to `par_fold`: combines the results of
@@ -285,10 +301,12 @@ impl<'a> Codegen<'a> {
                     }
 
                     /// Parses `input` in pieces and merges: the cut is
-                    /// `frames_…`, the per-piece parser `parse_…()`, the merge
-                    /// `merge_…`. `new_context` builds the context each piece
-                    /// parses with (share an interner through it; see ADR 14).
-                    /// A piece's error is reported at its offset in `input`.
+                    /// `frames_…`, the per-piece parser the rule's own (fast
+                    /// pass, then the diagnosing replay from the failing item -
+                    /// ADR 17), the merge `merge_…`. `new_context` builds the
+                    /// context each piece parses with (share an interner
+                    /// through it; see ADR 14). A piece's error is reported at
+                    /// its offset in `input`.
                     #[allow(dead_code)]
                     #vis fn #pieces_fn<'a, S>(
                         input: &'a str,
@@ -304,8 +322,11 @@ impl<'a> Codegen<'a> {
                             #boundary,
                             how,
                             new_context,
-                            |piece: &mut ::winnow_grammar::ParseInput<'a, S>| {
-                                ::winnow::Parser::parse_next(&mut #parse_fn(), piece)
+                            |piece: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, ::winnow::error::ErrMode<::winnow::error::EmptyError>> {
+                                #inner_fn(piece)
+                            },
+                            |piece: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, ::winnow::error::ErrMode<::winnow_grammar::ParseError>> {
+                                #inner_fn(piece)
                             },
                             #merge_fn,
                         )
