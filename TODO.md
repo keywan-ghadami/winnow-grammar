@@ -253,9 +253,18 @@ on it. Two ways out, neither taken yet:
   actions that name `Vec<char>` break, and the binding type would differ
   between `{1,2}` and `{2,}`.
 
-The text operator makes the inline type pointless: a borrowed slice beats a
-stack buffer, and it needs no new container type at all. Do the text operator
-first; `dec` is then an ergonomics and overflow question, not a speed one.
+**Both are built.** `text(p)` and `dec<T>(p)` are in the language (SYNTAX.md,
+`tests/text_test.rs`, `tests/dec_test.rs`). The inline-storage idea is dropped
+with them: a borrowed slice beats a stack buffer and needs no container type
+at all.
+
+What is still open here is the default. `digit{1,2}` continues to yield
+`Vec<char>`, which no grammar in this repository actually wants - the three
+uses are a number, a count, and a `String`. Changing the default would need
+codegen to know the element type (the builtin table knows `digit -> char`, the
+model knows a rule's `return_type`, a rule parameter neither), and an output
+type that depends on inference is a poor property for a DSL. Left as it is,
+deliberately.
 
 ## 8. Scanning terminators: which ones, and the cliff between them
 
