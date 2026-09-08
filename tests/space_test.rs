@@ -5,7 +5,6 @@ grammar! {
     grammar SpaceParser {
         // Disable automatic whitespace skipping by overriding ws with empty
         use winnow::combinator::empty;
-        #[allow(dead_code)]
         WS = empty
 
         pub test_space0 -> String =

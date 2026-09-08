@@ -212,7 +212,16 @@ impl<'a> Codegen<'a> {
         };
 
         // Outer function signature doesn't need to specify for<'a> if it already uses 'a in its signature
+        // A doc comment on a rule belongs on the parser it generates; the
+        // validator rejects every other attribute, so this is the whole set.
+        let docs = rule
+            .attrs
+            .iter()
+            .filter(|a| a.path().is_ident("doc"))
+            .collect::<Vec<_>>();
+
         let outer_fn = quote_spanned! {span=>
+            #(#docs)*
             #vis fn #fn_name<#outer_generics> (#(#params_tokens),*) -> impl ::winnow::Parser<
                 ::winnow_grammar::ParseInput<'a, S>,
                 #ret_type,

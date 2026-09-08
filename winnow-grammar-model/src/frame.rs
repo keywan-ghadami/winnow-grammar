@@ -189,28 +189,16 @@ pub fn check(grammar: &GrammarDefinition, builtins: &HashSet<String>) -> syn::Re
     //    nothing about the rule changes, so only a rule that *writes*
     //    `frame_end` has a boundary to disagree about.
     for (frame_name, boundary) in &out.frames {
-        let mut reachable: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut stack = vec![frame_name.clone()];
-        while let Some(name) = stack.pop() {
-            if !seen.insert(name.clone()) {
-                continue;
-            }
-            reachable.push(name.clone());
-            let Some(rule) = grammar.rules.iter().find(|r| r.name == name) else {
-                continue;
-            };
-            let mut calls = Vec::new();
-            for v in &rule.variants {
-                collect_calls(&v.pattern, &user_rules, &mut calls);
-            }
-            // A syntactic rule calls the grammar's own `WS` between its
-            // elements without naming it.
-            if has_user_ws && !rule.is_lexical {
-                calls.push("WS".to_string());
-            }
-            stack.extend(calls);
-        }
+        // Two walks over the same edges. `reachable` follows every call, so
+        // that `frame_end` resolves wherever it is written - `peek(frame_end)`
+        // names the boundary as much as consuming it does. `consuming` skips
+        // what only lookahead reaches, because a rule under `peek(…)`/`not(…)`
+        // consumes nothing and so cannot run through the boundary; checking it
+        // would reject a grammar that is sound. `check_pattern` already treats
+        // lookahead written *inside* a rule that way; this makes the walk
+        // agree for a rule reached *through* it.
+        let reachable = walk(grammar, frame_name, &user_rules, has_user_ws, false);
+        let consuming = walk(grammar, frame_name, &user_rules, has_user_ws, true);
 
         for name in &reachable {
             let rule = grammar
@@ -232,7 +220,7 @@ pub fn check(grammar: &GrammarDefinition, builtins: &HashSet<String>) -> syn::Re
             } else {
                 out.bounded.insert(name.clone(), boundary.clone());
             }
-            if unchecked.contains(frame_name) {
+            if unchecked.contains(frame_name) || !consuming.contains(name) {
                 continue;
             }
             let cx = Cx {
@@ -715,6 +703,132 @@ fn builtin_may_consume(name: &str, c: char) -> bool {
 // -----------------------------------------------------------------------------
 // Reachability
 // -----------------------------------------------------------------------------
+
+/// The rules `frame` reaches, outermost first. With `consuming_only`, calls
+/// that only lookahead reaches are not followed: `peek(X)` and `not(X)` run
+/// `X` without consuming anything, so nothing `X` contains can carry the
+/// parser past the boundary.
+fn walk(
+    grammar: &GrammarDefinition,
+    frame: &str,
+    user_rules: &HashSet<String>,
+    has_user_ws: bool,
+    consuming_only: bool,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut stack = vec![frame.to_string()];
+    while let Some(name) = stack.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        out.push(name.clone());
+        let Some(rule) = grammar.rules.iter().find(|r| r.name == name) else {
+            continue;
+        };
+        let mut calls = Vec::new();
+        for v in &rule.variants {
+            if consuming_only {
+                collect_consuming_calls(&v.pattern, user_rules, &mut calls);
+            } else {
+                collect_calls(&v.pattern, user_rules, &mut calls);
+            }
+        }
+        // A syntactic rule calls the grammar's own `WS` between its
+        // elements without naming it.
+        if has_user_ws && !rule.is_lexical {
+            calls.push("WS".to_string());
+        }
+        stack.extend(calls);
+    }
+    out
+}
+
+/// [`collect_calls`] without what only lookahead reaches.
+fn collect_consuming_calls(
+    seq: &[ModelPattern],
+    user_rules: &HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    for p in seq {
+        collect_outside_lookahead(p, user_rules, out);
+    }
+}
+
+/// Everything reached in `p` without passing through a lookahead.
+fn collect_outside_lookahead(
+    p: &ModelPattern,
+    user_rules: &HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    match p {
+        ModelPattern::Peek(_, _) | ModelPattern::Not(_, _) => {}
+        ModelPattern::RuleCall {
+            rule_path, args, ..
+        } => {
+            if let Some(seg) = rule_path.segments.last() {
+                let name = seg.ident.to_string();
+                if user_rules.contains(&name) {
+                    out.push(name);
+                }
+            }
+            for a in args {
+                match a {
+                    Argument::Positional(p) | Argument::Named(_, p) => {
+                        collect_outside_lookahead(p, user_rules, out)
+                    }
+                }
+            }
+        }
+        other => for_each_child(other, &mut |c| {
+            collect_outside_lookahead(c, user_rules, out)
+        }),
+    }
+}
+
+/// Applies `f` to every sub-pattern of `p`, one level down.
+fn for_each_child(p: &ModelPattern, f: &mut impl FnMut(&ModelPattern)) {
+    match p {
+        ModelPattern::Cut(_) | ModelPattern::Fail { .. } | ModelPattern::Lit { .. } => {}
+        ModelPattern::RuleCall { args, .. } => {
+            for a in args {
+                match a {
+                    Argument::Positional(p) | Argument::Named(_, p) => f(p),
+                }
+            }
+        }
+        ModelPattern::Group { alts, .. } => {
+            for (seq, _, _) in alts {
+                for p in seq {
+                    f(p);
+                }
+            }
+        }
+        ModelPattern::Bracketed(inner, _)
+        | ModelPattern::Braced(inner, _)
+        | ModelPattern::Parenthesized(inner, _) => {
+            for p in inner {
+                f(p);
+            }
+        }
+        ModelPattern::Optional(inner, _)
+        | ModelPattern::Repeat(inner, _)
+        | ModelPattern::Plus(inner, _)
+        | ModelPattern::SpanBinding(inner, _, _)
+        | ModelPattern::Peek(inner, _)
+        | ModelPattern::Not(inner, _)
+        | ModelPattern::LexicalScope(inner, _)
+        | ModelPattern::SpacedScope(inner, _) => f(inner),
+        ModelPattern::Until { pattern, .. }
+        | ModelPattern::Count { pattern, .. }
+        | ModelPattern::Fold { pattern, .. }
+        | ModelPattern::Bounded { pattern, .. } => f(pattern),
+        ModelPattern::Recover { body, sync, .. } => {
+            f(body);
+            f(sync);
+        }
+    }
+}
 
 fn collect_calls(seq: &[ModelPattern], user_rules: &HashSet<String>, out: &mut Vec<String>) {
     for p in seq {

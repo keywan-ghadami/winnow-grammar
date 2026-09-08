@@ -7,7 +7,6 @@ grammar! {
     grammar Interning {
         // The 1BRC shape: a field value is not an identifier, and before
         // `intern` there was no way to say this in the grammar.
-        #[lexical]
         pub city -> Symbol = s:intern(until(";")) -> { s }
 
         pub row -> (Symbol, i32) = c:city ";" t:i32 -> { (c, t) }
@@ -18,7 +17,6 @@ grammar! {
         pub name -> Symbol = s:intern(raw_ident) -> { s }
 
         // A user rule as the argument.
-        #[lexical]
         rule two_letters -> &'a str = s:alpha1 -> { s }
         pub from_rule -> Symbol = s:intern(two_letters) -> { s }
 

@@ -6,7 +6,7 @@
 
 **winnow-grammar** is a powerful parser generator for Rust that allows you to define EBNF-like grammars directly inside your code. It compiles these definitions into efficient `winnow` parsers at compile time.
 
-This crate is built on top of `syn-grammar-model` but targets the `winnow` parser combinator library. While `syn-grammar` is specialized for parsing Rust code, `winnow-grammar` is designed for general-purpose parsing of text, data formats, and custom DSLs (using `&str` or `&[u8]`).
+This crate is built on top of `syn-grammar-model` but targets the `winnow` parser combinator library. While `syn-grammar` is specialized for parsing Rust code, `winnow-grammar` is designed for general-purpose parsing of text, data formats, and custom DSLs.
 
 ## Documentation
 
@@ -142,7 +142,10 @@ The `grammar!` macro expands into a Rust module containing:
 ## Backend Specifics
 
 ### Input Type
-The generated parsers work on any input that implements the necessary `winnow` traits (`&str`, `&[u8]`).
+The generated parsers take `&str`: the input type is
+`winnow_grammar::ParseInput<'a, S>`, a `winnow` `LocatingSlice<&'a str>` carrying
+the shared `ParseContext`. A byte-oriented input type is not offered yet; the
+split primitive it would need, `rt::frames_bytes`, already works on `&[u8]`.
 
 If you use **Span Binding (`@`)**, your input type **must** implement `winnow::stream::Location`. The recommended type for this is `winnow::stream::LocatingSlice`.
 

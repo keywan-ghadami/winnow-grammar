@@ -446,3 +446,53 @@ fn an_unchecked_frame_is_taken_at_its_word() {
     assert_eq!(seq, 13);
     assert_eq!(pieces, seq);
 }
+
+// -----------------------------------------------------------------------------
+// Lookahead consumes nothing, so a rule that only `peek(…)`/`not(…)` reaches
+// cannot carry the parser past the boundary. The check used to walk it anyway
+// and reject a grammar that was sound.
+// -----------------------------------------------------------------------------
+
+grammar! {
+    grammar Lookahead {
+        WS -> () = "" -> { () }
+
+        // Reached only through `peek`. `multispace0` would consume the
+        // boundary if anything ever ran it in consuming position - nothing does.
+        BLANKS -> () = multispace0 -> { () }
+
+        // Reached only through `not`, and it names the boundary itself.
+        AT_END -> &'a str = frame_end -> { "" }
+
+        #[frame(boundary = "\n")]
+        pub ROW -> usize = peek(BLANKS) not(AT_END) n:digit1 "\n" -> { n.len() }
+
+        pub FILE -> usize = s:par_fold(
+            ROW, || 0usize, |a: usize, v: usize| a + v, |a: usize, b: usize| a + b
+        ) -> { s }
+    }
+}
+
+#[test]
+fn a_rule_only_lookahead_reaches_is_not_checked_for_the_boundary() {
+    // The grammar above compiling at all is the assertion: before the walk
+    // distinguished the two positions, `BLANKS` was rejected for
+    // `multispace0`. `frame_end` under `not(..)` still resolves, which is why
+    // the walk that resolves it still follows lookahead.
+    let input = "12\n345\n6\n";
+    let total = Lookahead::parse_FILE()
+        .parse_test(input)
+        .assert_success()
+        .to_owned();
+    assert_eq!(total, 6);
+
+    for how in [
+        Parallelism::Off,
+        Parallelism::Pieces(2),
+        Parallelism::Pieces(3),
+    ] {
+        let got = Lookahead::parse_FILE_pieces(input, ParseContext::<()>::default, how)
+            .unwrap_or_else(|e| panic!("{how:?}: {}", e.render(input)));
+        assert_eq!(got, total, "{how:?}");
+    }
+}
