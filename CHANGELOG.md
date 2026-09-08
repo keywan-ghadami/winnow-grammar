@@ -62,6 +62,15 @@
 
 ### Fixed
 
+- **`text(p)` and `dec(p)` collected what they then threw away.** Their inner
+  pattern was generated as if its values were wanted, so `text(digit{1,2})`
+  built a `Vec<char>` and `.take()` dropped it - the operators cost exactly
+  what they were added to remove, which the benchmark said plainly once it
+  measured the generated code instead of a hand-written stand-in (`TENTHS`
+  60 ns before, 61 ns with `text`). Their elements are now generated as
+  discarded, which is what the grammar already says by naming none of them:
+  60 ns -> 30 ns.
+
 - **A repetition whose elements nobody names no longer collects them.** `x*`
   and `x+` without a binding, `x{n,m}` without one, and `count(x)` built a
   `Vec` and then threw it away or asked only for its length. The grammar had
@@ -183,7 +192,9 @@
   release and panicking in debug. That reason is why it is not winnow's
   `parse_to`, which discards the `FromStr` error and reports a bare position.
   The type is the one the call names, through the generics a call already
-  takes; without one it is inferred.
+  takes; without one it is inferred. It costs about 5 ns more than `text(p)`
+  and the same fold in the action, `str::parse` validating more than two bytes
+  need - which is the price of the two properties above, not a saving.
 
 - **`text(p)`: what was matched, not what was parsed.** Runs `p` and hands back
   the input it consumed as `&'a str`, borrowed from the input - no allocation,
@@ -197,9 +208,10 @@
   `Vec<char>` is no `AsRef<str>`. `intern(text(digit{3}))` now does.
 
   It is also where the 1BRC temperature's time was: `TENTHS` written with
-  `text(digit{1,2})` instead of a `Vec<char>` measures 59 ns -> 36 ns
-  (`benches/repetition.rs`, one machine), which is hand-written to within the
-  noise. The whole difference is not copying two characters onto the heap.
+  `text(digit{1,2})` instead of a `Vec<char>` measures 60 ns -> 30 ns over
+  three runs (`benches/repetition.rs`, one machine) - half the rule, and below
+  the same thing written by hand. The whole difference is not copying two
+  characters onto the heap.
 
 - **An attribute a rule carries must be one the generator reads.** `#[frame(…)]`
   and doc comments are it; anything else is now a spanned error instead of

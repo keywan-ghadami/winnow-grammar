@@ -13,26 +13,13 @@ use winnow::Parser;
 use winnow_grammar::error::ParseError;
 use winnow_grammar::{grammar, ParseContext, ParseInput};
 
-/// What `text(digit{1,2})` would generate: the matched run as a borrowed
-/// slice instead of a `Vec<char>`. Winnow's `.take()` under another name -
-/// this stands in for the operator so the design can be measured before it
-/// is designed.
+/// A `take_while` scan of the same run, kept as a comparison for the
+/// generated `text(digit{1,2})`: a closure over a character class against a
+/// repetition of `one_of` wrapped in `.take()`.
 fn digits_1_2<'a, S: Clone + std::fmt::Debug>(
     i: &mut ParseInput<'a, S>,
 ) -> Result<&'a str, ParseError> {
     winnow::token::take_while(1..=2, |c: char| c.is_ascii_digit()).parse_next(i)
-}
-
-/// What `dec(digit{1,2})` would generate: the run accumulated straight into
-/// an integer, with no slice and no fold in the action. The bound is known,
-/// so nothing inside the loop can overflow an `i32`.
-fn dec_1_2<'a, S: Clone + std::fmt::Debug>(i: &mut ParseInput<'a, S>) -> Result<i32, ParseError> {
-    let s: &str = winnow::token::take_while(1..=2, |c: char| c.is_ascii_digit()).parse_next(i)?;
-    let mut v: i32 = 0;
-    for &b in s.as_bytes() {
-        v = v * 10 + (b - b'0') as i32;
-    }
-    Ok(v)
 }
 
 /// The ceiling: the same temperature read by hand, one scan and a fold.
@@ -90,18 +77,24 @@ grammar! {
         pub TWO_DIGITS -> i32 = a:digit b:digit -> { (a as i32 - 48) * 10 + (b as i32 - 48) }
         pub BY_HAND -> i32 = v:super::tenths_by_hand -> { v }
 
-        // The same again, with the run turned into a number by the parser
-        // instead of by the action - what `dec(..)` would do.
+        // The shipped operators, so the numbers are about what is generated
+        // rather than about a stand-in.
         pub TENTHS_DEC -> i32 =
-            neg:"-"? whole:super::dec_1_2 "." frac:digit
+            neg:"-"? whole:dec<i32>(digit{1,2}) "." frac:dec<i32>(digit)
+            -> { let v = whole * 10 + frac; if neg.is_some() { -v } else { v } }
+
+        pub TENTHS_TEXT -> i32 =
+            neg:"-"? whole:text(digit{1,2}) "." frac:digit
             -> {
-                let v = whole * 10 + (frac as i32 - '0' as i32);
+                let mut v: i32 = 0;
+                for &b in whole.as_bytes() { v = v * 10 + (b - b'0') as i32; }
+                v = v * 10 + (frac as i32 - '0' as i32);
                 if neg.is_some() { -v } else { v }
             }
 
-        // The same rule, with only the digit run changed from `Vec<char>` to
-        // the borrowed slice a text-capture operator would give it.
-        pub TENTHS_TEXT -> i32 =
+        // The stand-ins kept for comparison: a `take_while` scan rather than
+        // a repetition wrapped in `.take()`.
+        pub TENTHS_SCAN -> i32 =
             neg:"-"? whole:super::digits_1_2 "." frac:digit
             -> {
                 let mut v: i32 = 0;
@@ -200,6 +193,7 @@ fn bench_bounded(c: &mut Criterion) {
     case!("tenths", Rep::parse_TENTHS(), "-12.3");
     case!("tenths/via_text", Rep::parse_TENTHS_TEXT(), "-12.3");
     case!("tenths/via_dec", Rep::parse_TENTHS_DEC(), "-12.3");
+    case!("tenths/via_scan", Rep::parse_TENTHS_SCAN(), "-12.3");
     case!("tenths/by_hand", Rep::parse_BY_HAND(), "-12.3");
     case!("bound", Rep::parse_BOUNDED_BOUND(), "12");
     case!("discarded", Rep::parse_BOUNDED_DISCARDED(), "12");

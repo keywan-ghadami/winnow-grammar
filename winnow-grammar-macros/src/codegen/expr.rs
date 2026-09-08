@@ -698,7 +698,7 @@ impl<'a> Codegen<'a> {
                         Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
                     })
                     .collect();
-                let inner = self.generate_sequence_parser(&seq, is_lexical);
+                let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
                 quote_spanned! {span=> ::winnow::Parser::take(#inner) }
             }
             // `dec<T>(p)`: the text `p` matched, read as a number.
@@ -721,7 +721,7 @@ impl<'a> Codegen<'a> {
                         Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
                     })
                     .collect();
-                let inner = self.generate_sequence_parser(&seq, is_lexical);
+                let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
                 let taken = quote_spanned! {span=> ::winnow::Parser::take(#inner) };
                 match call_generics.first() {
                     Some(ty) => quote_spanned! {span=>
@@ -1087,6 +1087,21 @@ impl<'a> Codegen<'a> {
     }
 
     pub fn generate_sequence_parser(&self, seq: &[ModelPattern], is_lexical: bool) -> TokenStream {
+        self.generate_sequence_parser_with(seq, is_lexical, false)
+    }
+
+    /// [`generate_sequence_parser`](Self::generate_sequence_parser), with
+    /// `discard` saying whether anyone will look at the values.
+    ///
+    /// `text(p)` and `dec(p)` keep only the span, so their elements are
+    /// generated as discarded - which is what stops a `text(digit{1,2})` from
+    /// collecting two `char`s into a `Vec` and then throwing it away.
+    pub fn generate_sequence_parser_with(
+        &self,
+        seq: &[ModelPattern],
+        is_lexical: bool,
+        discard: bool,
+    ) -> TokenStream {
         let span = Span::mixed_site();
         let mut parsers = Vec::new();
         let mut in_cut = false;
@@ -1097,7 +1112,7 @@ impl<'a> Codegen<'a> {
                 if i > 0 && !is_lexical {
                     parsers.push(quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i)) });
                 }
-                let p_expr = self.generate_parser_expr(p, is_lexical, false);
+                let p_expr = self.generate_parser_expr(p, is_lexical, discard);
                 if in_cut {
                     parsers.push(quote_spanned! {span=> ::winnow::combinator::cut_err(#p_expr) });
                 } else {
@@ -1113,7 +1128,7 @@ impl<'a> Codegen<'a> {
                 );
             }
 
-            let p_expr = self.generate_parser_expr(p, is_lexical, false);
+            let p_expr = self.generate_parser_expr(p, is_lexical, discard);
             if in_cut {
                 parsers.push(quote_spanned! {span=> ::winnow::combinator::cut_err(#p_expr) });
             } else {

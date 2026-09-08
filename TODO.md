@@ -209,22 +209,30 @@ Three runs, because a single one said something that did not survive repeating:
 
 | case | run 1 | run 2 | run 3 |
 |---|---|---|---|
-| `TENTHS` today, `Vec<char>` | 59.6 | 57.9 | 60.8 |
-| the run borrowed, folded in the action (`text`) | 35.4 | 35.3 | 37.0 |
-| the run accumulated by the parser (`dec`) | 34.8 | 35.7 | 37.3 |
-| written by hand, one scan and a fold | 34.3 | 35.6 | 36.2 |
+| `TENTHS` with `digit{1,2}`, a `Vec<char>` | 60.8 | 60.1 | 67.1 |
+| `text(digit{1,2})`, folded in the action | 29.4 | 29.8 | 35.0 |
+| `dec<i32>(digit{1,2})` | 34.4 | 35.2 | 38.6 |
+| a `take_while` scan, folded in the action | 35.2 | 35.8 | 38.8 |
+| written by hand, one scan and a fold | 33.8 | 34.1 | 39.1 |
+
+(The third run is uniformly ~12% above the other two - machine drift. The
+ordering is identical in all three, which is what the table is for.)
 
 The allocation is ~23 ns and it is the whole story: not copying two characters
 onto the heap lands on hand-written, with no SIMD, no SWAR and no register
 arithmetic.
 
-**The last three rows are one number.** Their intervals overlap and their
-order flips between runs. A single run had suggested a 2 ns gap between the
-borrowed run and hand-written; repeating it dissolved that gap. So a `dec(..)`
-operator - the run turned into an integer by the parser instead of by the
-action - buys **no measurable time** over borrowing the run and folding it in
-the action: the fold is the same loop either way, and moving it into generated
-code changes nothing.
+`text` halves the rule and lands below hand-written: the generated repetition
+of `one_of` wrapped in `.take()` beats a `take_while` closure. `dec` costs
+about 5 ns more than `text` plus the same fold in an action - `str::parse`
+validates more than two bytes need - so it is bought for its two other
+properties (the fold written once, and an overflow that fails the parse),
+never for speed.
+
+Both numbers were wrong until the benchmark measured the *generated* code
+rather than a hand-written stand-in: the operators were generating their inner
+pattern as if its values were wanted, collecting a `Vec<char>` that `.take()`
+then dropped.
 
 ### What that leaves open
 
