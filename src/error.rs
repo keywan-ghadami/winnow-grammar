@@ -13,7 +13,7 @@
 //! [`crate::ParseContext`] carries the furthest failure position along.
 
 use std::fmt;
-use winnow::error::{AddContext, FromExternalError, ParserError, StrContext};
+use winnow::error::{AddContext, EmptyError, FromExternalError, ParserError, StrContext};
 use winnow::stream::{AsBStr, Location, Stream};
 
 /// Ordinary parse error.
@@ -68,6 +68,9 @@ pub struct ErrorCore {
     pub rule_stack: Vec<String>,
     /// Rank at the SAME position. See the `PRIO_*` constants.
     pub priority: u8,
+    /// `true` only for [`ParseError::undiagnosed`]: the parse failed and
+    /// nothing else is known - no position, no expectation.
+    pub undiagnosed: bool,
 }
 
 impl ParseError {
@@ -80,7 +83,29 @@ impl ParseError {
             found: next_word(input.as_bstr()),
             rule_stack: Vec::new(),
             priority: PRIO_NORMAL,
+            undiagnosed: false,
         }))
+    }
+
+    /// The error of a fast pass that was not diagnosed
+    /// ([`crate::Diagnose::Off`]): the parse failed, and that is all that is
+    /// known. Carries no position; [`render`](Self::render) prints the
+    /// message alone.
+    pub fn undiagnosed() -> Self {
+        ParseError(Box::new(ErrorCore {
+            offset: 0,
+            expected: Vec::new(),
+            message: Some("parse failed; diagnostics are off".to_string()),
+            found: None,
+            rule_stack: Vec::new(),
+            priority: PRIO_NORMAL,
+            undiagnosed: true,
+        }))
+    }
+
+    /// Whether this is an [`undiagnosed`](Self::undiagnosed) error.
+    pub fn is_undiagnosed(&self) -> bool {
+        self.undiagnosed
     }
 
     /// Appends an expectation unless it is already present.
@@ -188,6 +213,9 @@ impl ParseError {
     /// (from `Parser::parse`) prepends it along with the source line; whoever
     /// goes through `parse_next` has the source themselves and calls this.
     pub fn render(&self, source: &str) -> String {
+        if self.undiagnosed {
+            return self.headline();
+        }
         let (line, column) = self.line_column(source);
         let mut s = format!("{} at line {}, column {}", self.headline(), line, column);
         for r in &self.rule_stack {
@@ -264,5 +292,113 @@ impl<I: Stream + Location + AsBStr> AddContext<I, StrContext> for ParseError {
 impl<I: Stream + Location + AsBStr, E: fmt::Display> FromExternalError<I, E> for ParseError {
     fn from_external_error(input: &I, e: E) -> Self {
         Self::from_stream(input).with_message(e.to_string())
+    }
+}
+
+/// What the runtime helpers need from an error type.
+///
+/// The generated parsers are generic over their error type, like winnow's
+/// `Parser<I, O, E>`. Two types fill it: [`ParseError`] does the work - it is
+/// the diagnostics engine of ADR 15 - and winnow's [`EmptyError`] does
+/// nothing and costs nothing, which is the fast pass of ADR 17. Every method
+/// here is a hook the runtime calls on the error path; the fast pass has no
+/// error path worth the name, so its hooks are empty.
+pub trait Diagnostics: Sized {
+    /// Whether the context keeps the live rule stack and the furthest
+    /// recorded error for this type. `false` skips both.
+    const RECORDING: bool;
+
+    /// `fail("…")` at the current position: a verbatim message that beats
+    /// every other error at the same position - but not one that got further.
+    fn fail<I: Stream + Location + AsBStr>(input: &I, message: &'static str) -> Self;
+
+    /// The failed attempt at the `index`-th element of a repetition
+    /// (1-based): `in item 3`.
+    fn item(self, index: usize) -> Self;
+
+    /// A labelled alternative (`# "…"`) that failed at `start`, its own
+    /// position: the label is the expectation instead of the internal
+    /// message. If it got further, its own message is the more informative
+    /// one and stays.
+    fn labelled(self, start: usize, label: &'static str) -> Self;
+
+    /// A builtin that failed at `start` without an expectation gets one
+    /// (`identifier`, `integer literal`) - winnow's own primitives only
+    /// report the position.
+    fn expected(self, start: usize, what: &'static str) -> Self;
+
+    /// Remembers an error that a successful backtrack (`x?`, `x*`) is about
+    /// to discard - see [`crate::ParseContext::record`].
+    fn record<S>(&self, ctx: &mut crate::ParseContext<S>);
+
+    /// The error of a hand-written parser plugged into a grammar. Those
+    /// return [`ParseError`] whatever the grammar's error type is.
+    fn from_parse_error(e: ParseError) -> Self;
+}
+
+impl Diagnostics for ParseError {
+    const RECORDING: bool = true;
+
+    fn fail<I: Stream + Location + AsBStr>(input: &I, message: &'static str) -> Self {
+        Self::from_stream(input)
+            .with_message(message)
+            .with_priority(PRIO_STRUCTURAL)
+    }
+
+    fn item(mut self, index: usize) -> Self {
+        self.push_rule(&format!("item {index}"));
+        self
+    }
+
+    fn labelled(mut self, start: usize, label: &'static str) -> Self {
+        if self.offset == start {
+            self.expected = vec![label.to_string()];
+            self.message = None;
+            self.rule_stack.clear();
+            self.priority = self.priority.max(PRIO_LABELED);
+        }
+        self
+    }
+
+    fn expected(self, start: usize, what: &'static str) -> Self {
+        if self.offset == start && self.expected.is_empty() && self.message.is_none() {
+            self.add_expected(what)
+        } else {
+            self
+        }
+    }
+
+    fn record<S>(&self, ctx: &mut crate::ParseContext<S>) {
+        ctx.record(self);
+    }
+
+    fn from_parse_error(e: ParseError) -> Self {
+        e
+    }
+}
+
+impl Diagnostics for EmptyError {
+    const RECORDING: bool = false;
+
+    fn fail<I: Stream + Location + AsBStr>(_input: &I, _message: &'static str) -> Self {
+        EmptyError
+    }
+
+    fn item(self, _index: usize) -> Self {
+        self
+    }
+
+    fn labelled(self, _start: usize, _label: &'static str) -> Self {
+        self
+    }
+
+    fn expected(self, _start: usize, _what: &'static str) -> Self {
+        self
+    }
+
+    fn record<S>(&self, _ctx: &mut crate::ParseContext<S>) {}
+
+    fn from_parse_error(_e: ParseError) -> Self {
+        EmptyError
     }
 }

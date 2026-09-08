@@ -3,15 +3,33 @@
 //!
 //! Everything here works concretely on [`ParseInput`] because it needs the
 //! state (`input.state`): that is where the furthest failure position lives,
-//! which a successful backtrack would otherwise discard.
+//! which a successful backtrack would otherwise discard. The error type is
+//! generic ([`RtError`]): the same helper serves the fast pass with
+//! `EmptyError` and the diagnosing pass with [`ParseError`] - see ADR 17.
 
-use crate::error::{ParseError, PRIO_LABELED, PRIO_STRUCTURAL};
-use crate::ParseInput;
-use winnow::error::ErrMode;
+use crate::error::{Diagnostics, ParseError};
+use crate::{Diagnose, FoldProgress, ParseInput};
+use winnow::error::{AddContext, EmptyError, ErrMode, ParserError, StrContext};
 use winnow::stream::{FindSlice, Location, Stream};
 use winnow::Parser;
 
-type RtError = ErrMode<ParseError>;
+/// The bounds the generated code puts on its error type parameter `E`:
+/// winnow's own (`ParserError`; `AddContext` for `.context(..)`) and
+/// [`Diagnostics`] for the helpers here. A blanket impl: [`ParseError`] and
+/// winnow's `EmptyError` satisfy it, nothing implements it by hand.
+pub trait RtError<'a, S>:
+    ParserError<ParseInput<'a, S>> + AddContext<ParseInput<'a, S>, StrContext> + Diagnostics
+where
+    S: Clone + std::fmt::Debug,
+{
+}
+
+impl<'a, S, E> RtError<'a, S> for E
+where
+    S: Clone + std::fmt::Debug,
+    E: ParserError<ParseInput<'a, S>> + AddContext<ParseInput<'a, S>, StrContext> + Diagnostics,
+{
+}
 
 /// `until("lit")` - consume everything before the next occurrence of a literal
 /// terminator, without consuming the terminator itself.
@@ -25,9 +43,9 @@ type RtError = ErrMode<ParseError>;
 ///
 /// Never fails: with no terminator in the rest of the input it consumes to the
 /// end, which is what a repetition-based `until` did.
-pub fn scan_to_literal<'a, S: Clone + std::fmt::Debug>(
+pub fn scan_to_literal<'a, S: Clone + std::fmt::Debug, E>(
     needle: &'static str,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, RtError> {
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, ErrMode<E>> {
     move |input| {
         let end = match input.find_slice(needle) {
             Some(range) => range.start,
@@ -46,8 +64,8 @@ pub fn scan_to_literal<'a, S: Clone + std::fmt::Debug>(
 /// scan for `"\r\n"` would run past an earlier bare `\n`, and a scan for
 /// `"\n"` alone would leave the carriage return on the wrong side. A bare
 /// `\r` is ordinary text, as it was before.
-pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug>(
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, RtError> {
+pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug, E>(
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, ErrMode<E>> {
     move |input| {
         let end = match input.find_slice('\n') {
             Some(range) => {
@@ -75,10 +93,10 @@ pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug>(
 /// The code generator calls this with two or three needles in total; one is
 /// [`scan_to_literal`] / [`scan_to_line_ending`], and more than three take
 /// the position-by-position path.
-pub fn scan_to_any<'a, S: Clone + std::fmt::Debug>(
+pub fn scan_to_any<'a, S: Clone + std::fmt::Debug, E>(
     lits: &'static [&'static str],
     line_ending: bool,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, RtError> {
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, ErrMode<E>> {
     let mut needles: Vec<&'static str> = lits.to_vec();
     if line_ending {
         needles.push("\n");
@@ -289,18 +307,18 @@ pub fn frames_bytes(input: &[u8], boundary: &[u8], n: usize) -> Vec<std::ops::Ra
 /// `x?` - at most once. A failed attempt is **recorded**, not thrown away:
 /// if the rule later fails at a shallower position or input is left over, it
 /// is the better message.
-pub fn opt_recording<'a, S: Clone + std::fmt::Debug, O, P>(
+pub fn opt_recording<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Option<O>, RtError>
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Option<O>, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, RtError>,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
 {
     move |input| {
         let cp = input.checkpoint();
         match p.parse_next(input) {
             Ok(v) => Ok(Some(v)),
             Err(ErrMode::Backtrack(e)) => {
-                input.state.record(&e);
+                e.record(&mut input.state);
                 input.reset(&cp);
                 Ok(None)
             }
@@ -314,12 +332,12 @@ where
 /// (`in item 3`). Below the minimum count it is the error itself.
 ///
 /// The open-ended case of [`repeat_recording_bounded`].
-pub fn repeat_recording<'a, S: Clone + std::fmt::Debug, O, P>(
+pub fn repeat_recording<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
     min: usize,
     p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Vec<O>, RtError>
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Vec<O>, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, RtError>,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
 {
     repeat_recording_bounded(min, None, p)
 }
@@ -330,13 +348,13 @@ where
 /// as it can up to `max` and never gives one back to help a later pattern
 /// match. Below `min` the element's own error is the failure; at `max` the
 /// repetition simply stops, and whatever follows sees the rest of the input.
-pub fn repeat_recording_bounded<'a, S: Clone + std::fmt::Debug, O, P>(
+pub fn repeat_recording_bounded<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
     min: usize,
     max: Option<usize>,
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Vec<O>, RtError>
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Vec<O>, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, RtError>,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
 {
     move |input| {
         let mut items = Vec::new();
@@ -366,12 +384,12 @@ where
                     }
                     items.push(v);
                 }
-                Err(ErrMode::Backtrack(mut e)) => {
-                    e.push_rule(&format!("item {}", items.len() + 1));
+                Err(ErrMode::Backtrack(e)) => {
+                    let e = e.item(items.len() + 1);
                     if items.len() < min {
                         return Err(ErrMode::Backtrack(e));
                     }
-                    input.state.record(&e);
+                    e.record(&mut input.state);
                     input.reset(&cp);
                     break;
                 }
@@ -390,21 +408,68 @@ where
 /// `Vec`. That matters when the number of items is large enough that the
 /// collection, not the parse, is the memory cost - a log or data file with
 /// millions of records is summarised in constant space.
-pub fn fold_recording<'a, S, O, Acc, P, I, F>(
+pub fn fold_recording<'a, S, O, Acc, P, I, F, E>(
+    min: usize,
+    p: P,
+    init: I,
+    step: F,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    I: FnMut() -> Acc,
+    F: FnMut(Acc, O) -> Acc,
+    E: RtError<'a, S>,
+{
+    fold_impl(min, p, init, step, false)
+}
+
+/// The fold in the body of a `par_fold` rule: [`fold_recording`] that also
+/// leaves a trail. On every exit it writes where it stopped and how many
+/// items it had accepted into [`ParseContext::fold`](crate::ParseContext::fold),
+/// and it numbers its items from `fold.base` - so that a replay of the tail
+/// of an input (see [`entry_framed`]) reports `in item 4711`, not `item 1`.
+pub fn par_fold_recording<'a, S, O, Acc, P, I, F, E>(
+    min: usize,
+    p: P,
+    init: I,
+    step: F,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    I: FnMut() -> Acc,
+    F: FnMut(Acc, O) -> Acc,
+    E: RtError<'a, S>,
+{
+    fold_impl(min, p, init, step, true)
+}
+
+fn fold_impl<'a, S, O, Acc, P, I, F, E>(
     min: usize,
     mut p: P,
     mut init: I,
     mut step: F,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, RtError>
+    tracked: bool,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
 where
     S: Clone + std::fmt::Debug,
-    P: Parser<ParseInput<'a, S>, O, RtError>,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
     I: FnMut() -> Acc,
     F: FnMut(Acc, O) -> Acc,
+    E: RtError<'a, S>,
 {
     move |input| {
         let mut acc = init();
         let mut seen = 0usize;
+        let base = if tracked { input.state.fold.base } else { 0 };
+        // Where the fold stopped, for the replay - see `FoldProgress`.
+        let stopped = |input: &mut ParseInput<'a, S>, seen: usize, at: usize| {
+            if tracked {
+                input.state.fold.seen = seen;
+                input.state.fold.at = at;
+            }
+        };
         loop {
             let cp = input.checkpoint();
             let start = input.current_token_start();
@@ -414,21 +479,26 @@ where
                     // when the element matches without consuming anything.
                     if input.current_token_start() == start {
                         input.reset(&cp);
+                        stopped(input, seen, start);
                         break;
                     }
                     acc = step(acc, v);
                     seen += 1;
                 }
-                Err(ErrMode::Backtrack(mut e)) => {
-                    e.push_rule(&format!("item {}", seen + 1));
+                Err(ErrMode::Backtrack(e)) => {
+                    let e = e.item(base + seen + 1);
+                    stopped(input, seen, start);
                     if seen < min {
                         return Err(ErrMode::Backtrack(e));
                     }
-                    input.state.record(&e);
+                    e.record(&mut input.state);
                     input.reset(&cp);
                     break;
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    stopped(input, seen, start);
+                    return Err(e);
+                }
             }
         }
         Ok(acc)
@@ -439,23 +509,17 @@ where
 /// its name counts as the expectation instead of the internal message:
 /// ``expected `(` `` becomes `expected function argument`. If it made
 /// progress, its own message is the more informative one and stays.
-pub fn labelled<'a, S: Clone + std::fmt::Debug, O, P>(
+pub fn labelled<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
     label: &'static str,
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, RtError>
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, RtError>,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
 {
     move |input| {
         let start = input.current_token_start();
         match p.parse_next(input) {
-            Err(ErrMode::Backtrack(mut e)) if e.offset == start => {
-                e.expected = vec![label.to_string()];
-                e.message = None;
-                e.rule_stack.clear();
-                e.priority = e.priority.max(PRIO_LABELED);
-                Err(ErrMode::Backtrack(e))
-            }
+            Err(ErrMode::Backtrack(e)) => Err(ErrMode::Backtrack(e.labelled(start, label))),
             r => r,
         }
     }
@@ -463,21 +527,17 @@ where
 
 /// Gives a builtin an expectation (`identifier`, `integer literal`) if it
 /// failed without one - winnow's own primitives only report the position.
-pub fn expected<'a, S: Clone + std::fmt::Debug, O, P>(
+pub fn expected<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
     what: &'static str,
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, RtError>
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, RtError>,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
 {
     move |input| {
         let start = input.current_token_start();
         match p.parse_next(input) {
-            Err(ErrMode::Backtrack(e))
-                if e.offset == start && e.expected.is_empty() && e.message.is_none() =>
-            {
-                Err(ErrMode::Backtrack(e.add_expected(what)))
-            }
+            Err(ErrMode::Backtrack(e)) => Err(ErrMode::Backtrack(e.expected(start, what))),
             r => r,
         }
     }
@@ -485,16 +545,10 @@ where
 
 /// `fail("…")`: verbatim message, high priority - but not fatal. An error
 /// that got further still wins (progress before priority).
-pub fn fail<'a, S: Clone + std::fmt::Debug, O>(
+pub fn fail<'a, S: Clone + std::fmt::Debug, O, E: RtError<'a, S>>(
     message: &'static str,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, RtError> {
-    move |input| {
-        Err(ErrMode::Backtrack(
-            ParseError::from_stream(input)
-                .with_message(message)
-                .with_priority(PRIO_STRUCTURAL),
-        ))
-    }
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>> {
+    move |input| Err(ErrMode::Backtrack(E::fail(input, message)))
 }
 
 /// Finishes a call of the public `parse_<rule>()`.
@@ -505,7 +559,7 @@ pub fn fail<'a, S: Clone + std::fmt::Debug, O>(
 /// reason is the answer - otherwise only "expected end of input" would remain.
 pub fn finish<'a, S: Clone + std::fmt::Debug, O>(
     input: &mut ParseInput<'a, S>,
-    result: Result<O, RtError>,
+    result: Result<O, ErrMode<ParseError>>,
 ) -> Result<O, ParseError> {
     match result {
         Ok(v) => {
@@ -521,4 +575,143 @@ pub fn finish<'a, S: Clone + std::fmt::Debug, O>(
             Err(ParseError::from_stream(input).with_message("incomplete input"))
         }
     }
+}
+
+/// The fast pass of an entry point: `Some` only when it accepted the whole
+/// input. Otherwise the input is back where it started - the diagnosing pass
+/// may run - and the state is as the fast pass left it, `fold` included.
+pub fn accepted<'a, S, O, F>(input: &mut ParseInput<'a, S>, fast: F) -> Option<O>
+where
+    S: Clone + std::fmt::Debug,
+    F: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<EmptyError>>,
+{
+    let cp = input.checkpoint();
+    match fast(input) {
+        Ok(v) if input.eof_offset() == 0 => Some(v),
+        _ => {
+            input.reset(&cp);
+            None
+        }
+    }
+}
+
+/// Runs a call of the public `parse_<rule>()` - ADR 17.
+///
+/// `fast` and `diagnose` are the rule's parser instantiated with `EmptyError`
+/// and with [`ParseError`]; what happens between them is
+/// [`Diagnose`](crate::Diagnose)'s to say. A parse that succeeds costs the
+/// fast pass alone. One that fails - or leaves input over, whose reason only
+/// the diagnosing pass can name - is parsed again with the full engine, and
+/// that error goes out through [`finish`].
+pub fn entry<'a, S, O, F, D>(
+    input: &mut ParseInput<'a, S>,
+    fast: F,
+    diagnose: D,
+) -> Result<O, ParseError>
+where
+    S: Clone + std::fmt::Debug,
+    F: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<EmptyError>>,
+    D: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<ParseError>>,
+{
+    match input.state.diagnose {
+        Diagnose::Eager => {}
+        Diagnose::Off => return accepted(input, fast).ok_or_else(ParseError::undiagnosed),
+        Diagnose::ReplayInPlace => {
+            if let Some(v) = accepted(input, fast) {
+                return Ok(v);
+            }
+        }
+        Diagnose::Replay => {
+            let snapshot = input.state.user_state.clone();
+            if let Some(v) = accepted(input, fast) {
+                return Ok(v);
+            }
+            input.state.user_state = snapshot;
+        }
+    }
+    diagnose_from_here(input, diagnose)
+}
+
+/// [`entry`] for a `par_fold` rule: the replay starts at the item the fast
+/// pass stopped in, not at the beginning of the input.
+///
+/// The fold in the rule's body ([`par_fold_recording`]) leaves behind where it
+/// stopped and how many items it had accepted. Those items are independent of
+/// one another and of any state - that is what `par_fold` promises (ADR 16),
+/// and what lets pieces of the input be parsed on separate cores - so a
+/// diagnosing pass that skips them sees exactly what a pass over everything
+/// would see at that point: the same item, the same error, at the same
+/// offset, numbered the same. What it does not see are the errors recorded
+/// inside the accepted items, and those lie before this one and would lose
+/// on progress anyway. The cost of a failure is one item in diagnose mode.
+///
+/// Should the tail parse after all - an item that did depend on what came
+/// before it, which no checked `par_fold` has - the whole input is diagnosed
+/// instead, as [`entry`] would.
+pub fn entry_framed<'a, S, O, F, D>(
+    input: &mut ParseInput<'a, S>,
+    fast: F,
+    diagnose: D,
+) -> Result<O, ParseError>
+where
+    S: Clone + std::fmt::Debug,
+    F: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<EmptyError>>,
+    D: Fn(&mut ParseInput<'a, S>) -> Result<O, ErrMode<ParseError>>,
+{
+    let origin = input.current_token_start();
+    let base = input.state.fold.base;
+    match input.state.diagnose {
+        Diagnose::Eager => return diagnose_from_here(input, diagnose),
+        Diagnose::Off => return accepted(input, fast).ok_or_else(ParseError::undiagnosed),
+        Diagnose::ReplayInPlace => {
+            if let Some(v) = accepted(input, fast) {
+                return Ok(v);
+            }
+        }
+        Diagnose::Replay => {
+            let snapshot = input.state.user_state.clone();
+            if let Some(v) = accepted(input, fast) {
+                return Ok(v);
+            }
+            input.state.user_state = snapshot;
+        }
+    }
+    let cp = input.checkpoint();
+    let FoldProgress { seen, at, .. } = input.state.fold;
+    // Skip the items the fast pass accepted. `at` is absolute (a stream
+    // position), `origin` is where this call began.
+    let skip = at.saturating_sub(origin).min(input.eof_offset());
+    input.next_slice(skip);
+    input.state.fold = FoldProgress {
+        base: base + seen,
+        seen: 0,
+        at,
+    };
+    match diagnose_from_here(input, &diagnose) {
+        Err(e) => Err(e),
+        Ok(_) => {
+            input.reset(&cp);
+            input.state.fold = FoldProgress {
+                base,
+                seen: 0,
+                at: origin,
+            };
+            diagnose_from_here(input, diagnose)
+        }
+    }
+}
+
+/// The diagnosing pass from the current position: the recorded error
+/// belongs to this run, and [`finish`] selects between it and the returned one.
+fn diagnose_from_here<'a, S, O, D>(
+    input: &mut ParseInput<'a, S>,
+    diagnose: D,
+) -> Result<O, ParseError>
+where
+    S: Clone + std::fmt::Debug,
+    D: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<ParseError>>,
+{
+    input.state.furthest = None;
+    let result = diagnose(input);
+    finish(input, result)
 }

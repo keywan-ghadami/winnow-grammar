@@ -18,9 +18,57 @@ pub mod rt;
 pub mod test_result;
 pub mod testing;
 
-pub use error::{ParseError, PRIO_AGGREGATED, PRIO_LABELED, PRIO_NORMAL, PRIO_STRUCTURAL};
+pub use error::{
+    Diagnostics, ParseError, PRIO_AGGREGATED, PRIO_LABELED, PRIO_NORMAL, PRIO_STRUCTURAL,
+};
 
 pub use interner::{InternerContext, Symbol};
+
+/// When and how a failing parse produces its diagnostics.
+///
+/// Every generated entry point - `parse_<rule>()` and, per piece,
+/// `parse_<rule>_pieces()` - first runs a **fast pass** with a zero-sized
+/// error type: no expectations, no positions, no rule stacks are built while
+/// it runs. Only when it fails is the input parsed a second time, in
+/// **diagnose mode**: the full engine of ADR 15, and its error is the one
+/// reported. On a `par_fold` rule the second pass starts at the item the
+/// first one stopped in, not at the beginning. ADR 17 has the reasoning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Diagnose {
+    /// Fast pass; on failure restore `user_state` from a clone taken before
+    /// the pass, then replay in diagnose mode. An action that mutated the
+    /// state during the fast pass runs again, on the restored state - once,
+    /// as seen from the outside.
+    #[default]
+    Replay,
+    /// Fast pass; on failure replay on the same, already mutated context.
+    /// Saves the clone; an action that mutates `user_state` runs twice.
+    ReplayInPlace,
+    /// Fast pass only. A failure is just a failure: no second pass, no
+    /// position, no message - the error is [`ParseError::undiagnosed`]. For
+    /// a caller that needs the verdict, not the reason.
+    Off,
+    /// No fast pass: diagnose straight away. What every parse did before
+    /// ADR 17, and the reference a test compares the replay against.
+    Eager,
+}
+
+/// Where the fold in the body of a `par_fold` rule stopped, and where its
+/// item numbering starts.
+///
+/// The fold writes `seen` and `at` on the way out; the replay of a failed
+/// fast pass skips to `at` and numbers its items from `base` - see
+/// [`crate::rt::entry_framed`]. Two words written per failure, nothing per
+/// item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FoldProgress {
+    /// Items before this input: a replay of a tail numbers from here.
+    pub base: usize,
+    /// Items the fold accepted before it stopped.
+    pub seen: usize,
+    /// Byte offset of the item the fold stopped in.
+    pub at: usize,
+}
 
 /// The shared context that is passed as state to the parser.
 ///
@@ -40,6 +88,10 @@ pub struct ParseContext<S = ()> {
     /// an error that is *recorded* along the way never gets there - it
     /// receives the outer rules from here.
     pub rules: Vec<&'static str>,
+    /// When a failing parse is diagnosed - see [`Diagnose`].
+    pub diagnose: Diagnose,
+    /// Where the fold of a `par_fold` rule stopped - see [`FoldProgress`].
+    pub fold: FoldProgress,
 }
 
 impl<S: Default> Default for ParseContext<S> {
@@ -49,6 +101,8 @@ impl<S: Default> Default for ParseContext<S> {
             user_state: S::default(),
             furthest: None,
             rules: Vec::new(),
+            diagnose: Diagnose::default(),
+            fold: FoldProgress::default(),
         }
     }
 }
