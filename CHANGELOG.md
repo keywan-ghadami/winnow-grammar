@@ -26,6 +26,22 @@
 - **`ParseContext`** has two new fields, `furthest` and `rules`. Code that
   builds it through `Default` is unaffected.
 
+- **Lazy diagnostics** (`docs/adr/adr17-lazy-diagnostics.md`). Every entry
+  point first parses with a zero-sized error type and only diagnoses a
+  failure, by parsing again with the engine above; on a `par_fold` rule from
+  the item the fast pass stopped in. Messages are unchanged. What changes:
+  - `ParseContext` has two more fields, `diagnose: Diagnose` (`Replay`,
+    `ReplayInPlace`, `Off`, `Eager`; default `Replay`) and `fold`;
+    `ErrorCore` has `undiagnosed`. `Default` users are unaffected.
+  - An action that mutates `user_state` is replayed after a failure - on a
+    clone-restored state under `Replay`. See the ADR's side-effect contract.
+  - `rt::fold_pieces` takes the rule's two instantiations (`EmptyError`,
+    `ParseError`) instead of one parser; `rt::RtError` is now the bound the
+    generated code puts on its error type parameter, and the runtime helpers
+    are generic over it. Rules cannot name a generic parameter `E`.
+  - **Migration**: none for a grammar; a caller that wants the old behaviour
+    sets `ctx.diagnose = Diagnose::Eager`.
+
 ### Fixed
 
 - **`Symbol`'s round-trip was off by one, so `resolve` returned the wrong text.**

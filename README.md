@@ -120,7 +120,9 @@ fn main() {
 
 Failures come back as `winnow_grammar::ParseError` with the expectation, what
 was found, the position and the rule stack — see *Error Messages* in
-[SYNTAX.md](SYNTAX.md):
+[SYNTAX.md](SYNTAX.md). A parse that succeeds pays nothing for this: the
+diagnosis is only made when a parse fails, by parsing again with the full
+engine (`ParseContext::diagnose` chooses; ADR 17).
 
 ```text
 expected one of: `&`, identifier; found unexpected token `)` at line 1, column 9

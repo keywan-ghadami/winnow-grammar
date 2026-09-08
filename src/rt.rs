@@ -4,7 +4,7 @@
 //! Everything here works concretely on [`ParseInput`] because it needs the
 //! state (`input.state`): that is where the furthest failure position lives,
 //! which a successful backtrack would otherwise discard. The error type is
-//! generic ([`RtError`]): the same helper serves the fast pass with
+//! generic ([`RtError`](crate::rt::RtError)): the same helper serves the fast pass with
 //! `EmptyError` and the diagnosing pass with [`ParseError`] - see ADR 17.
 
 use crate::error::{Diagnostics, ParseError};
@@ -611,7 +611,7 @@ where
 ///
 /// `fast` and `diagnose` are the rule's parser instantiated with `EmptyError`
 /// and with [`ParseError`]; what happens between them is
-/// [`Diagnose`](crate::Diagnose)'s to say. A parse that succeeds costs the
+/// [`Diagnose`]'s to say. A parse that succeeds costs the
 /// fast pass alone. One that fails - or leaves input over, whose reason only
 /// the diagnosing pass can name - is parsed again with the full engine, and
 /// that error goes out through [`finish`].

@@ -22,6 +22,8 @@ where
     O: std::fmt::Debug,
 {
     fn parse_test(&mut self, input: &'a str) -> TestResult<O, String, ParseContext<()>> {
+        // The default context: the fast pass, and on failure the replay
+        // (ADR 17). Every test that checks a message checks the replay.
         let state = ParseContext::<()>::default();
         let mut stream = ParseInput {
             input: LocatingSlice::new(input),

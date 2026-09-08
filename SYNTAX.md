@@ -493,6 +493,36 @@ Tools you have:
 
 The contract, one test per point, is in `docs/adr/adr15-diagnostics.md`.
 
+### When the diagnosis is made
+
+None of the above is paid for by a parse that succeeds. Every entry point
+first runs a **fast pass** with a zero-sized error type - no expectations,
+positions or rule stacks are built - and only a failure is parsed a second
+time with the full engine, whose error is then reported. The messages are
+the same; the successful parse is cheaper. On a `par_fold` rule the second
+pass starts at the item the first one stopped in, so a bad line in a large
+file costs one item to explain, not the file.
+
+`ParseContext::diagnose` chooses the mode:
+
+```rust,ignore
+let mut ctx = ParseContext::<()>::default();
+ctx.diagnose = Diagnose::Off;   // the verdict alone: no second pass, no position
+```
+
+| `Diagnose::…` | on failure |
+|---|---|
+| `Replay` (default) | restore `user_state` from a clone taken before the fast pass, then diagnose |
+| `ReplayInPlace` | diagnose on the context as the fast pass left it - no clone, an action that mutates `user_state` runs twice |
+| `Off` | no second pass; the error `is_undiagnosed()` and carries no position |
+| `Eager` | no fast pass at all: diagnose straight away |
+
+What this asks of a grammar: an action that mutates `user_state` must
+tolerate being replayed after a failure - under `Replay` on the restored
+state, provided `S::clone` is a snapshot (a state that shares through `Arc`
+is not restored by cloning). Interning is idempotent and needs no care. The
+reasoning and the contract are in `docs/adr/adr17-lazy-diagnostics.md`.
+
 ## Advanced Features
 
 > **How `until` and `recover` skip.** Where the terminator's match is a fixed
@@ -546,6 +576,9 @@ explicit -> Vec<i32> = l:list<i32>(item=i32) -> { l }
 
 Declaring the parameter as `item: Rule<T>` ties its result type to `T`
 explicitly; both spellings are equivalent.
+
+The names `'a`, `S` and `E` are taken: the generated code uses them for the
+input lifetime, the user state and the error type of a rule.
 
 ### Left Recursion
 Direct left recursion is automatically detected and compiled into an iterative loop, making expression parsing natural.
