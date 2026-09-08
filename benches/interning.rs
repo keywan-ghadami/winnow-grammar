@@ -204,18 +204,14 @@ fn bench_parse_rows(c: &mut Criterion) {
             &pieces,
             |b, &pieces| {
                 b.iter(|| {
-                    let interner = InternerContext::new();
-                    let new_context = {
-                        let interner = interner.clone();
-                        move || ParseContext::<()> {
-                            interner: interner.clone(),
-                            ..Default::default()
-                        }
+                    let context = ParseContext::<()> {
+                        interner: InternerContext::new(),
+                        ..Default::default()
                     };
                     black_box(
                         Rows::parse_FILE_pieces(
                             input.as_str(),
-                            new_context,
+                            &context,
                             Parallelism::Pieces(pieces),
                         )
                         .unwrap(),

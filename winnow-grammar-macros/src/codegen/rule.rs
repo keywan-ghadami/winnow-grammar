@@ -299,6 +299,7 @@ impl<'a> Codegen<'a> {
             Some(m) => {
                 let merge_fn = format_ident!("merge_{}", rule.name, span = span);
                 let pieces_fn = format_ident!("parse_{}_pieces", rule.name, span = span);
+                let pieces_with_fn = format_ident!("parse_{}_pieces_with", rule.name, span = span);
                 let inner_fn = format_ident!("parse_{}_inner", rule.name, span = span);
                 let ret_type = &rule.return_type;
                 quote_spanned! {span=>
@@ -313,12 +314,39 @@ impl<'a> Codegen<'a> {
                     /// Parses `input` in pieces and merges: the cut is
                     /// `frames_…`, the per-piece parser the rule's own (fast
                     /// pass, then the diagnosing replay from the failing item -
-                    /// ADR 17), the merge `merge_…`. `new_context` builds the
-                    /// context each piece parses with (share an interner
-                    /// through it; see ADR 14). A piece's error is reported at
-                    /// its offset in `input`.
+                    /// ADR 17), the merge `merge_…`. A piece's error is
+                    /// reported at its offset in `input`.
+                    ///
+                    /// Every piece parses with a clone of `context`, so the
+                    /// interner inside it is *shared* - symbols from two
+                    /// pieces mean the same thing, which is what ADR 14 asks
+                    /// for and what nothing used to do. A `user_state` that
+                    /// must start empty per piece instead of being copied
+                    /// wants `parse_…_pieces_with` - ADR 19.
                     #[allow(dead_code)]
                     #vis fn #pieces_fn<'a, S: std::fmt::Debug + Clone #state_bound>(
+                        input: &'a str,
+                        context: &::winnow_grammar::ParseContext<S>,
+                        how: ::winnow_grammar::rt::Parallelism,
+                    ) -> ::core::result::Result<#ret_type, ::winnow_grammar::ParseError>
+                    where
+                        S: ::std::fmt::Debug + Clone + Sync,
+                        #ret_type: Send,
+                    {
+                        #pieces_with_fn(input, || context.clone(), how)
+                    }
+
+                    /// [`#pieces_fn`] with a context *built* per piece rather
+                    /// than cloned: for a `user_state` that has to start empty
+                    /// in every piece - a table whose slots are the piece's
+                    /// own, an accumulator that must not be copied.
+                    ///
+                    /// The closure is where an interner is shared, by cloning
+                    /// one into each context; a closure that builds a fresh
+                    /// interner gives every piece its own numbering, and
+                    /// symbols from two pieces are then not comparable.
+                    #[allow(dead_code)]
+                    #vis fn #pieces_with_fn<'a, S: std::fmt::Debug + Clone #state_bound>(
                         input: &'a str,
                         new_context: impl Fn() -> ::winnow_grammar::ParseContext<S> + Sync,
                         how: ::winnow_grammar::rt::Parallelism,

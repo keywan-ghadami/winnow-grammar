@@ -645,7 +645,8 @@ parser past one.
 ```rust,ignore
 use winnow_grammar::{rt::Parallelism, ParseContext};
 
-let total = Measurements::parse_FILE_pieces(&input, ParseContext::<()>::default, Parallelism::Auto)?;
+let context = ParseContext::<()>::default();
+let total = Measurements::parse_FILE_pieces(&input, &context, Parallelism::Auto)?;
 // or, with an executor of your own: frames_FILE + parse_FILE() + merge_FILE
 ```
 
@@ -653,27 +654,38 @@ The sequential `parse_FILE()` over the whole input gives the same answer, which
 is what `tests/frames_test.rs` asserts — on inputs it accepts and on inputs it
 rejects.
 
-**If your rule returns `Symbol`, share the interner.** `new_context` is called
-once *per piece*, so `ParseContext::default` — as above — gives every piece an
-interner of its own, and each numbers its strings from one. Symbols from two
-pieces are then not comparable: two different words can share an id, and one
-word can have two. Nothing fails; the answer is just wrong. The example above
-is safe because `FILE` returns no symbols. A grammar that binds `ident` (or any
-rule that interns) under a `par_fold` clones one interner into every piece
-instead:
+**Every piece parses with a clone of the context**, so the interner inside it
+is shared and symbols from two pieces mean the same thing. That is the plain
+call above, and it needs no thought.
+
+`parse_<RULE>_pieces_with` is the other answer: it *builds* a context per piece
+from a closure you give it, for a `user_state` that has to start empty in every
+piece - a slot table whose numbers are the piece's own, an accumulator that
+must not be copied. For that workload it is the ordinary entry point, not an
+exception:
 
 ```rust,ignore
-use winnow_grammar::{rt::Parallelism, InternerContext, ParseContext};
-
-let interner = InternerContext::new();
-let new_context = {
-    let interner = interner.clone();       // an Arc clone: one interner
-    move || ParseContext::<()> { interner: interner.clone(), ..Default::default() }
-};
-let names = Cities::parse_FILE_pieces(&input, new_context, Parallelism::Auto)?;
-// every symbol in `names` resolves against `interner`
+let totals = Measurements::parse_FILE_pieces_with(
+    &input,
+    || ParseContext::with_state(Table::default()),
+    Parallelism::Auto,
+)?;
 ```
 
+Note what that closure decides. A context built fresh per piece has a fresh
+*interner* too unless you clone one in, and symbols from two pieces are then
+not comparable: two different words can share an id, one word can have two,
+and nothing fails. Clone an interner into the closure when symbols leave their
+piece:
+
+```rust,ignore
+let interner = InternerContext::new();
+let make = { let interner = interner.clone(); move || ParseContext::with_state_and_interner(Table::default(), interner.clone()) };
+```
+
+The same is true of anything else keyed per piece - a table's slot numbers are
+its piece's, exactly as symbols are their interner's, so a merge across pieces
+combines counts and not identities unless it is keyed by name.
 `tests/shared_interner_test.rs` shows both halves side by side.
 
 **What a frame cannot say yet.** A boundary is a byte string. A format whose

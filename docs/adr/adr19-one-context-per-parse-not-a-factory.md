@@ -1,9 +1,10 @@
 # ADR 19: The Context Holds Two Lifetimes — and `_pieces` Has to Choose
 
-**Status:** §1 accepted and implemented; §2 proposed, now unblocked.
-**Date:** 2026-09-08.
-**Tests:** `tests/context_reuse_test.rs` — six, and the three that matter fail
-without the fix (checked by reverting it).
+**Status:** Accepted, implemented (§1 and §2). **Date:** 2026-09-08.
+**Tests:** `tests/context_reuse_test.rs` for §1 — six, and the three that
+matter fail without the fix (checked by reverting it);
+`tests/shared_interner_test.rs` for §2, including the one that says the
+shortest call which compiles is now the safe one.
 **Depends on:** ADR 14 (the shared context), ADR 16 (frames and `par_fold`),
 ADR 17 (the diagnosing replay), ADR 18 §3 and §4.
 
@@ -94,7 +95,7 @@ It is a fix in its own right, independent of everything below, and it should
 land on its own with a test that parses twice through one context and gets the
 same message both times.
 
-### 2. Then, and only then, the signature
+### 2. Then, and only then, the signature — **implemented**
 
 With the reset in place, what a piece inherits from a cloned context is no
 longer a question — the parse resets it. So:

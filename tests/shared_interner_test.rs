@@ -1,10 +1,10 @@
 //! The shared interner of ADR 14, across the pieces of a `par_fold` rule.
 //!
-//! `rt::parse_piece` calls `new_context()` once per piece, so what that
-//! closure returns decides whether the pieces share an interner. Both answers
-//! parse; only one of them produces symbols that mean the same thing in every
-//! piece. Until this file, every call site in the tests and in `SYNTAX.md`
-//! passed `ParseContext::<()>::default` - the answer that does not share.
+//! `rt::parse_piece` builds a context per piece, and what it is built from
+//! decides whether the pieces share an interner. Both answers parse; only one
+//! of them produces symbols that mean the same thing in every piece. Since ADR
+//! 19 §2 the sharing one is what `parse_…_pieces` does, and the other has to
+//! be asked for by name (`parse_…_pieces_with`).
 
 use winnow_grammar::rt::Parallelism;
 use winnow_grammar::{grammar, InternerContext, ParseContext, Symbol};
@@ -33,16 +33,16 @@ grammar! {
 fn one_interner_shared_by_every_piece() {
     let input = "Hamburg;1\nZurich;2\nZurich;3\nHamburg;4\n";
 
+    // One context; every piece parses with a clone of it, so they share the
+    // interner inside. Since ADR 19 §2 that is what the plain call means -
+    // the safe thing is the short thing.
     let interner = InternerContext::new();
-    let new_context = {
-        let interner = interner.clone();
-        move || ParseContext::<()> {
-            interner: interner.clone(),
-            ..Default::default()
-        }
+    let context = ParseContext::<()> {
+        interner: interner.clone(),
+        ..Default::default()
     };
 
-    let syms = Cities::parse_FILE_pieces(input, new_context, Parallelism::Pieces(2)).unwrap();
+    let syms = Cities::parse_FILE_pieces(input, &context, Parallelism::Pieces(2)).unwrap();
 
     let texts: Vec<&str> = syms.iter().map(|s| interner.resolve(*s)).collect();
     assert_eq!(texts, ["Hamburg", "Zurich", "Zurich", "Hamburg"]);
@@ -52,10 +52,12 @@ fn one_interner_shared_by_every_piece() {
     assert_ne!(syms[0], syms[1]);
 }
 
-/// The trap, pinned. A closure that builds a *fresh* interner per piece -
-/// which `ParseContext::default` does - numbers each piece from one. Nothing
-/// fails: the symbols are well-formed, resolvable inside their own piece, and
-/// wrong everywhere else.
+/// The same thing asked for on purpose. `parse_…_pieces_with` builds a context
+/// per piece, so a closure returning `ParseContext::default` gives each piece
+/// an interner of its own and numbers each from one. Nothing fails: the symbols
+/// are well-formed, resolvable inside their own piece, and wrong everywhere
+/// else. Since ADR 19 §2 this is what a caller has to *name*, rather than what
+/// they get by writing the obvious thing.
 ///
 /// This test asserts the broken comparisons on purpose. Should a later change
 /// make the ids meaningful across pieces (or reject the mismatch), this test
@@ -67,11 +69,30 @@ fn a_fresh_interner_per_piece_makes_symbols_incomparable() {
     let input = "Hamburg;1\nZurich;2\nZurich;3\nZurich;4\n";
 
     let syms =
-        Cities::parse_FILE_pieces(input, ParseContext::<()>::default, Parallelism::Pieces(2))
+        Cities::parse_FILE_pieces_with(input, ParseContext::<()>::default, Parallelism::Pieces(2))
             .unwrap();
 
     // Two different cities compare equal ...
     assert_eq!(syms[0], syms[2], "Hamburg and Zurich share an id");
     // ... and one city compares unequal to itself.
     assert_ne!(syms[1], syms[2], "the two Zurichs differ");
+}
+
+/// The point of ADR 19 §2: the *obvious* call shares. Writing the shortest
+/// thing that compiles - a default context, no closure, no thought about
+/// interners - now gives comparable symbols, where before it silently did not.
+#[test]
+fn the_shortest_call_that_compiles_is_the_safe_one() {
+    let input = "Hamburg;1\nZurich;2\nZurich;3\nZurich;4\n";
+    let context = ParseContext::<()>::default();
+
+    let syms = Cities::parse_FILE_pieces(input, &context, Parallelism::Pieces(2)).unwrap();
+
+    // The cut puts Hamburg in piece 1 and only Zurichs in piece 2 - the case
+    // that used to make the two words share an id.
+    assert_ne!(syms[0], syms[2], "Hamburg and Zurich are different words");
+    assert_eq!(syms[1], syms[2], "both Zurichs are one word");
+    assert_eq!(syms[2], syms[3]);
+    assert_eq!(context.interner.len(), 2, "Hamburg, Zurich");
+    assert_eq!(context.interner.resolve(syms[0]), "Hamburg");
 }

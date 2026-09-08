@@ -383,7 +383,7 @@ fn the_driver_agrees_with_the_sequential_parse_however_it_is_run() {
         Parallelism::Pieces(1000),
         Parallelism::Auto,
     ] {
-        let got = Measurements::parse_FILE_pieces(&input, ParseContext::<()>::default, how)
+        let got = Measurements::parse_FILE_pieces(&input, &ParseContext::<()>::default(), how)
             .unwrap_or_else(|e| panic!("{how:?}: {}", e.render(&input)));
         assert_eq!(got, expected, "{how:?}");
     }
@@ -399,7 +399,7 @@ fn the_driver_reports_a_piece_error_at_its_offset_in_the_whole_input() {
         Parallelism::Pieces(3),
         Parallelism::Pieces(6),
     ] {
-        let err = Measurements::parse_FILE_pieces(input, ParseContext::<()>::default, how)
+        let err = Measurements::parse_FILE_pieces(input, &ParseContext::<()>::default(), how)
             .expect_err("line 3 is broken");
         let rendered = err.render(input);
         assert!(
@@ -440,9 +440,12 @@ grammar! {
 fn an_unchecked_frame_is_taken_at_its_word() {
     let input = "Hamburg;\nBerlin;\n";
     let seq = Asserted::parse_FILE().parse_test(input).assert_success();
-    let pieces =
-        Asserted::parse_FILE_pieces(input, ParseContext::<()>::default, Parallelism::Pieces(2))
-            .unwrap();
+    let pieces = Asserted::parse_FILE_pieces(
+        input,
+        &ParseContext::<()>::default(),
+        Parallelism::Pieces(2),
+    )
+    .unwrap();
     assert_eq!(seq, 13);
     assert_eq!(pieces, seq);
 }
@@ -491,7 +494,7 @@ fn a_rule_only_lookahead_reaches_is_not_checked_for_the_boundary() {
         Parallelism::Pieces(2),
         Parallelism::Pieces(3),
     ] {
-        let got = Lookahead::parse_FILE_pieces(input, ParseContext::<()>::default, how)
+        let got = Lookahead::parse_FILE_pieces(input, &ParseContext::<()>::default(), how)
             .unwrap_or_else(|e| panic!("{how:?}: {}", e.render(input)));
         assert_eq!(got, total, "{how:?}");
     }

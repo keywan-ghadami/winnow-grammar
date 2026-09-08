@@ -209,13 +209,14 @@ fn a_hand_written_parser_reaches_the_declared_state() {
 
 #[test]
 fn a_declared_state_still_cuts_into_pieces() {
-    // `parse_<rule>_pieces` keeps its signature - the bound rides on `S` - so
-    // each piece builds its own table through `new_context`. Slot numbers are
-    // then per piece, exactly as symbols are per interner, so what merges here
-    // is the count, not the identity.
+    // A table that must start empty in every piece is what
+    // `parse_…_pieces_with` is for (ADR 19 §2) - and for this workload it is
+    // the ordinary entry point, not an exception. Slot numbers are then per
+    // piece, exactly as symbols are per interner, so what merges here is the
+    // count, not the identity.
     use winnow_grammar::rt::Parallelism;
     let input = "Hamburg;12\nZürich;20\nHamburg;-4\n東京;30\n";
-    let totals = Measurements::parse_FILE_pieces(
+    let totals = Measurements::parse_FILE_pieces_with(
         input,
         || ParseContext::with_state(Slots::default()),
         Parallelism::Pieces(2),

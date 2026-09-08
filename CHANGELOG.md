@@ -5,6 +5,24 @@
 
 ### Breaking Changes
 
+- **`parse_<rule>_pieces` takes a context, not a factory** (ADR 19 §2). Every
+  piece parses with a clone of it, so the interner inside is shared and symbols
+  from two pieces mean the same thing. That was possible before and nothing did
+  it: the factory made the safe answer the one you had to know to write, and
+  every call site in the tests and the documentation passed
+  `ParseContext::default`, giving each piece an interner of its own — two
+  different words could share an id, one word could have two, and nothing
+  failed.
+  - **Migration**: `parse_X_pieces(input, ParseContext::<()>::default, how)`
+    becomes `parse_X_pieces(input, &ParseContext::<()>::default(), how)`.
+  - A `user_state` that must start empty in every piece — a slot table whose
+    numbers are the piece's own, an accumulator that must not be copied — uses
+    the new **`parse_<rule>_pieces_with`**, which keeps the closure. For that
+    workload it is the ordinary entry point; the surprising answer is now the
+    one you have to name.
+  - Unchanged: `rt::fold_pieces` still takes a factory, being the layer a
+    caller with its own executor uses.
+
 - **`until(…)` returns the text it skipped** (`&'a str`) instead of `()`. Binding
   it (`s:until(";")`) was possible before but gave the unit value, so there was
   nothing a grammar could do with it; scanning produces the slice anyway, and

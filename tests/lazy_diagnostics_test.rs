@@ -245,7 +245,7 @@ fn sequential(mode: Diagnose, input: &str) -> (Result<usize, ParseError>, usize)
 }
 
 fn in_pieces(mode: Diagnose, how: Parallelism, input: &str) -> (Result<usize, ParseError>, usize) {
-    counting(|| Lengths::parse_FILE_pieces(input, || context::<()>(mode), how))
+    counting(|| Lengths::parse_FILE_pieces(input, &context::<()>(mode), how))
 }
 
 #[test]
