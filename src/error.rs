@@ -334,6 +334,12 @@ pub trait Diagnostics: Sized {
     /// The error of a hand-written parser plugged into a grammar. Those
     /// return [`ParseError`] whatever the grammar's error type is.
     fn from_parse_error(e: ParseError) -> Self;
+
+    /// An error from outside the parser - a `FromStr` that refused, say.
+    /// Winnow's own `FromExternalError` cannot be required of `E` here
+    /// without naming every foreign error type in the bound, so the hook
+    /// lives on this trait instead.
+    fn external<I: Stream + Location + AsBStr, X: fmt::Display>(input: &I, e: X) -> Self;
 }
 
 impl Diagnostics for ParseError {
@@ -375,6 +381,10 @@ impl Diagnostics for ParseError {
     fn from_parse_error(e: ParseError) -> Self {
         e
     }
+
+    fn external<I: Stream + Location + AsBStr, X: fmt::Display>(input: &I, e: X) -> Self {
+        Self::from_stream(input).with_message(e.to_string())
+    }
 }
 
 impl Diagnostics for EmptyError {
@@ -399,6 +409,10 @@ impl Diagnostics for EmptyError {
     fn record<S>(&self, _ctx: &mut crate::ParseContext<S>) {}
 
     fn from_parse_error(_e: ParseError) -> Self {
+        EmptyError
+    }
+
+    fn external<I: Stream + Location + AsBStr, X: fmt::Display>(_input: &I, _e: X) -> Self {
         EmptyError
     }
 }

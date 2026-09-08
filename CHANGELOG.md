@@ -174,6 +174,17 @@
 
 ### Added
 
+- **`dec<T>(p)`: the text `p` matched, read as a number.** `dec<i32>(digit{1,2})`
+  where the action used to fold characters by hand. Not a faster way to parse a
+  number - measured, it costs what `text(p)` plus that fold costs
+  (`benches/repetition.rs`) - but the fold is no longer written out at every
+  numeric field, and a value the named type cannot hold becomes a parse error
+  that says "number too large to fit in target type" instead of wrapping in
+  release and panicking in debug. That reason is why it is not winnow's
+  `parse_to`, which discards the `FromStr` error and reports a bare position.
+  The type is the one the call names, through the generics a call already
+  takes; without one it is inferred.
+
 - **`text(p)`: what was matched, not what was parsed.** Runs `p` and hands back
   the input it consumed as `&'a str`, borrowed from the input - no allocation,
   whatever `p` is. Several patterns are a sequence, not several arguments, so

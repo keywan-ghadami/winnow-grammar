@@ -701,6 +701,35 @@ impl<'a> Codegen<'a> {
                 let inner = self.generate_sequence_parser(&seq, is_lexical);
                 quote_spanned! {span=> ::winnow::Parser::take(#inner) }
             }
+            // `dec<T>(p)`: the text `p` matched, read as a number.
+            //
+            // `try_map` rather than winnow's `parse_to`: the latter throws the
+            // `FromStr` error away and reports a bare position, so a value too
+            // large for `T` would fail without saying why - and saying why is
+            // most of the point. `ParseError` turns an external error into its
+            // message (`FromExternalError`), so "number too large to fit in
+            // target type" arrives intact.
+            "dec" => {
+                if args.is_empty() {
+                    let msg = "`dec` takes the pattern whose text to read, and got none";
+                    return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg)
+                        .to_compile_error();
+                }
+                let seq: Vec<ModelPattern> = args
+                    .iter()
+                    .map(|a| match a {
+                        Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
+                    })
+                    .collect();
+                let inner = self.generate_sequence_parser(&seq, is_lexical);
+                let taken = quote_spanned! {span=> ::winnow::Parser::take(#inner) };
+                match call_generics.first() {
+                    Some(ty) => quote_spanned! {span=>
+                        ::winnow_grammar::rt::dec::<_, #ty, _, _>(#taken)
+                    },
+                    None => quote_spanned! {span=> ::winnow_grammar::rt::dec(#taken) },
+                }
+            }
             "intern" => match args {
                 [arg] => {
                     let inner = self.generate_argument_expr(arg, is_lexical);
