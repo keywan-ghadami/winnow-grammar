@@ -205,16 +205,26 @@ What that says:
 digit run as a borrowed slice instead of a `Vec<char>`, which is winnow's
 `.take()` under another name:
 
-| case | ns |
-|---|---|
-| `TENTHS` today, `Vec<char>` | 59.4 |
-| the same with the run borrowed | **36.0** |
-| written by hand, one scan and a fold | 34.0 |
+Three runs, because a single one said something that did not survive repeating:
 
-Two nanoseconds from hand-written, with no SIMD, no SWAR and no register
-arithmetic - only by not copying two characters onto the heap. That is the
-whole of the 1BRC-shaped win, and it is a language question, not an
-optimisation.
+| case | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| `TENTHS` today, `Vec<char>` | 59.6 | 57.9 | 60.8 |
+| the run borrowed, folded in the action (`text`) | 35.4 | 35.3 | 37.0 |
+| the run accumulated by the parser (`dec`) | 34.8 | 35.7 | 37.3 |
+| written by hand, one scan and a fold | 34.3 | 35.6 | 36.2 |
+
+The allocation is ~23 ns and it is the whole story: not copying two characters
+onto the heap lands on hand-written, with no SIMD, no SWAR and no register
+arithmetic.
+
+**The last three rows are one number.** Their intervals overlap and their
+order flips between runs. A single run had suggested a 2 ns gap between the
+borrowed run and hand-written; repeating it dissolved that gap. So a `dec(..)`
+operator - the run turned into an integer by the parser instead of by the
+action - buys **no measurable time** over borrowing the run and folding it in
+the action: the fold is the same loop either way, and moving it into generated
+code changes nothing.
 
 ### What that leaves open
 
@@ -222,17 +232,27 @@ The allocation cannot be removed while the binding yields `Vec<char>`: the
 type is the contract with the action, and `for d in whole` / `d.iter()` rely
 on it. Two ways out, neither taken yet:
 
-* **`dec(p)`** - an operator over a pattern, the shape ADR 18 established for
-  `intern(p)`, adding one name to the fixed list in `parser.rs`. `dec(digit{1,2})`
-  has no intermediate at all: the codegen sees the bound and accumulates
-  straight into an integer. Opt-in, so nothing existing changes, and the
-  declared bound does real work (no overflow check inside the loop). Output
-  type via the existing call generics: `dec<i32>(digit{1,2})`.
+* **A text-capture operator** - "give me what was matched, not the parsed
+  values", winnow's `.take()` under a DSL name, one entry in the fixed list in
+  `parser.rs` the way ADR 18 added `intern`. It yields `&'a str`, costs
+  nothing (it is a slice of the input), and works for any pattern. It also
+  closes an inconsistency that is already in the language: `digit1` yields
+  `&'a str` and `digit{1,2}` a `Vec<char>`, though both are a run of digits -
+  which is why `intern(until(";"))` works today and `intern(digit{1,2})`
+  cannot, a `Vec<char>` being no `AsRef<str>`. **This is where the ~23 ns are.**
+
+* **`dec(p)`** - the run accumulated into an integer by the parser. Measured
+  above: no time over the text operator plus a fold. Two arguments that are
+  *not* about speed remain, and they are the ones to decide it on: an action
+  no longer hand-rolls the same three-line fold at every numeric field, and
+  the declared bound proves the accumulator cannot overflow, which a fold
+  written in an action does not. Output type via the existing call generics:
+  `dec<i32>(digit{1,2})`.
 * **Inline storage for a small known bound** - `digit{1,2}` keeps its meaning
   but yields a stack-backed type. No new syntax, but it *is* a type change:
   actions that name `Vec<char>` break, and the binding type would differ
   between `{1,2}` and `{2,}`.
 
-If `dec` lands, the inline type earns little: in this repository exactly one
-binding of a bounded digit run does something other than build a number
-(`d.iter().collect()` into a `String`). Do `dec` first, then re-ask.
+The text operator makes the inline type pointless: a borrowed slice beats a
+stack buffer, and it needs no new container type at all. Do the text operator
+first; `dec` is then an ergonomics and overflow question, not a speed one.
