@@ -108,6 +108,15 @@
 
 ### Added
 
+- **`winnow`'s `simd` feature is enabled**, so the scans behind `until(…)` and
+  `recover(…)` go through `memchr` as this crate's own documentation already
+  said they did. Without it, `find_slice` compiles to the portable fallback -
+  a byte-at-a-time `position` for a single byte and a naive substring search
+  for a literal - and no amount of prose about SIMD made that true. Measured
+  over 8 MiB of `until(";" | frame_end)` records in release on one machine:
+  **11.0 ms -> 6.7 ms**. Nothing about behaviour changes; `memchr` joins the
+  dependency tree through `winnow`.
+
 - **`intern(pattern)`: a `Symbol` from any text a grammar can parse.** ADR 18.
   Interning used to be reachable only through `ident`, so a grammar that wanted
   a symbol for a field value, a quoted string or a rule of its own had to leave

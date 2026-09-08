@@ -20,7 +20,11 @@ trace = ["winnow/debug"]
 rayon = ["dep:rayon"]
 
 [dependencies]
-winnow = "0.7"
+# `simd` routes winnow's `find_slice` through `memchr` (SIMD where the target
+# has it, the same word-at-a-time trick in portable code where it does not).
+# Without it the scans behind `until(…)` and `recover(…)` fall back to a
+# byte-at-a-time `position` and a naive substring search - see `rt::scan_to_*`.
+winnow = { version = "0.7", features = ["simd"] }
 winnow-grammar-macros = { path = "winnow-grammar-macros", version = "0.1.0" }
 proc-macro2 = "1.0"
 quote = "1.0"
