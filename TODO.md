@@ -92,3 +92,22 @@ The shape to try, and what to check about it:
 * **What to prove.** That the hit path is a few ns rather than ~21; that the
   miss path costs no more than ~2-3 ns over today; and that symbols are
   unchanged - the cache is an optimisation, not a semantic.
+
+## 5. `fold.base` survives a parse (ADR 19 §1)
+
+`fold_impl` numbers its items from `input.state.fold.base`, and
+`rt::entry_framed` writes `base + seen` back when a `par_fold` fails. Nothing
+resets it, so a context used for a second parse numbers from where the first
+one stopped. Reproduced: the identical failing input reports `in item 4` with
+a fresh context and `in item 7` with a reused one.
+
+This hits exactly what ADR 14 advertises - one long-lived context across many
+source files - and it blocks ADR 19 §2, which would clone the stale value into
+every piece.
+
+The fix is to reset the per-parse fields (`fold`, and defensively `furthest`
+and `rules`) at the start of `rt::entry` and `rt::entry_framed`. Safe against
+a nested entry point, because that composition does not exist: `rt::finish`
+fails a parse with input left over, so an entry point called inside another
+parse already fails with `expected end of input`. Wanted with it: a test that
+parses twice through one context and gets the same message both times.
