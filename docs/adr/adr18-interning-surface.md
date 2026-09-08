@@ -123,8 +123,9 @@ is the name of one that exists in a single hard-coded place.
 Consequences of being a map over the inner parser, all of them wanted:
 whitespace stays the inner pattern's business, so `intern(p)` consumes leading
 whitespace in a syntactic rule exactly where `p` would; a failing `p` fails the
-`intern`, with `p`'s own error and position; and in a `lex(...)` or `#[lexical]`
-rule it is strict, like everything else there.
+`intern`, with `p`'s own error and position; and in a `lex(...)` scope or a
+lexical rule - one whose name starts with a capital - it is strict, like
+everything else there.
 
 A non-`AsRef<str>` argument — `intern(u32)` — is a Rust type error at the
 generated call site, not a grammar error. Accepted: the same is true of every
