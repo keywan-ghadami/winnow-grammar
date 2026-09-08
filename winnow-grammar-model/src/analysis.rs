@@ -1208,20 +1208,6 @@ fn pattern_structure_eq(p1: &ModelPattern, p2: &ModelPattern) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use syn::parse_quote;
-
-    #[test]
-    fn test_resolve_token_types_valid() {
-        let kws = HashSet::new();
-        let lit: syn::LitStr = parse_quote!("fn");
-        let types = resolve_token_types(&lit, &kws).unwrap();
-        assert_eq!(types.len(), 1);
-    }
-}
-
 // -----------------------------------------------------------------------------
 // Rules that are a literal
 // -----------------------------------------------------------------------------
@@ -1346,5 +1332,19 @@ fn collect_literals(
 fn push_unique(out: &mut Vec<String>, text: String) {
     if !out.contains(&text) {
         out.push(text);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    #[test]
+    fn test_resolve_token_types_valid() {
+        let kws = HashSet::new();
+        let lit: syn::LitStr = parse_quote!("fn");
+        let types = resolve_token_types(&lit, &kws).unwrap();
+        assert_eq!(types.len(), 1);
     }
 }

@@ -67,7 +67,17 @@ fn parse<'a, O>(
 grammar! {
     grammar Rep {
         // Lexical: one element per digit, no separators.
-        pub BOUND -> usize = xs:digit* -> { xs.len() }
+
+        // A repetition of a *rule* collects, because the elements are values
+        // the parser built - here one `u8` each - rather than input it walked
+        // over. This is the case the `Vec` exists for.
+        ITEM -> u8 = d:digit -> { d as u8 - b'0' }
+        pub BOUND -> usize = xs:ITEM* -> { xs.len() }
+
+        // A repetition of a character class is the text it matched, so even
+        // named it holds nothing beyond a slice of the input.
+        pub RUN -> usize = d:digit* -> { d.len() }
+
         pub DISCARDED -> () = digit* -> { () }
         pub COUNTED -> usize = n:count(digit) -> { n }
         pub BOUNDED_DISCARDED -> () = digit{1000,} -> { () }
@@ -84,7 +94,7 @@ fn digits() -> &'static str {
 }
 
 /// The baseline: bound elements are produced, so the memory is the answer.
-/// `Vec<char>` over `N` elements is at least `4 * N` bytes.
+/// A `Vec<u8>` over `N` elements is at least `N` bytes.
 #[test]
 fn a_bound_repetition_holds_its_elements() {
     let input = digits();
@@ -92,8 +102,21 @@ fn a_bound_repetition_holds_its_elements() {
         assert_eq!(parse(Rep::parse_BOUND(), input), N);
     });
     assert!(
-        peak >= 4 * N,
+        peak >= N,
         "a bound repetition should hold its {N} elements; peak was {peak} bytes"
+    );
+}
+
+/// A run of a character class is a slice of the input, named or not.
+#[test]
+fn a_named_character_run_holds_nothing() {
+    let input = digits();
+    let peak = peak_bytes(|| {
+        assert_eq!(parse(Rep::parse_RUN(), input), N);
+    });
+    assert!(
+        peak < N,
+        "a run of digits should not grow with its {N} characters; peak was {peak} bytes"
     );
 }
 

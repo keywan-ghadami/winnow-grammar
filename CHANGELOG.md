@@ -5,6 +5,32 @@
 
 ### Breaking Changes
 
+- **A repetition of a character class yields the text it matched**, not its
+  elements: `digit{1,2}`, `digit*`, `digit+` and `any{n}` are now `&'a str`
+  instead of `Vec<char>`. `{n,m}` is borrowed from regular expressions, where
+  `\d{1,2}` matches text and not a list of characters, and the `Vec` was a copy
+  of input the parser had already walked over - no grammar in this repository
+  wanted it, all of them turned it straight back into a string, a count or a
+  number. `digit*` is now the `digit0` the built-in table never had, and
+  `digit+` the `digit1` it has.
+
+  The classes are `digit` and `any` - they consume one character and yield it
+  unchanged. `char` is **not** one although it yields a `char`: it parses a
+  character *literal*, so `'\n'` is four characters of input and one of value,
+  and its text is not its value. A repetition of a rule still yields its
+  elements, because those are values the parser built.
+
+  **Migration**: `d.iter().collect::<String>()` becomes `d.to_string()`,
+  `for c in d` becomes `for b in d.bytes()`, `d[0]` becomes an index into the
+  slice or a `d.chars()`. `d.len()` keeps working and still counts the digits.
+  In a syntactic (lowercase) rule the text now includes the whitespace between
+  the elements, since that is what was consumed - a numeric run belongs in a
+  lexical rule, as it already did.
+
+  It is also the last allocation on the 1BRC path: `TENTHS` measures 60 ns ->
+  29 ns (`benches/repetition.rs`, one machine), which is below the same rule
+  written by hand.
+
 - **`parse_<rule>_pieces` takes a context, not a factory** (ADR 19 §2). Every
   piece parses with a clone of it, so the interner inside is shared and symbols
   from two pieces mean the same thing. That was possible before and nothing did
