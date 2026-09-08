@@ -44,7 +44,10 @@ impl<'a> Codegen<'a> {
             let action = &v.action;
             let action_str = action.to_string();
             let state_injection = if action_str.contains("_state") {
-                quote! { let _state = ::winnow::stream::Stateful::state_mut(#input); }
+                // `Stateful` keeps its state in a public field; it has no
+                // `state_mut()`. The binding is `&mut` so that an action can
+                // both read the context and intern into it - ADR 18.
+                quote! { let _state = &mut #input.state; }
             } else {
                 quote! {}
             };
@@ -103,7 +106,10 @@ impl<'a> Codegen<'a> {
             let action = &v.action;
             let action_str = action.to_string();
             let state_injection = if action_str.contains("_state") {
-                quote! { let _state = ::winnow::stream::Stateful::state_mut(#input); }
+                // `Stateful` keeps its state in a public field; it has no
+                // `state_mut()`. The binding is `&mut` so that an action can
+                // both read the context and intern into it - ADR 18.
+                quote! { let _state = &mut #input.state; }
             } else {
                 quote! {}
             };
@@ -207,7 +213,10 @@ impl<'a> Codegen<'a> {
             let action = &v.action;
             let action_str = action.to_string();
             let state_injection = if action_str.contains("_state") {
-                quote! { let _state = ::winnow::stream::Stateful::state_mut(#input); }
+                // `Stateful` keeps its state in a public field; it has no
+                // `state_mut()`. The binding is `&mut` so that an action can
+                // both read the context and intern into it - ADR 18.
+                quote! { let _state = &mut #input.state; }
             } else {
                 quote! {}
             };
