@@ -651,6 +651,45 @@ where
     }
 }
 
+/// `recover(body, sync)` - run `body`, and on failure skip to `sync` and carry
+/// on, keeping what went wrong.
+///
+/// `alt((body.map(Some), (skip, sync).map(|_| None)))` was the shape before,
+/// and it threw the body's error away where it was produced. Writing the two
+/// branches out keeps it: the count goes into the context in both passes, the
+/// error itself when the diagnosing engine is the one running (`TODO.md` §2).
+///
+/// A **cut** inside the body is not recovered from. That is what a cut is for -
+/// the input is wrong rather than merely unexpected here - and it was already
+/// so, `alt` not catching `ErrMode::Cut` either.
+pub fn recover_recording<'a, S, O, Skipped, Synced, B, K, Y, E>(
+    mut body: B,
+    mut skip: K,
+    mut sync: Y,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Option<O>, ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    B: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    K: Parser<ParseInput<'a, S>, Skipped, ErrMode<E>>,
+    Y: Parser<ParseInput<'a, S>, Synced, ErrMode<E>>,
+    E: RtError<'a, S>,
+{
+    move |input| {
+        let cp = input.checkpoint();
+        match body.parse_next(input) {
+            Ok(v) => Ok(Some(v)),
+            Err(ErrMode::Backtrack(e)) => {
+                input.reset(&cp);
+                skip.parse_next(input)?;
+                sync.parse_next(input)?;
+                input.state.record_recovery(e.into_parse_error());
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
 /// `intern(p)` - run `p` and intern what it yields, in the interner the
 /// context carries (ADR 14). The whole of `Symbol`'s value is that a parse
 /// which sees the same text twice returns the same 4-byte id twice, so the

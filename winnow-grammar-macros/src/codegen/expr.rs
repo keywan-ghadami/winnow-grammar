@@ -1080,13 +1080,11 @@ impl<'a> Codegen<'a> {
                 // reached exactly when a file has many errors.
                 let skip = self.generate_skip_to(sync, is_lexical);
                 quote_spanned! {span=>
-                    alt((
-                        #body_parser.map(Some),
-                        (
-                            #skip,
-                            #sync_parser
-                        ).map(|_| None)
-                    ))
+                    ::winnow_grammar::rt::recover_recording(
+                        #body_parser,
+                        #skip,
+                        #sync_parser,
+                    )
                 }
             }
             ModelPattern::Peek(inner, _) => {

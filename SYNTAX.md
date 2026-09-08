@@ -563,7 +563,27 @@ rule T = "bool"
 - **`count(pattern)`**: Returns the number of times `pattern` matched (as `usize`).
 - **`eof`**: Succeeds only at the end of the input.
 - **`fail("message")`**: Explicitly fails with a custom error message.
-- **`recover(rule, sync)`**: If `rule` fails, skips input until `sync` token is found.
+- **`recover(rule, sync)`**: If `rule` fails, skips input until `sync` is
+  found, consumes it, and yields `None` instead of failing. What went wrong is
+  not lost: `ParseContext::recoveries` counts them, and `recovered` holds the
+  errors themselves whenever the diagnosing engine is the one running. A parse
+  that recovers *succeeds*, so under the default `Diagnose::Replay` only the
+  fast pass runs and there is nothing to keep - the count is what tells you to
+  look, and `Diagnose::Eager` is what makes it say why:
+
+  ```rust,ignore
+  let mut stream = ParseInput {
+      input: LocatingSlice::new(src),
+      state: ParseContext::<()> { diagnose: Diagnose::Eager, ..Default::default() },
+  };
+  let ast = Grammar::parse_file().parse_next(&mut stream)?;
+  for e in &stream.state.recovered {
+      eprintln!("{}", e.render(src));
+  }
+  ```
+
+  A **cut** inside `rule` is not recovered from: a cut says the input is wrong
+  rather than merely unexpected here, and that is fatal by design.
 - **`par_fold(rule, init, step, merge)`**: `fold` plus a merge, over a `#[frame]`
   rule — see **Frames and parallel parsing** below.
 - **`fold(rule, init, step)`**: Repeats `rule` zero or more times, threading an

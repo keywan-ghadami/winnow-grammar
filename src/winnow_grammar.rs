@@ -103,6 +103,16 @@ pub struct ParseContext<S = ()> {
     pub rules: Vec<&'static str>,
     /// When a failing parse is diagnosed - see [`Diagnose`].
     pub diagnose: Diagnose,
+    /// How often `recover(…)` swallowed a failure and skipped to its
+    /// synchronisation point. Counted in both passes, so it is there after a
+    /// parse that succeeded - which a parse with recoveries does.
+    pub recoveries: usize,
+    /// What those recoveries swallowed, when the diagnosing engine was the one
+    /// running. The fast pass has no error to keep (its error type is
+    /// zero-sized), so this is empty after a parse that only ran it: the count
+    /// above says *that* something was recovered, `Diagnose::Eager` says
+    /// *what*. See `TODO.md` §2.
+    pub recovered: Vec<ParseError>,
     /// Where the fold of a `par_fold` rule stopped - see [`FoldProgress`].
     pub fold: FoldProgress,
 }
@@ -116,6 +126,8 @@ impl<S: Default> Default for ParseContext<S> {
             furthest: None,
             rules: Vec::new(),
             diagnose: Diagnose::default(),
+            recoveries: 0,
+            recovered: Vec::new(),
             fold: FoldProgress::default(),
         }
     }
@@ -136,6 +148,8 @@ impl<S> ParseContext<S> {
             furthest: None,
             rules: Vec::new(),
             diagnose: Diagnose::default(),
+            recoveries: 0,
+            recovered: Vec::new(),
             fold: FoldProgress::default(),
         }
     }
@@ -171,7 +185,18 @@ impl<S> ParseContext<S> {
         self.furthest = None;
         self.rules.clear();
         self.fold = FoldProgress::default();
+        self.recoveries = 0;
+        self.recovered.clear();
         self.intern_cache.rebind(&self.interner);
+    }
+
+    /// Records what a `recover(…)` swallowed: always the count, and the error
+    /// itself when the diagnosing engine produced one.
+    pub fn record_recovery(&mut self, error: Option<ParseError>) {
+        self.recoveries += 1;
+        if let Some(e) = error {
+            self.recovered.push(e);
+        }
     }
 
     /// The symbol for `text`, through this context's cache.

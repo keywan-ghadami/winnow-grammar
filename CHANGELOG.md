@@ -275,6 +275,17 @@
   grammar parser because parsing runs before the backend is known; an arity on
   `BuiltIn` is the general fix (`feature-requests.md` §1).
 
+- **`recover(…)` keeps what it swallowed.** It was
+  `alt((body.map(Some), (skip, sync).map(|_| None)))`, which discarded the
+  failure where it was produced, so a parse could recover from ten errors and
+  report none of them. `ParseContext::recoveries` now counts them - in both
+  passes, so it is there after the successful parse that a recovering one is -
+  and `ParseContext::recovered` holds the errors themselves wherever the
+  diagnosing engine ran. Under the default `Diagnose::Replay` a recovering
+  parse succeeds on the fast pass alone, which has no error object to keep:
+  the count says that something was recovered, `Diagnose::Eager` says what.
+  A cut inside the recovered rule is still fatal, as it was.
+
 - **A lookup cache in front of the interner.** `ParseContext` carries a
   direct-mapped table of 512 slots (8 KiB), and `ParseContext::intern` - what
   `ident` and `intern(…)` call - answers from it before asking the interner.

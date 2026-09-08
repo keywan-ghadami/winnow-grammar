@@ -28,13 +28,28 @@ defeat the operator. Documented instead: the Cut Operator section now says how
 far it reaches and what that means for a rule meant to be called from
 elsewhere.
 
-## 2. Robust Error Recovery (`recover`)
+## 2. Error recovery (`recover`) — **the error is kept now**
 
-*   **Current State:** `recover(rule, sync)` is `alt((rule.map(Some), (skip, sync).map(|_| None)))` in `codegen/expr.rs`. The skip is shared with `until` (`Codegen::generate_skip_to`): a literal, `line_ending` or `eof` sync is *scanned* for with `find_slice`/`memchr`; any other sync is still tried position by position.
-*   **The Issue:**
-    *   ~~**Performance:** Consuming tokens one by one is O(N²) in the worst case.~~ Done for fixed terminators. Still open, and now with numbers and a second half - see §8: a sync or terminator that is a user rule takes the slow path even when its body is a single literal, and under a `#[frame]` it is not slow but rejected.
-    *   **Correctness:** The current implementation assumes strict success/fail binary. Real-world recovery often needs to accumulate errors (diagnostics) rather than just returning `None`. The integration with `winnow`'s error reporting traits needs to be stronger so that the "skipped" bad input is reported as a specific error type to the user.
-*   **Goal:** Extend the `recover` syntax or semantics to allow capturing the error for diagnostic reporting instead of just silently discarding it.
+*   ~~**Performance:** consuming tokens one by one is O(N²).~~ Done for fixed
+    terminators, and §8 extended the scan to a terminator that is a rule of
+    your own.
+*   ~~**Correctness:** the recovered failure was discarded, so nothing could
+    report what had been wrong.~~ `rt::recover_recording` replaces the
+    `alt((body.map(Some), (skip, sync).map(|_| None)))` that threw the error
+    away where it was produced: `ParseContext::recoveries` counts them in both
+    passes and `recovered` holds the errors wherever the diagnosing engine ran.
+    `tests/recover_test.rs` covers a clean parse, the count surviving the fast
+    pass, the messages under `Diagnose::Eager`, and a reused context not
+    accumulating.
+
+    The shape of that answer is ADR 17's: a parse that recovers *succeeds*, so
+    the default `Replay` mode never runs the diagnosing engine and there is no
+    error object to keep - the count says *that* something was recovered,
+    `Eager` says *what*. Deliberately not done: replaying automatically when
+    the count is non-zero. It is ten lines in `rt::entry`, and it would make a
+    successful parse's cost depend on its input in a way ADR 17 promises it
+    does not. If the two-step proves clumsy in practice, that is the change to
+    make, and the count is what makes it possible.
 
 ## 3. Map `winnow::stream::Location` to Proper Spans
 
