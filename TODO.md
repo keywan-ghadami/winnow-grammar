@@ -2,11 +2,31 @@
 
 This file tracks critical technical debt and optimization opportunities identified during development. These items represent features that are either partially implemented, stubbed out, or require significant refinement to meet production standards.
 
-## 1. Optimize Cut Operator (`=>`) Implementation
+## 1. The cut operator — **verified, no change**
 
-*   **Current State:** The cut operator logic in `codegen/mod.rs` simply sets an `in_cut` boolean flag when it encounters a cut. Subsequent parsers in the sequence are then blindly wrapped in `::winnow::combinator::cut_err(...)`.
-*   **The Issue:** This approach is somewhat naive. It might wrap too many things or not interact correctly with nested structures like `alt` or `delimited` in all edge cases. Specifically, `cut_err` prevents backtracking, which is the desired behavior, but indiscriminate wrapping can lead to confusing error messages or performance overhead if not scoped precisely. The logic for propagating the "cut" state through complex nested patterns (like groups or repetitions) needs verification.
-*   **Goal:** Refine the `generate_sequence_steps` and `generate_step` logic to apply `cut_err` only at the exact necessary boundaries. Ensure that `cut` properly commits to the current alternative within an `alt` combinator without bleeding into unrelated parsing paths.
+The concern was that setting a flag at the cut and wrapping every later step of
+the sequence in `cut_err` might wrap too much or interact badly with groups,
+delimiters and repetitions. `tests/cut_test.rs` answers it by behaviour rather
+than by reading: a cut commits its alternative and no more; before it,
+backtracking still works; inside a called rule it commits within that rule's
+alternatives; as the element of a repetition it makes a half-matched element
+fatal rather than ending the loop; and before a call to a rule with
+alternatives it commits to the call while the alternatives still choose freely.
+All six pass. Wrapping each later step is behaviourally the same as committing
+the rest of the sequence, so there is nothing to scope more precisely.
+
+The one thing the item asked for that is *not* the implementation: it wanted
+the cut to commit "without bleeding into unrelated parsing paths". It does
+bleed, by design - a cut is winnow's `cut_err`, so the failure is fatal and
+propagates out of the rule that wrote it, and an alternative in a *calling*
+rule is not tried either. That is what makes the reported error the committed
+one's rather than a merge across everything that was attempted, and SYNTAX.md's
+guidance elsewhere (write to a state after a cut, which no enclosing
+alternative retries past) already relies on it. Changing it would mean catching
+`Cut` at every rule boundary and turning it back into a backtrack, which would
+defeat the operator. Documented instead: the Cut Operator section now says how
+far it reaches and what that means for a rule meant to be called from
+elsewhere.
 
 ## 2. Robust Error Recovery (`recover`)
 

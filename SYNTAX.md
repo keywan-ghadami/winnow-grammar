@@ -465,6 +465,26 @@ stays where it is.
 ### Cut Operator (`=>`)
 The cut operator commits to the current alternative. If the pattern *before* the `=>` matches, the parser will **not** backtrack to other alternatives if the pattern *after* the `=>` fails.
 
+**How far it reaches: all the way up.** A cut that fires is fatal, not local -
+it is winnow's `cut_err`, and the failure propagates out of the rule that wrote
+the cut, so an alternative *in a calling rule* is not tried either:
+
+```rust,ignore
+rule keyed -> u32 = "k" => v:u32 -> { v }
+
+pub caller -> u32 =
+    v:keyed "!" -> { v }
+  | "k" "?"     -> { 999 }     // never reached for input `k?`
+```
+
+For `k?` the first alternative calls `keyed`, whose cut fires after `k`, and
+the parse fails rather than trying the second. That is the point of a cut -
+"this input is wrong, do not go looking elsewhere" - and it is what makes the
+position and message of the error the committed one's. It also means a rule
+that cuts is not a drop-in inside someone else's alternatives: put the cut
+where the commitment belongs, which is usually after the token that identifies
+the construct. `tests/cut_test.rs` pins the reach in both directions.
+
 ```rust
 # use winnow_grammar::grammar;
 # #[derive(Debug)]
