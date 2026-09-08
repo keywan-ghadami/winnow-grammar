@@ -137,8 +137,16 @@ end to end - a parser assigning slots out of the declared state under a
 
 What remains open around it: slot numbers are per state, exactly as symbols
 are per interner, so a `par_fold` cut into pieces merges counts and not
-identities unless the merge is keyed by name. That is the same shape as ADR
-19's problem and is not solved by either.
+identities unless the merge is keyed by name - and a merge cannot key by name,
+because it sees two values and the piece's context is already dropped.
+`docs/adr/adr21-merging-across-pieces.md` lays out the four answers and what
+each costs. Two of them work today: symbols through the now-shared interner
+(~21 ns, correct by default), or the table itself shared through the state
+closure as `Arc<Mutex<_>>` (verified; costs a lock). The third - a table per
+piece merged by name, which is what a 1BRC-class solution does - needs a
+per-piece `finish` that sees its context before it is dropped, and is proposed
+rather than scheduled: what decides it is a measurement on more cores than this
+machine has.
 
 ### 6b. `Symbol` hides the number it already has — **done**
 

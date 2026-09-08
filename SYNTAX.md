@@ -683,10 +683,23 @@ let interner = InternerContext::new();
 let make = { let interner = interner.clone(); move || ParseContext::with_state_and_interner(Table::default(), interner.clone()) };
 ```
 
-The same is true of anything else keyed per piece - a table's slot numbers are
-its piece's, exactly as symbols are their interner's, so a merge across pieces
-combines counts and not identities unless it is keyed by name.
-`tests/shared_interner_test.rs` shows both halves side by side.
+The same is true of anything else keyed per piece: a table's slot numbers are
+its piece's, exactly as symbols are their interner's. And a merge cannot repair
+it - `merge` is handed two values, and by then the piece's context is gone. So
+a number that has to mean something in another piece comes from something the
+pieces share:
+
+```rust,ignore
+// A table shared by every piece, the way the interner is shared - the slots
+// are then global, at the price of the lock.
+let table: Arc<Mutex<Table>> = Arc::default();
+let make = { let table = table.clone(); move || ParseContext::with_state(table.clone()) };
+```
+
+The alternative - a table per piece, merged by name - is faster and is not
+expressible today; `docs/adr/adr21-merging-across-pieces.md` says what it would
+take. `tests/shared_interner_test.rs` shows both halves of the interner case
+side by side.
 
 **What a frame cannot say yet.** A boundary is a byte string. A format whose
 cut points need more than a search — CSV with quoted newlines (quote parity),
