@@ -71,6 +71,21 @@ pub struct ErrorCore {
     /// `true` only for [`ParseError::undiagnosed`]: the parse failed and
     /// nothing else is known - no position, no expectation.
     pub undiagnosed: bool,
+    /// What would *also* have been accepted here, but is not required: the
+    /// expectations of a repetition that had already met its minimum, and of
+    /// an `x?`. See [`ParseError::merge`].
+    pub also: Vec<String>,
+    /// This error is an **optional continuation**: the grammar would have
+    /// accepted more here and does not insist. Set by
+    /// [`ParseContext::record`](crate::ParseContext::record), which is reached
+    /// only from `opt_recording` and from a repetition at or above its
+    /// minimum - below the minimum the element's error is returned instead,
+    /// and a returned error is a requirement.
+    pub optional: bool,
+    /// Recorded by the implicit whitespace skip. Ranks below every other
+    /// optional continuation: the grammar was not looking for trivia here,
+    /// it was looking for the next token.
+    pub trivia: bool,
 }
 
 impl ParseError {
@@ -84,6 +99,9 @@ impl ParseError {
             rule_stack: Vec::new(),
             priority: PRIO_NORMAL,
             undiagnosed: false,
+            also: Vec::new(),
+            optional: false,
+            trivia: false,
         }))
     }
 
@@ -100,6 +118,9 @@ impl ParseError {
             rule_stack: Vec::new(),
             priority: PRIO_NORMAL,
             undiagnosed: true,
+            also: Vec::new(),
+            optional: false,
+            trivia: false,
         }))
     }
 
@@ -152,12 +173,41 @@ impl ParseError {
             Less => return other,
             Equal => {}
         }
+        // A requirement outranks an optional continuation, whatever either
+        // happens to expect. Nothing is dropped: what the optional side would
+        // have accepted moves to `also`, for the note under the message.
+        //
+        // This is the axis that matters, and priority is not it. An `x?` or a
+        // met-minimum repetition that expects two things was being promoted to
+        // `PRIO_AGGREGATED` and so beat the single expectation the grammar
+        // actually required at that position - which is how a missing `,`
+        // came to be reported as `expected one of: "//", whitespace`.
+        match (self.optional, other.optional) {
+            (true, false) => return other.absorbing(*self.0),
+            (false, true) => return self.absorbing(*other.0),
+            _ => {}
+        }
+        // Then trivia, below every other optional continuation. The two are
+        // separate axes and both are needed: at the top level of a grammar
+        // whose entry rule is a repetition (`program = item*`), *everything*
+        // is an optional continuation, so the first test cannot separate the
+        // whitespace skip from the `}` the grammar was looking for.
+        match (self.trivia, other.trivia) {
+            (true, false) => return other.absorbing(*self.0),
+            (false, true) => return self.absorbing(*other.0),
+            _ => {}
+        }
         match self.priority.cmp(&other.priority) {
-            Greater => return self,
-            Less => return other,
+            Greater => return self.absorbing_also(*other.0),
+            Less => return other.absorbing_also(*self.0),
             Equal => {}
         }
         let other = *other.0;
+        for e in other.also {
+            if !self.also.contains(&e) {
+                self.also.push(e);
+            }
+        }
         for e in other.expected {
             if !self.expected.contains(&e) {
                 self.expected.push(e);
@@ -177,12 +227,78 @@ impl ParseError {
         self
     }
 
+    /// Takes over what `other` would have accepted, as a note rather than as
+    /// an expectation. `self` is the requirement and keeps its own message,
+    /// stack and priority.
+    fn absorbing(mut self, other: ErrorCore) -> Self {
+        for e in other.expected.into_iter().chain(other.also) {
+            if !self.expected.contains(&e) && !self.also.contains(&e) {
+                self.also.push(e);
+            }
+        }
+        // The stack still follows the rule it always did - the most recently
+        // recorded one wins - because where the parse *was* does not depend on
+        // which of the two errors names the expectation. A repetition's `in
+        // item 4` is the most specific thing anyone knows about this position
+        // and is worth more than the enclosing rule's name.
+        if !other.rule_stack.is_empty() {
+            self.rule_stack = other.rule_stack;
+        }
+        // Its message is *not* adopted: `headline` prints a message instead of
+        // the expectations, so taking one from an optional continuation would
+        // hide the requirement - which is the whole of what this is fixing.
+        self
+    }
+
+    /// [`absorbing`](Self::absorbing) for two errors of the same kind, where
+    /// priority already chose which one speaks: the loser's expectations are
+    /// still worth naming, as a note.
+    ///
+    /// Priority decides who holds the message, not what is forgotten. Without
+    /// this, two optional continuations at one offset lose one of their
+    /// expectations to the other's priority - which is how the `,` of a
+    /// missing struct field vanished behind the whitespace skip.
+    fn absorbing_also(mut self, other: ErrorCore) -> Self {
+        for e in other.expected.into_iter().chain(other.also) {
+            if !self.expected.contains(&e) && !self.also.contains(&e) {
+                self.also.push(e);
+            }
+        }
+        self
+    }
+
+    /// What would also have been accepted here, without the ones a reader
+    /// cannot act on.
+    ///
+    /// Whitespace is dropped: the skip is greedy, so at this offset it has
+    /// already taken everything there was, and supplying more only moves the
+    /// same failure further along. "Expected whitespace" asks for an edit that
+    /// cannot work.
+    pub fn also_possible(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .also
+            .iter()
+            .filter(|e| *e != "whitespace")
+            .filter(|e| !self.expected.contains(e))
+            .cloned()
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
     /// The first line of the message - without position and rule stack.
     pub fn headline(&self) -> String {
         if let Some(m) = &self.message {
             return m.clone();
         }
-        let mut expected = self.expected.clone();
+        // Nothing was required here, so what would have been accepted is all
+        // there is to say - better than saying nothing.
+        let mut expected = if self.expected.is_empty() {
+            self.also_possible()
+        } else {
+            self.expected.clone()
+        };
         expected.sort();
         expected.dedup();
         let expectation = match expected.len() {
@@ -217,6 +333,10 @@ impl ParseError {
         }
         let (line, column) = self.line_column(source);
         let mut s = format!("{} at line {}, column {}", self.headline(), line, column);
+        let also = self.also_possible();
+        if !also.is_empty() {
+            s.push_str(&format!("\nnote: also possible here: {}", also.join(", ")));
+        }
         for r in &self.rule_stack {
             s.push_str("\nin ");
             s.push_str(r);

@@ -88,6 +88,64 @@
 
 ### Fixed
 
+- **`text(p)` and `dec<T>(p)` could not appear inside a `#[frame]`.** The
+  frame check had no arm for either in `builtin_may_consume`, so `_ => true`
+  said they consume anything and the walk rejected the grammar the check
+  exists for:
+
+  ```text
+  error: the built-in `dec` in rule `TENTHS` can consume the boundary "\n" of
+  frame `MEASUREMENT`
+  ```
+
+  `intern(p)` was already excepted, with the reasoning that fits all three:
+  each is a map over its argument - `text` a `.take()` over the run, `dec` a
+  `try_map` over the same text - and consumes exactly what the argument
+  consumes, which the `RuleCall` arm checks on its own. Transparent, not
+  opaque: `text(any{3})` in a line-framed rule is still rejected, and the
+  message now points at the `any` (`tests/ui/frames.rs`). Found by Nikaia's
+  1BRC example, which had to be written `#[frame(…, unchecked)]` to measure at
+  all.
+
+- **An expectation was discarded for having fewer alternatives than the one
+  beside it.** `merge` promoted an error carrying two or more expectations to
+  `PRIO_AGGREGATED` and, at equal offset, *returned that side and dropped the
+  other*. `WS = (WSE | COMMENT)*` - the documented way to support comments -
+  has two, so every syntax error in such a grammar read ``expected one of:
+  `//`, whitespace`` and the token that would fix the input was gone. It is
+  not about comments and not about whitespace: `xs:item* "."` over `1 2 x`
+  reported ``expected one of: `#`, integer literal`` and dropped the `.`, with
+  no custom `WS` anywhere. Any rule with two or more alternatives suppressed
+  every single-expectation error at its position.
+
+  Ranking is by **what the grammar required**, on two axes, and nothing is
+  discarded by either - what loses becomes a `note: also possible here: …`
+  line under the message.
+
+  - A **requirement** outranks an **optional continuation**. The runtime
+    already drew that line: `repeat_recording_bounded` *returns* the element's
+    error below the minimum and merely *records* it at or above, and
+    `opt_recording` only ever records - so `ParseContext::record` is by
+    construction the optional path and marks what it stores. A repetition
+    below its minimum still returns, so nothing here suppresses a repetition's
+    reason for stopping, which is often the useful half.
+  - Among optional continuations, the **implicit whitespace skip** ranks last.
+    The first axis cannot separate it: where the entry rule is a repetition
+    (`program = item*`) everything is optional. Codegen calls the skip through
+    the new `rt::skip_trivia`, so only what the generator inserts is marked -
+    no rule names, no declaration, and a `WS` a grammar calls itself stays an
+    ordinary rule.
+
+  Whitespace alone is left out of the note, and that is the criterion the rest
+  follows from: the skip is greedy, so at this offset it has already taken
+  everything there was and supplying more only moves the same failure to
+  offset + n. "Expected whitespace" asks for an edit that cannot work. A
+  comment form stays, because a `/` where `//` belongs is a real mistake.
+
+  `ParseError` gains `also`, `optional` and `trivia`; `also_possible()` is the
+  note's contents. `tests/expectation_ranking_test.rs` covers all three cases.
+  Found by Nikaia, whose every parse error read this way.
+
 - **A repetition nobody names mapped its count to `()`, and that cost 2.7x.**
   `x*` with no binding ran the counting loop and threw the count away with
   `.map(|_| ())`; it now `take`s the loop's text and drops that instead. The

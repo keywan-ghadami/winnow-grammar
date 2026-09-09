@@ -106,8 +106,14 @@ error: `until(…)` in rule `ROW` can run through the boundary "\n" of frame `RO
 160 |         ROW -> winnow_grammar::Symbol = c:intern(until(";")) ";" "\n" -> { c }
     |                                                  ^^^^^
 
-error: the literal "\n" in rule `NL` can consume the boundary "\n" of frame `LINE`; cutting the input at the next boundary would then land inside a frame
-   --> tests/ui/frames.rs:172:20
+error: the built-in `any` in rule `ROW` can consume the boundary "\n" of frame `ROW`; cutting the input at the next boundary would then land inside a frame
+   --> tests/ui/frames.rs:170:33
     |
-172 |         NL -> () = "\n" -> { () }
+170 |         ROW -> &'a str = s:text(any{3}) "\n" -> { s }
+    |                                 ^^^
+
+error: the literal "\n" in rule `NL` can consume the boundary "\n" of frame `LINE`; cutting the input at the next boundary would then land inside a frame
+   --> tests/ui/frames.rs:182:20
+    |
+182 |         NL -> () = "\n" -> { () }
     |                    ^^^^

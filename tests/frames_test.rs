@@ -499,3 +499,45 @@ fn a_rule_only_lookahead_reaches_is_not_checked_for_the_boundary() {
         assert_eq!(got, total, "{how:?}");
     }
 }
+
+// -----------------------------------------------------------------------------
+// `text(p)` and `dec<T>(p)` are transparent to the frame check
+// -----------------------------------------------------------------------------
+
+grammar! {
+    grammar Typed {
+        // What these consume is what their argument consumes: `text` is a
+        // `.take()` over the run and `dec` a `try_map` over the same text.
+        // Neither can reach a byte `alpha1`, `digit*` or `digit{1,2}` did not,
+        // and none of those matches a newline - so the record below is exactly
+        // as safe to cut at "\n" as the hand-written fold it replaces.
+        NAME -> &'a str = s:text(alpha1 digit*) -> { s }
+
+        TENTHS -> i32 =
+            neg:"-"? whole:dec<i32>(digit{1,2}) "." frac:dec<i32>(digit)
+            -> { let v = whole * 10 + frac; if neg.is_some() { -v } else { v } }
+
+        #[frame(boundary = "\n")]
+        pub RECORD -> (&'a str, i32) =
+            name:NAME ";" temp:TENTHS frame_end -> { (name, temp) }
+    }
+}
+
+#[test]
+fn text_and_dec_may_appear_inside_a_frame() {
+    Typed::parse_RECORD()
+        .parse_test("Hamburg12;-12.3\n")
+        .assert_success_with(|(name, temp), _| {
+            assert_eq!(*name, "Hamburg12");
+            assert_eq!(*temp, -123);
+        });
+}
+
+#[test]
+fn a_framed_record_of_them_still_ends_at_its_boundary() {
+    // The name stops where `alpha1 digit*` stops, so a record missing its `;`
+    // fails inside its own frame instead of running into the next one.
+    Typed::parse_RECORD()
+        .parse_test("Hamburg\nBerlin;1.0\n")
+        .assert_failure_contains("column 8");
+}

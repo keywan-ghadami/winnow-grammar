@@ -174,7 +174,10 @@ impl<'a> Codegen<'a> {
         let (ws_before, ws_after) = if is_par_fold {
             (quote! {}, quote! {})
         } else {
-            (quote! { WS(input)?; }, quote! { WS(input)?; })
+            (
+                quote! { ::winnow_grammar::rt::skip_trivia(WS, input)?; },
+                quote! { ::winnow_grammar::rt::skip_trivia(WS, input)?; },
+            )
         };
 
         // The entry point runs the rule twice at most: a fast pass with

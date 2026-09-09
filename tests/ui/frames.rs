@@ -161,6 +161,16 @@ grammar! {
     }
 }
 
+// `text` and `dec` are transparent to the frame check, not opaque: what they
+// consume is what their argument consumes, so an argument that can consume the
+// boundary is still rejected - at the argument.
+grammar! {
+    grammar TextRunsThrough {
+        #[frame(boundary = "\n")]
+        ROW -> &'a str = s:text(any{3}) "\n" -> { s }
+    }
+}
+
 // A frame may now *end* in a rule that is its boundary - `is_terminator`
 // resolves it - but the rule is still walked as an interior rule of
 // its own, where its literal is the boundary. Making this compile needs

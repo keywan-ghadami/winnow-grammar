@@ -258,7 +258,7 @@ impl<'a> Codegen<'a> {
             }
 
             if i > 0 && !is_lexical {
-                steps.push(quote! { let _ = WS(#input)?; });
+                steps.push(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
             }
 
             steps.push(self.generate_step(p, in_cut, is_lexical));
@@ -369,7 +369,7 @@ impl<'a> Codegen<'a> {
 
         // Infix WS between Open and Inner
         let ws_before_inner = if !is_lexical {
-            quote_spanned! {span=> let _ = WS(#input)?; }
+            quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
         } else {
             quote! {}
         };
@@ -381,7 +381,7 @@ impl<'a> Codegen<'a> {
 
         // Infix WS between Inner and Close
         let ws_before_close = if !is_lexical {
-            quote_spanned! {span=> let _ = WS(#input)?; }
+            quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
         } else {
             quote! {}
         };
@@ -1065,7 +1065,7 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=> #p }
         } else {
             // `WS` is a function and `preceded` wants a parser.
-            quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p) }
+            quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i), #p) }
         };
         let max = match max {
             Some(m) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
@@ -1184,7 +1184,7 @@ impl<'a> Codegen<'a> {
             ModelPattern::Count { pattern, .. } => {
                 let p = self.generate_parser_expr(pattern, is_lexical, false);
                 if !is_lexical {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p)) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i), #p)) }
                 } else {
                     quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, #p) }
                 }
@@ -1205,7 +1205,7 @@ impl<'a> Codegen<'a> {
                     quote_spanned! {span=> ::winnow_grammar::rt::fold_recording }
                 };
                 if !is_lexical {
-                    quote_spanned! {span=> #fold(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #p), #init, #step) }
+                    quote_spanned! {span=> #fold(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i), #p), #init, #step) }
                 } else {
                     quote_spanned! {span=> #fold(0, #p, #init, #step) }
                 }
@@ -1250,7 +1250,7 @@ impl<'a> Codegen<'a> {
             if let ModelPattern::Cut(_) = p {
                 in_cut = true;
                 if i > 0 && !is_lexical {
-                    parsers.push(quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i)) });
+                    parsers.push(quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i)) });
                 }
                 let p_expr = self.generate_parser_expr(p, is_lexical, discard);
                 if in_cut {
@@ -1264,7 +1264,7 @@ impl<'a> Codegen<'a> {
             // Infix WS
             if i > 0 && !is_lexical {
                 parsers.push(
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i)) },
+                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i)) },
                 );
             }
 
@@ -1304,7 +1304,7 @@ impl<'a> Codegen<'a> {
             // Infix logic: Open, WS, Inner, WS, Close
             // This is: delimited(open, preceded(WS, inner), preceded(WS, close))
             quote_spanned! {span=>
-                delimited(#open_p, preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #inner_parser), preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| WS(i), #close_p))
+                delimited(#open_p, preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i), #inner_parser), preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i), #close_p))
             }
         }
     }
