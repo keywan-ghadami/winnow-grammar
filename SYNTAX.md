@@ -281,10 +281,10 @@ The following primitives are "portable" and expected to be available in all back
 
 ### Capturing text: `text(p)` and `dec<T>(p)`
 
-A repetition yields its elements, so `digit{1,2}` yields a `Vec<char>`. That is
-right when the elements are what you want, and a heap allocation when they are
-not. **`text(p)`** hands back the input `p` consumed instead - `&'a str`,
-borrowed from the input, no allocation, whatever `p` is:
+A repetition of a *rule* yields its elements, as a `Vec` - right when the
+elements are what you want, and a heap allocation when they are not.
+**`text(p)`** hands back the input `p` consumed instead - `&'a str`, borrowed
+from the input, no allocation, whatever `p` is:
 
 ```rust,ignore
 NAME  -> &'a str = s:text(alpha1 digit*)  -> { s }
@@ -294,6 +294,10 @@ CODE  -> Symbol  = s:intern(text(digit{3})) -> { s }
 Several patterns inside it are a **sequence**, not several arguments, and go
 through the ordinary sequence machinery - so the whitespace between them is
 whatever it would be outside the `text`.
+
+Over a run of a character class it is a no-op and costs nothing:
+`text(digit{1,2})` *is* `digit{1,2}`, which already yields the text it matched.
+Write it where it reads better, not for an effect.
 
 **`dec<T>(p)`** goes one step further and reads that text as a number:
 

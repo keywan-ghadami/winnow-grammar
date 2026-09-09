@@ -1,13 +1,14 @@
 //! `text(p)`: what was matched, not what was parsed.
 //!
-//! A repetition yields its elements - `digit{1,2}` a `Vec<char>` - which is
-//! right when the elements are what you want and a heap allocation when they
-//! are not. `text(p)` runs `p` and hands back the input it consumed, borrowed
-//! from the input itself: `&'a str`, no allocation, whatever `p` is.
+//! A repetition of a rule yields its elements, as a `Vec` - right when the
+//! elements are what you want and a heap allocation when they are not.
+//! `text(p)` runs `p` and hands back the input it consumed, borrowed from the
+//! input itself: `&'a str`, no allocation, whatever `p` is.
 //!
-//! It also settles an inconsistency the language already had: `digit1` yields
-//! `&'a str` and `digit{1,2}` a `Vec<char>`, though both are a run of digits.
-//! That is why `intern(until(";"))` worked and `intern(digit{1,2})` could not.
+//! Over a run of a character class it is a no-op - `digit{1,2}` already yields
+//! its text (`tests/char_run_test.rs`), and codegen emits the run itself
+//! rather than a second `take` around it. The cases here are the ones where
+//! `p` is something else: a sequence, an alternative, an optional.
 
 use winnow_grammar::testing::WinnowTestExt;
 use winnow_grammar::{grammar, Symbol};

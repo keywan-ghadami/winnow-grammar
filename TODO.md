@@ -49,3 +49,18 @@ as written, and that nothing in them describes a version that no longer exists.
 Twice in one week a stale sentence sent someone down the wrong path - an
 attribute that never existed, and a return type that had changed - so this is a
 pass over the documents, not over the code.
+
+## 4. `count(p)` pays for keeping its count
+
+Three loops over 200_000 digits, element for element identical and differing
+only in what they do with each one: taking the run as text **173 µs**,
+collecting the elements of a rule **262 µs**, `count(p)` **483 µs**
+(`benches/repetition.rs`). The counter being live is the whole gap, ~1.6 ns per
+element - a repetition that discards its count used to pay the same and stopped
+when codegen started taking the text instead of mapping the count away.
+
+The obvious answer for a character class is to count from the slice it matched:
+`take`, then count the characters in it, which is one vectorisable pass instead
+of a live counter. **Unmeasured**, and worth measuring before building - the
+second pass is not free either, and `count(p)` over anything but a character
+class cannot use it.

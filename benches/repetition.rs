@@ -22,6 +22,32 @@
 //! construction. And do not clone a `ParseContext` per iteration - it carries
 //! the interner's 8 KiB lookup cache, which costs ~98 ns to clone and as much
 //! again to drop, so a harness that does it measures itself.
+//!
+//! One machine, `-12.3` parsed as a top-level rule, three runs in agreement:
+//!
+//! | case | ns |
+//! |---|---|
+//! | `floor` - an empty rule | 4.9 |
+//! | `one_digit` - `d:digit` | 6.4 |
+//! | `two_digits` - `a:digit b:digit`, no repetition | 8.8 |
+//! | `run` - `digit{1,2}`, the text it matched | 7.1 |
+//! | `discarded` - `digit{1,2}`, nobody names it | 7.4 |
+//! | `collected` - `ITEM{1,2}`, elements a rule built | 24.5 |
+//! | `tenths` - the whole temperature | 13.8 |
+//! | `tenths/via_text` - the same through `text(..)` | 14.0 |
+//! | `tenths/via_dec` - the same through `dec<i32>(..)` | 17.8 |
+//! | `tenths/via_scan` - a `take_while` closure instead | 18.2 |
+//! | `tenths/by_hand` - one scan and a fold, written in Rust | 17.0 |
+//!
+//! The generated temperature is **faster than the hand-written one** (13.8
+//! against 17.0): a repetition of `one_of` wrapped in `take` beats a
+//! `take_while` closure (18.2). `text(..)` over a run costs nothing, because
+//! it *is* the run. The `Vec` is still there for what needs it - 24.5 against
+//! 7.1 for the same two digits as elements a rule built.
+//!
+//! Over 200_000 digits: a run taken as text 173 µs, a discarded run 174,
+//! collecting the elements of a rule 262, `count(p)` 483. The last is the one
+//! thing this file leaves open - see TODO.md §4.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
@@ -149,11 +175,12 @@ fn digits(n: usize) -> String {
 }
 
 /// One stream, reused: a `ParseContext` is **not** cheap to clone since it
-/// carries the interner's 8 KiB lookup cache (TODO.md §4), and cloning one per
-/// iteration measures that allocation rather than the rule - ~140 ns, more
-/// than anything in this file costs. Reusing it measures repeated parsing,
-/// which is the case these rules are for; `rt::entry` clears the diagnostics
-/// engine's working space at every parse, so nothing carries over.
+/// carries the interner's 8 KiB lookup cache (`src/intern_cache.rs`), so
+/// cloning one per iteration measures the clone rather than the rule - ~98 ns
+/// to clone and as much again to drop, more than anything in this file costs.
+/// Reusing it measures repeated parsing, which is the case these rules are
+/// for; `rt::entry` clears the diagnostics engine's working space at every
+/// parse, so nothing carries over.
 macro_rules! bench_cases {
     ($g:expr, $ctx:expr, [$(($name:expr, $parser:expr, $text:expr)),* $(,)?]) => {
         $(
