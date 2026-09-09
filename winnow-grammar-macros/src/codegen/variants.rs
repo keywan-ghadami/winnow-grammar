@@ -21,7 +21,7 @@ impl<'a> Codegen<'a> {
 
             // 1. Optional Leading WS
             if is_rule_start && !is_lexical {
-                steps_code.extend(quote! { let _ = WS(#input)?; });
+                steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
             }
 
             // 2. Capture Start
@@ -86,7 +86,7 @@ impl<'a> Codegen<'a> {
             let is_explicit = v.is_explicit;
 
             if is_rule_start && !is_lexical {
-                steps_code.extend(quote! { let _ = WS(#input)?; });
+                steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
             }
 
             if use_with_span {
@@ -195,7 +195,7 @@ impl<'a> Codegen<'a> {
             // pattern[1] follows LHS.
             // If !is_lexical, we must consume ws between LHS and pattern[1].
             if !is_lexical {
-                steps_code.extend(quote! { let _ = WS(#input)?; });
+                steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
             }
 
             steps_code.extend(self.generate_sequence_steps(patterns, false, is_lexical));

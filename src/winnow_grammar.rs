@@ -119,6 +119,12 @@ pub struct ParseContext<S = ()> {
     pub recovered: Vec<ParseError>,
     /// Where the fold of a `par_fold` rule stopped - see [`FoldProgress`].
     pub fold: FoldProgress,
+    /// Set while the **implicit** whitespace skip runs - the one the code
+    /// generator puts between the tokens of a syntactic rule, never a `WS` a
+    /// grammar calls itself. What it records is marked trivia and ranks below
+    /// what the grammar was looking for. See [`crate::rt::skip_trivia`].
+    #[doc(hidden)]
+    pub in_trivia: bool,
 }
 
 impl<S: Default> Default for ParseContext<S> {
@@ -133,6 +139,7 @@ impl<S: Default> Default for ParseContext<S> {
             recoveries: 0,
             recovered: Vec::new(),
             fold: FoldProgress::default(),
+            in_trivia: false,
         }
     }
 }
@@ -155,6 +162,7 @@ impl<S> ParseContext<S> {
             recoveries: 0,
             recovered: Vec::new(),
             fold: FoldProgress::default(),
+            in_trivia: false,
         }
     }
 
@@ -218,6 +226,14 @@ impl<S> ParseContext<S> {
     /// [`ParseError::merge`].
     pub fn record(&mut self, e: &ParseError) {
         let mut e = e.clone();
+        // Everything that reaches here is an optional continuation: the only
+        // callers are `opt_recording` and a repetition that has already met
+        // its minimum. Below the minimum the element's error is *returned*,
+        // and a returned error is a requirement. So the distinction the
+        // message needs is one the runtime already draws - see
+        // `ParseError::merge`.
+        e.optional = true;
+        e.trivia = self.in_trivia;
         for r in self.rules.iter().rev() {
             e.push_rule(r);
         }

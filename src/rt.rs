@@ -786,6 +786,26 @@ pub fn class_or_wide<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
     }
 }
 
+/// The implicit whitespace skip between the tokens of a syntactic rule.
+///
+/// Only the code generator calls this, and that is the point: what the skip
+/// records is marked trivia, so a message can rank it below the token the
+/// grammar was actually looking for. A `WS` that a grammar calls itself goes
+/// through the ordinary path and is an ordinary rule.
+#[inline]
+pub fn skip_trivia<'a, S, E, F>(mut ws: F, input: &mut ParseInput<'a, S>) -> Result<(), ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    E: RtError<'a, S>,
+    F: FnMut(&mut ParseInput<'a, S>) -> Result<(), ErrMode<E>>,
+{
+    let outer = input.state.in_trivia;
+    input.state.in_trivia = true;
+    let r = ws(input);
+    input.state.in_trivia = outer;
+    r
+}
+
 /// Gives a builtin an expectation (`identifier`, `integer literal`) if it
 /// failed without one - winnow's own primitives only report the position.
 pub fn expected<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
