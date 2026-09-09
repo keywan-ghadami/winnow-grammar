@@ -57,3 +57,7 @@ harness = false
 [[bench]]
 name = "context"
 harness = false
+
+[[bench]]
+name = "deferred"
+harness = false

@@ -7,10 +7,11 @@
 //! generic ([`RtError`](crate::rt::RtError)): the same helper serves the fast pass with
 //! `EmptyError` and the diagnosing pass with [`ParseError`] - see ADR 17.
 
+use crate::ascii::AsciiClass;
 use crate::error::{Diagnostics, ParseError};
 use crate::{Diagnose, FoldProgress, ParseInput};
 use winnow::error::{AddContext, EmptyError, ErrMode, ParserError, StrContext};
-use winnow::stream::{FindSlice, Location, Stream};
+use winnow::stream::{AsBStr, FindSlice, Location, Stream};
 use winnow::Parser;
 
 /// The bounds the generated code puts on its error type parameter `E`:
@@ -741,6 +742,47 @@ where
     move |input| {
         let text = p.parse_next(input)?;
         Ok(input.state.intern(text.as_ref()))
+    }
+}
+
+/// `digit1`, `alpha1`, `multispace0`, ... - a run of a fixed ASCII class,
+/// scanned eight bytes at a time instead of one character at a time (see
+/// [`crate::ascii`]).
+///
+/// `min` is `0` or `1`: the difference between `digit0` and `digit1`, and the
+/// only reason this can fail.
+pub fn class<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
+    class: AsciiClass,
+    min: usize,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, ErrMode<E>> {
+    move |input| {
+        let n = class.run(input.as_bstr());
+        if n < min {
+            return Err(ErrMode::Backtrack(E::from_input(input)));
+        }
+        Ok(input.next_slice(n))
+    }
+}
+
+/// `raw_ident` - [`class`] for the ASCII stretch, `wide` for a character that
+/// is not ASCII.
+///
+/// An identifier is Unicode alphanumeric, so an umlaut belongs to the one it
+/// stands in and the ASCII class alone would stop there. Deferred decoding is
+/// exactly this split: the scan runs on bytes and a `char` is built only where
+/// a byte with its high bit set says one is needed.
+pub fn class_or_wide<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
+    class: AsciiClass,
+    wide: fn(char) -> bool,
+    min: usize,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, ErrMode<E>> {
+    move |input| {
+        let rest = input.peek_slice(input.eof_offset());
+        let n = class.run_or_wide(rest, wide);
+        if n < min {
+            return Err(ErrMode::Backtrack(E::from_input(input)));
+        }
+        Ok(input.next_slice(n))
     }
 }
 

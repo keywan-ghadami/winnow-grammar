@@ -154,7 +154,16 @@ impl<'a> Codegen<'a> {
                     #input: &mut ::winnow_grammar::ParseInput<'a, S>,
                 ) -> ::winnow::Result<(), ::winnow::error::ErrMode<E>> {
                     use ::winnow::Parser;
-                    ::winnow::ascii::multispace0.parse_next(#input).map(|_| ())
+                    // The default whitespace skip runs between every two
+                    // tokens, so it is the hottest scan in a generated parser
+                    // - and a word at a time (`src/ascii.rs`), not a
+                    // character at a time.
+                    ::winnow_grammar::rt::class::<S, E>(
+                        ::winnow_grammar::ascii::AsciiClass::MULTISPACE,
+                        0,
+                    )
+                    .parse_next(#input)
+                    .map(|_| ())
                 }
             }
         };

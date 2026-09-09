@@ -279,6 +279,20 @@ The following primitives are "portable" and expected to be available in all back
 
 *Note: Backends may provide additional specialized built-ins.*
 
+**How a character class is matched.** `digit1`, `alpha1`, `hex_digit*`,
+`oct_digit*`, `binary_digit*`, `space*`, `multispace*` and the implicit
+whitespace skip do not test one character at a time. They test eight bytes at a
+time in a single register (`winnow_grammar::ascii::AsciiClass`), which is
+between as fast as before and ~8x faster depending on how long the run is.
+
+Nothing about what they *mean* changes, and the scan cannot stop inside a
+character: a `&str` is valid UTF-8, every byte of a multi-byte character is
+`>= 0x80`, and no ASCII class contains such a byte - so the slice it cuts is
+always a valid `&str`. `raw_ident` is the one class that is not pure ASCII
+(`über` is one identifier): it scans its ASCII stretch by word and decodes a
+single `char` only where a byte `>= 0x80` says it must. That is deferred
+decoding - see `docs/adr/adr23-deferred-decoding.md`.
+
 ### Capturing text: `text(p)` and `dec<T>(p)`
 
 A repetition of a *rule* yields its elements, as a `Vec` - right when the

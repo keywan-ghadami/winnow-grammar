@@ -53,7 +53,9 @@ grammar's business rather than the reader's - has no way in.
 
 What already points that way: `rt::frames_bytes` cuts `&[u8]` and is what
 `rt::frames` is a `&str` view of (ADR 16 §4), so the piece machinery does not
-assume text. The error engine takes `I: Stream + Location + AsBStr`, which
+assume text. The character classes now match on bytes as well (ADR 23):
+`AsciiClass::run` takes a `&[u8]` and would carry over unchanged - only
+`raw_ident`'s decoded tail is about text at all. The error engine takes `I: Stream + Location + AsBStr`, which
 `&[u8]` satisfies. What does not: the `ParseInput` alias, the built-ins
 (`ident`, `digit1`, `string`, the character classes), `text(p)` and `intern(p)`
 yielding `&'a str`, and the whitespace rules.

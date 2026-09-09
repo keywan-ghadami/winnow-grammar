@@ -11,6 +11,7 @@ pub use winnow_grammar_macros::grammar;
 pub use winnow;
 
 /// The error type of the generated parsers and the selection between errors.
+pub mod ascii;
 pub mod error;
 #[doc(hidden)]
 pub mod intern_cache;

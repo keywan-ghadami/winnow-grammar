@@ -233,6 +233,25 @@
 
 ### Added
 
+- **A character class is scanned eight bytes at a time.** `digit1`, `alpha1`,
+  `hex_digit*`, `oct_digit*`, `binary_digit*`, `space*`, `multispace*`,
+  `raw_ident`/`ident` and the implicit whitespace skip go through
+  `winnow_grammar::ascii::AsciiClass` instead of a `char` predicate: one
+  register comparison per eight bytes rather than one test per character. On a
+  long run that is ~8x (1.31 -> 10.4 GiB/s over 200 000 digits); on the short
+  runs a real format has it is smaller but never negative, and an
+  identifier-heavy grammar parses ~9% faster end to end
+  (`benches/deferred.rs`, `benches/interning.rs`).
+
+  Nothing in the DSL changes. The scan cannot stop inside a character - an
+  ASCII class contains no byte `>= 0x80`, so it stops at or before a multi-byte
+  character and the slice it cuts is valid UTF-8 by construction. `raw_ident`
+  is Unicode alphanumeric and builds exactly one `char` where a byte says it
+  must: decoding is deferred to the position that needs it, not removed. See
+  `docs/adr/adr23-deferred-decoding.md`; the word scan is checked against the
+  byte-by-byte definition for every class, every byte value and every offset in
+  a word (`tests/ascii_scan_test.rs`).
+
 - **`dec<T>(p)`: the text `p` matched, read as a number.** `dec<i32>(digit{1,2})`
   where the action used to fold characters by hand. Not a faster way to parse a
   number - measured, it costs what `text(p)` plus that fold costs

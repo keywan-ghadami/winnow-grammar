@@ -688,7 +688,11 @@ impl<'a> Codegen<'a> {
         // `raw_ident`'s characters, shared with `ident` - which is
         // `intern(raw_ident)` and nothing else (ADR 18 §1).
         let raw_ident = quote_spanned! {span=>
-            ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_')
+            ::winnow_grammar::rt::class_or_wide::<S, E>(
+                ::winnow_grammar::ascii::AsciiClass::IDENT,
+                |c| c.is_alphanumeric(),
+                1,
+            )
         };
 
         // `interner I;` sends `ident` and `intern(…)` to the declared interner
@@ -822,48 +826,84 @@ impl<'a> Codegen<'a> {
                 )
             },
             "any" => quote_spanned! {span=> ::winnow::token::any::<#input_type, #inner_err_type> },
-            "alpha1" => {
-                quote_spanned! {span=> ::winnow::ascii::alpha1::<#input_type, #inner_err_type> }
-            }
+            "alpha1" => quote_spanned! {span=>
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::ALPHA,
+                    1,
+                )
+            },
             // A single digit, as opposed to `digit1`'s greedy run of them.
             // Fixed-width numeric formats are written with it and a bounded
             // repetition (`digit{1,2}`), which a greedy terminal cannot express.
             "digit" => quote_spanned! {span=>
                 ::winnow::token::one_of::<#input_type, _, #inner_err_type>('0'..='9')
             },
-            "digit1" => {
-                quote_spanned! {span=> ::winnow::ascii::digit1::<#input_type, #inner_err_type> }
-            }
-            "hex_digit0" => {
-                quote_spanned! {span=> ::winnow::ascii::hex_digit0::<#input_type, #inner_err_type> }
-            }
-            "hex_digit1" => {
-                quote_spanned! {span=> ::winnow::ascii::hex_digit1::<#input_type, #inner_err_type> }
-            }
-            "oct_digit0" => {
-                quote_spanned! {span=> ::winnow::ascii::oct_digit0::<#input_type, #inner_err_type> }
-            }
-            "oct_digit1" => {
-                quote_spanned! {span=> ::winnow::ascii::oct_digit1::<#input_type, #inner_err_type> }
-            }
+            "digit1" => quote_spanned! {span=>
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::DIGIT,
+                    1,
+                )
+            },
+            "hex_digit0" => quote_spanned! {span=>
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::HEX_DIGIT,
+                    0,
+                )
+            },
+            "hex_digit1" => quote_spanned! {span=>
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::HEX_DIGIT,
+                    1,
+                )
+            },
+            "oct_digit0" => quote_spanned! {span=>
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::OCT_DIGIT,
+                    0,
+                )
+            },
+            "oct_digit1" => quote_spanned! {span=>
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::OCT_DIGIT,
+                    1,
+                )
+            },
             "binary_digit0" => quote_spanned! {span=>
-                ::winnow::token::take_while(0.., |c| c == '0' || c == '1')
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::BINARY_DIGIT,
+                    0,
+                )
             },
             "binary_digit1" => quote_spanned! {span=>
-                ::winnow::token::take_while(1.., |c| c == '0' || c == '1')
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::BINARY_DIGIT,
+                    1,
+                )
             },
-            "space0" => {
-                quote_spanned! {span=> ::winnow::ascii::space0::<#input_type, #inner_err_type> }
-            }
-            "space1" => {
-                quote_spanned! {span=> ::winnow::ascii::space1::<#input_type, #inner_err_type> }
-            }
-            "multispace0" => {
-                quote_spanned! {span=> ::winnow::ascii::multispace0::<#input_type, #inner_err_type> }
-            }
-            "multispace1" => {
-                quote_spanned! {span=> ::winnow::ascii::multispace1::<#input_type, #inner_err_type> }
-            }
+            "space0" => quote_spanned! {span=>
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::SPACE,
+                    0,
+                )
+            },
+            "space1" => quote_spanned! {span=>
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::SPACE,
+                    1,
+                )
+            },
+            "multispace0" => quote_spanned! {span=>
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::MULTISPACE,
+                    0,
+                )
+            },
+            "multispace1" => quote_spanned! {span=>
+                ::winnow_grammar::rt::class::<S, E>(
+                    ::winnow_grammar::ascii::AsciiClass::MULTISPACE,
+                    1,
+                )
+            },
             "line_ending" => {
                 quote_spanned! {span=> ::winnow::ascii::line_ending::<#input_type, #inner_err_type> }
             }
