@@ -244,7 +244,7 @@ are the built-ins, they should mean one thing, and the grammar that wants
 something else says so by writing it. Closed - not by building the type
 parameter, but by the feature that made it unnecessary.
 
-## 7. The 1BRC temperature: where its time goes, and what is left
+## 7. The 1BRC temperature: where its time went — **closed**
 
 `benches/repetition.rs` takes `TENTHS` apart. Read differences, not absolutes -
 every case pays the same stream construction and context clone. One machine,
@@ -343,13 +343,21 @@ on it. Two ways out, neither taken yet:
 with them: a borrowed slice beats a stack buffer and needs no container type
 at all.
 
-What is still open here is the default. `digit{1,2}` continues to yield
-`Vec<char>`, which no grammar in this repository actually wants - the three
-uses are a number, a count, and a `String`. Changing the default would need
-codegen to know the element type (the builtin table knows `digit -> char`, the
-model knows a rule's `return_type`, a rule parameter neither), and an output
-type that depends on inference is a poor property for a DSL. Left as it is,
-deliberately.
+**The default changed too**, and this paragraph said otherwise for a day:
+`digit{1,2}` yields `&'a str`, not `Vec<char>`. A repetition whose element is
+a character *class* - `digit`, `any` - is the text it matched, bounded, exact,
+open-ended or unbounded alike, which is what `{n,m}` means everywhere else it
+is written. Every other repetition still yields its elements, because those are
+values the parser built rather than input it walked over; `char` is
+deliberately not a class, since it parses a character *literal* and `'\n'` is
+four characters of input and one of value. `tests/char_run_test.rs` draws that
+line, and `intern(digit{3})` works now, which is the inconsistency this section
+opened with.
+
+So nothing is open here. The three exits it listed - the text operator, `dec`,
+inline storage - ended as: both operators built, inline storage dropped
+(a borrowed slice beats a stack buffer), and the default fixed at the source
+rather than worked around.
 
 ## 8. Scanning terminators: which ones, and the cliff between them — **done**
 
