@@ -1,21 +1,53 @@
 //! What a repetition costs, split by what the grammar does with its result.
 //!
-//! A repetition whose result is bound has to produce it. One whose result is
-//! discarded (`x*` with no binding) or only counted (`count(x)`) does not -
-//! the grammar has already said so. These benchmarks are here to decide
-//! whether that distinction is worth generating, and to keep the bounded
-//! case (`digit{1,2}`, the 1BRC temperature) honest about what it costs.
+//! A repetition of a character class (`digit`, `any`) is the text it matched -
+//! a slice of the input, whatever the grammar does with it. A repetition of a
+//! *rule* yields its elements, because those are values the parser built
+//! rather than input it walked over, and one whose result is discarded or only
+//! counted yields neither. These benchmarks measure the difference, and keep
+//! the bounded case (`digit{1,2}`, the 1BRC temperature) honest about what it
+//! costs.
 //!
 //! What they established, so that it is not re-derived: the repetition loop
-//! itself is free - collecting nothing costs what the same number of separate
-//! parses cost - and **one heap allocation for two `char`s cost ~23 ns**,
-//! which was the whole gap between the generated temperature and a
-//! hand-written one. Not putting two characters on the heap closed it; no
-//! SIMD, no SWAR, no register arithmetic. A run of a character class is
-//! therefore the text it matched, and `dec<T>(p)` accumulates it without a
-//! `Vec` in between - measured as no faster than the borrowed run plus a fold
-//! in an action, and kept for the overflow bound and the ergonomics rather
-//! than for time.
+//! itself is free - a run costs less than the same number of separate parses -
+//! and **one heap allocation for two `char`s cost ~23 ns**, which was the
+//! whole gap between the generated temperature and a hand-written one. Not
+//! putting two characters on the heap closed it; no SIMD, no SWAR, no register
+//! arithmetic. A run of a character class is therefore the text it matched,
+//! and `dec<T>(p)` accumulates it without a `Vec` in between - kept for the
+//! overflow bound and the ergonomics rather than for time, which it does not
+//! buy.
+//!
+//! Read differences, not absolutes: every case pays the same stream
+//! construction. And do not clone a `ParseContext` per iteration - it carries
+//! the interner's 8 KiB lookup cache, which costs ~98 ns to clone and as much
+//! again to drop, so a harness that does it measures itself.
+//!
+//! One machine, `-12.3` parsed as a top-level rule, three runs in agreement:
+//!
+//! | case | ns |
+//! |---|---|
+//! | `floor` - an empty rule | 4.9 |
+//! | `one_digit` - `d:digit` | 6.4 |
+//! | `two_digits` - `a:digit b:digit`, no repetition | 8.8 |
+//! | `run` - `digit{1,2}`, the text it matched | 7.1 |
+//! | `discarded` - `digit{1,2}`, nobody names it | 7.4 |
+//! | `collected` - `ITEM{1,2}`, elements a rule built | 24.5 |
+//! | `tenths` - the whole temperature | 13.8 |
+//! | `tenths/via_text` - the same through `text(..)` | 14.0 |
+//! | `tenths/via_dec` - the same through `dec<i32>(..)` | 17.8 |
+//! | `tenths/via_scan` - a `take_while` closure instead | 18.2 |
+//! | `tenths/by_hand` - one scan and a fold, written in Rust | 17.0 |
+//!
+//! The generated temperature is **faster than the hand-written one** (13.8
+//! against 17.0): a repetition of `one_of` wrapped in `take` beats a
+//! `take_while` closure (18.2). `text(..)` over a run costs nothing, because
+//! it *is* the run. The `Vec` is still there for what needs it - 24.5 against
+//! 7.1 for the same two digits as elements a rule built.
+//!
+//! Over 200_000 digits: a run taken as text 173 µs, a discarded run 174,
+//! collecting the elements of a rule 262, `count(p)` 483. The last is the one
+//! thing this file leaves open - see TODO.md §4.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
@@ -25,7 +57,7 @@ use winnow_grammar::error::ParseError;
 use winnow_grammar::{grammar, ParseContext, ParseInput};
 
 /// A `take_while` scan of the same run, kept as a comparison for the
-/// generated `text(digit{1,2})`: a closure over a character class against a
+/// generated `digit{1,2}`: a closure over a character class against a
 /// repetition of `one_of` wrapped in `.take()`.
 fn digits_1_2<'a, S: Clone + std::fmt::Debug>(
     i: &mut ParseInput<'a, S>,
@@ -59,17 +91,23 @@ grammar! {
     grammar Rep {
         WS -> () = "" -> { () }
 
-        // Bound: the action names the elements, so they have to exist.
-        pub BOUND -> usize = xs:digit* -> { xs.len() }
+        // A repetition of a *rule* collects: the elements are values the
+        // parser built - one `u8` each - so the `Vec` is the answer rather
+        // than a copy of input that is already there.
+        ITEM -> u8 = d:digit -> { d as u8 - b'0' }
+        pub COLLECTED -> usize = xs:ITEM* -> { xs.len() }
 
-        // Discarded: nothing names the result. Today a `Vec` is built and
-        // thrown away by `.map(|_| ())`.
+        // A repetition of a character class is the text it matched, so naming
+        // it costs nothing beyond the slice.
+        pub RUN -> usize = xs:digit* -> { xs.len() }
+
+        // Nothing names the result, so nothing is built either way.
         pub DISCARDED -> () = digit* -> { () }
 
-        // Counted: `count(p)` today builds a `Vec` to ask for its length.
+        // `count(p)` answers with one number and holds no elements.
         pub COUNTED -> usize = n:count(digit) -> { n }
 
-        // The 1BRC temperature: a bounded repetition whose elements are used.
+        // The 1BRC temperature: a bounded run read out of its own text.
         pub TENTHS -> i32 =
             neg:"-"? whole:digit{1,2} "." frac:digit
             -> {
@@ -81,15 +119,16 @@ grammar! {
 
         // Where TENTHS's time goes. `FLOOR` is entry and `finish` with no
         // pattern to speak of; `TWO_DIGITS` is the same two digits without any
-        // repetition machinery, so the gap to `BOUNDED_BOUND` is what the
+        // repetition machinery, so the gap to `BOUNDED_RUN` is what the
         // bounded repetition itself costs.
         pub FLOOR -> () = "" -> { () }
         pub ONE_DIGIT -> i32 = d:digit -> { d as i32 - 48 }
         pub TWO_DIGITS -> i32 = a:digit b:digit -> { (a as i32 - 48) * 10 + (b as i32 - 48) }
         pub BY_HAND -> i32 = v:super::tenths_by_hand -> { v }
 
-        // The shipped operators, so the numbers are about what is generated
-        // rather than about a stand-in.
+        // The operators over the same run, so the numbers are about what is
+        // generated rather than about a stand-in. `text(..)` over a run is not
+        // a second wrapper - it is what the run already is.
         pub TENTHS_DEC -> i32 =
             neg:"-"? whole:dec<i32>(digit{1,2}) "." frac:dec<i32>(digit)
             -> { let v = whole * 10 + frac; if neg.is_some() { -v } else { v } }
@@ -103,8 +142,8 @@ grammar! {
                 if neg.is_some() { -v } else { v }
             }
 
-        // The stand-ins kept for comparison: a `take_while` scan rather than
-        // a repetition wrapped in `.take()`.
+        // The stand-in kept for comparison: a `take_while` scan rather than
+        // a repetition of `one_of` wrapped in `.take()`.
         pub TENTHS_SCAN -> i32 =
             neg:"-"? whole:super::digits_1_2 "." frac:digit
             -> {
@@ -114,14 +153,16 @@ grammar! {
                 if neg.is_some() { -v } else { v }
             }
 
-        // The pair that isolates the collection: the same pattern, once with
-        // its elements named and once without.
-        pub BOUNDED_BOUND -> usize = xs:digit{1,2} -> { xs.len() }
+        // The pair that isolates the allocation: the same two digits as the
+        // text they matched, and as elements a rule built.
+        pub BOUNDED_RUN -> usize = xs:digit{1,2} -> { xs.len() }
+        pub BOUNDED_COLLECTED -> usize = xs:ITEM{1,2} -> { xs.len() }
         pub BOUNDED_DISCARDED -> () = digit{1,2} -> { () }
 
         // The same, unbounded and short - where an allocation is not
         // amortised over thousands of elements.
-        pub SHORT_BOUND -> usize = xs:digit* -> { xs.len() }
+        pub SHORT_RUN -> usize = xs:digit* -> { xs.len() }
+        pub SHORT_COLLECTED -> usize = xs:ITEM* -> { xs.len() }
         pub SHORT_DISCARDED -> () = digit* -> { () }
         pub SHORT_COUNTED -> usize = n:count(digit) -> { n }
     }
@@ -133,36 +174,49 @@ fn digits(n: usize) -> String {
     (0..n).map(|i| char::from(b'0' + (i % 10) as u8)).collect()
 }
 
-fn bench_repetition(c: &mut Criterion) {
-    let mut g = c.benchmark_group("repetition");
-
-    // One element per digit. Two sizes: at 2000 the collection fits in cache
-    // and costs almost nothing, at 200_000 it is 800 KB of `char` that a
-    // counting repetition never touches.
-    let input = digits(200_000);
-    g.throughput(Throughput::Bytes(input.len() as u64));
-
-    // The context is built once and cloned per iteration - an `Arc` clone.
-    // Constructing one allocates a `ThreadedRodeo`, which on a short input
-    // costs more than the parse and would be all this measured.
-    let ctx = ParseContext::<()>::default();
-    macro_rules! case {
-        ($name:expr, $parser:expr, $text:expr) => {
-            g.bench_function($name, |b| {
+/// One stream, reused: a `ParseContext` is **not** cheap to clone since it
+/// carries the interner's 8 KiB lookup cache (`src/intern_cache.rs`), so
+/// cloning one per iteration measures the clone rather than the rule - ~98 ns
+/// to clone and as much again to drop, more than anything in this file costs.
+/// Reusing it measures repeated parsing, which is the case these rules are
+/// for; `rt::entry` clears the diagnostics engine's working space at every
+/// parse, so nothing carries over.
+macro_rules! bench_cases {
+    ($g:expr, $ctx:expr, [$(($name:expr, $parser:expr, $text:expr)),* $(,)?]) => {
+        $(
+            $g.bench_function($name, |b| {
+                let mut stream = ParseInput {
+                    input: LocatingSlice::new($text),
+                    state: $ctx.clone(),
+                };
                 b.iter(|| {
-                    let mut stream = ParseInput {
-                        input: LocatingSlice::new($text),
-                        state: ctx.clone(),
-                    };
+                    stream.input = LocatingSlice::new($text);
                     black_box($parser.parse_next(&mut stream).unwrap())
                 })
             });
-        };
-    }
+        )*
+    };
+}
 
-    case!("bound/200k", Rep::parse_BOUND(), input.as_str());
-    case!("discarded/200k", Rep::parse_DISCARDED(), input.as_str());
-    case!("counted/200k", Rep::parse_COUNTED(), input.as_str());
+fn bench_repetition(c: &mut Criterion) {
+    let mut g = c.benchmark_group("repetition");
+
+    // One element per digit, 200_000 of them: 200 KB of `u8` that a collecting
+    // repetition holds and the others never touch.
+    let input = digits(200_000);
+    g.throughput(Throughput::Bytes(input.len() as u64));
+
+    let ctx = ParseContext::<()>::default();
+    bench_cases!(
+        g,
+        ctx,
+        [
+            ("collected/200k", Rep::parse_COLLECTED(), input.as_str()),
+            ("run/200k", Rep::parse_RUN(), input.as_str()),
+            ("discarded/200k", Rep::parse_DISCARDED(), input.as_str()),
+            ("counted/200k", Rep::parse_COUNTED(), input.as_str()),
+        ]
+    );
 
     g.finish();
 }
@@ -170,47 +224,35 @@ fn bench_repetition(c: &mut Criterion) {
 /// Where the time in the 1BRC temperature goes.
 ///
 /// Read the **differences**, not the absolute numbers: every case pays the
-/// same stream construction and context clone, which on an input this short
-/// is most of what the clock sees. (A case that only builds the stream and
-/// `black_box`es it measures *higher* than one that parses an empty rule -
-/// forcing the whole struct to memory costs more than using it - so there is
-/// no honest floor to subtract, only pairs to compare.)
+/// same stream construction, which on an input this short is a real share of
+/// what the clock sees.
 fn bench_bounded(c: &mut Criterion) {
     let mut g = c.benchmark_group("bounded");
 
     // One temperature, parsed over and over: the per-item cost is the point,
     // not throughput over a large input.
-    // The context is built once and cloned per iteration - an `Arc` clone.
-    // Constructing one allocates a `ThreadedRodeo`, which on a short input
-    // costs more than the parse and would be all this measured.
     let ctx = ParseContext::<()>::default();
-    macro_rules! case {
-        ($name:expr, $parser:expr, $text:expr) => {
-            g.bench_function($name, |b| {
-                b.iter(|| {
-                    let mut stream = ParseInput {
-                        input: LocatingSlice::new($text),
-                        state: ctx.clone(),
-                    };
-                    black_box($parser.parse_next(&mut stream).unwrap())
-                })
-            });
-        };
-    }
-
-    case!("floor", Rep::parse_FLOOR(), "");
-    case!("one_digit", Rep::parse_ONE_DIGIT(), "1");
-    case!("two_digits", Rep::parse_TWO_DIGITS(), "12");
-    case!("tenths", Rep::parse_TENTHS(), "-12.3");
-    case!("tenths/via_text", Rep::parse_TENTHS_TEXT(), "-12.3");
-    case!("tenths/via_dec", Rep::parse_TENTHS_DEC(), "-12.3");
-    case!("tenths/via_scan", Rep::parse_TENTHS_SCAN(), "-12.3");
-    case!("tenths/by_hand", Rep::parse_BY_HAND(), "-12.3");
-    case!("bound", Rep::parse_BOUNDED_BOUND(), "12");
-    case!("discarded", Rep::parse_BOUNDED_DISCARDED(), "12");
-    case!("short/bound", Rep::parse_SHORT_BOUND(), "12345");
-    case!("short/discarded", Rep::parse_SHORT_DISCARDED(), "12345");
-    case!("short/counted", Rep::parse_SHORT_COUNTED(), "12345");
+    bench_cases!(
+        g,
+        ctx,
+        [
+            ("floor", Rep::parse_FLOOR(), ""),
+            ("one_digit", Rep::parse_ONE_DIGIT(), "1"),
+            ("two_digits", Rep::parse_TWO_DIGITS(), "12"),
+            ("tenths", Rep::parse_TENTHS(), "-12.3"),
+            ("tenths/via_text", Rep::parse_TENTHS_TEXT(), "-12.3"),
+            ("tenths/via_dec", Rep::parse_TENTHS_DEC(), "-12.3"),
+            ("tenths/via_scan", Rep::parse_TENTHS_SCAN(), "-12.3"),
+            ("tenths/by_hand", Rep::parse_BY_HAND(), "-12.3"),
+            ("run", Rep::parse_BOUNDED_RUN(), "12"),
+            ("collected", Rep::parse_BOUNDED_COLLECTED(), "12"),
+            ("discarded", Rep::parse_BOUNDED_DISCARDED(), "12"),
+            ("short/run", Rep::parse_SHORT_RUN(), "12345"),
+            ("short/collected", Rep::parse_SHORT_COLLECTED(), "12345"),
+            ("short/discarded", Rep::parse_SHORT_DISCARDED(), "12345"),
+            ("short/counted", Rep::parse_SHORT_COUNTED(), "12345"),
+        ]
+    );
 
     g.finish();
 }

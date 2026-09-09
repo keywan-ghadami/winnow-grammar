@@ -88,6 +88,30 @@
 
 ### Fixed
 
+- **A repetition nobody names mapped its count to `()`, and that cost 2.7x.**
+  `x*` with no binding ran the counting loop and threw the count away with
+  `.map(|_| ())`; it now `take`s the loop's text and drops that instead. The
+  loop is element for element the same and both discard everything it
+  produces, but over 200_000 digits the mapped form measured **504 µs against
+  184** (`benches/repetition.rs`). A discarded `digit{1,2}` went 9.7 ns -> 7.4.
+
+- **`text(p)` and `dec<T>(p)` took a run twice.** A repetition of a character
+  class already yields the text it matched, so wrapping it in a second `take`
+  added a layer for nothing. Codegen emits the run itself now:
+  `text(digit{1,2})` costs what `digit{1,2}` costs (14.0 ns against 13.8 for
+  the whole `TENTHS` rule) and `dec<i32>(..)` 17.8 against 18.5. Small on its
+  own - it is here because the layer would otherwise have grown with the fix
+  above, which put a `void(take(..))` inside the `take`: measured 17.7 for
+  `text` and 21.1 for `dec` in between the two changes.
+
+- **`benches/repetition.rs` measured a context clone.** It cloned a
+  `ParseContext` per iteration, which since the interner's 8 KiB lookup cache
+  landed costs ~98 ns to clone and as much again to drop - so every case in
+  the file read 166-175 ns, rule or no rule, and no difference between them
+  was visible. The benchmark reuses one stream now and its numbers are the
+  rules again: an empty rule measures 4.9 ns where the cloning harness said
+  166.
+
 - **`text(p)` and `dec(p)` collected what they then threw away.** Their inner
   pattern was generated as if its values were wanted, so `text(digit{1,2})`
   built a `Vec<char>` and `.take()` dropped it - the operators cost exactly

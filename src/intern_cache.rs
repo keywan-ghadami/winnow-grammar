@@ -29,6 +29,12 @@ struct Slot {
 /// overwrites. There is no collision handling because there is nothing to
 /// handle - a displaced entry is simply interned again.
 ///
+/// The table is what makes a [`ParseContext`](crate::ParseContext) expensive
+/// to clone - ~98 ns against an `Arc` bump, measured. A parse builds one
+/// context and a `par_fold` one per piece, so that is paid once against the
+/// 1.4 µs a fresh context costs anyway; a caller that clones one per record
+/// would notice.
+///
 /// Public only because it is a field of [`ParseContext`](crate::ParseContext),
 /// which callers build with a struct literal. It has no API and no
 /// guarantees; do not name it.

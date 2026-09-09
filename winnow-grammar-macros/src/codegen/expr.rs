@@ -717,6 +717,14 @@ impl<'a> Codegen<'a> {
                         Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
                     })
                     .collect();
+                // A run of a character class already *is* its text, so
+                // `text(digit{1,2})` is that run and not a wrapper around it.
+                // Taking it twice measured ~3 ns more on the 1BRC temperature.
+                if let [only] = &seq[..] {
+                    if self.is_char_run(only) {
+                        return self.generate_parser_expr(only, is_lexical, false);
+                    }
+                }
                 let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
                 quote_spanned! {span=> ::winnow::Parser::take(#inner) }
             }
@@ -740,8 +748,17 @@ impl<'a> Codegen<'a> {
                         Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
                     })
                     .collect();
-                let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
-                let taken = quote_spanned! {span=> ::winnow::Parser::take(#inner) };
+                // As in `text`: a run is its own text, so it is read as it
+                // stands rather than taken a second time.
+                let taken = match &seq[..] {
+                    [only] if self.is_char_run(only) => {
+                        self.generate_parser_expr(only, is_lexical, false)
+                    }
+                    _ => {
+                        let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
+                        quote_spanned! {span=> ::winnow::Parser::take(#inner) }
+                    }
+                };
                 match call_generics.first() {
                     Some(ty) => quote_spanned! {span=>
                         ::winnow_grammar::rt::dec::<_, #ty, _, _>(#taken)
@@ -963,6 +980,19 @@ impl<'a> Codegen<'a> {
         CHAR_CLASSES.contains(&name.as_str())
     }
 
+    /// A repetition whose element is a character class - the patterns that
+    /// yield `&'a str` rather than their elements. `text(..)` and `dec(..)`
+    /// over one of these have nothing to add: the run is already the text.
+    fn is_char_run(&self, p: &ModelPattern) -> bool {
+        match p {
+            ModelPattern::Repeat(inner, _) | ModelPattern::Plus(inner, _) => {
+                self.is_char_class(inner)
+            }
+            ModelPattern::Bounded { pattern, .. } => self.is_char_class(pattern),
+            _ => false,
+        }
+    }
+
     /// `x*`, `x+` and `x{n,m}`: one generator, three spellings of the bounds.
     ///
     /// What it yields depends on what is repeated and on whether anyone named
@@ -994,7 +1024,13 @@ impl<'a> Codegen<'a> {
         };
         let counting = quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting_bounded(#min, #max, #elem) };
         if is_discarded {
-            quote_spanned! {span=> #counting.map(|_| ()) }
+            // `take` and throw the slice away, rather than `.map(|_| ())` over
+            // the same loop. Both discard the count and both run element for
+            // element, but the mapped form measured **2.7x** the taken one on
+            // 200_000 digits (500 us against 184; `benches/repetition.rs`),
+            // so the cheaper spelling of "nothing" is the one that also
+            // produces a value.
+            quote_spanned! {span=> ::winnow::Parser::void(::winnow::Parser::take(#counting)) }
         } else if self.is_char_class(inner) {
             quote_spanned! {span=> ::winnow::Parser::take(#counting) }
         } else {

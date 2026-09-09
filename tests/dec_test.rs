@@ -1,10 +1,11 @@
 //! `dec<T>(p)`: the digits `p` matched, as a number.
 //!
-//! Not for speed - measured, it is the same as `text(p)` plus the fold an
-//! action would write by hand (`benches/repetition.rs`, whose header has
-//! the runs). It is here for the two things that fold does badly: it is
-//! written out again at every numeric field, and it silently overflows if the
-//! author picks a type the format does not fit.
+//! Not for speed - measured, it costs a few ns *more* than `text(p)` plus the
+//! fold an action would write by hand, because `str::parse` validates more
+//! than two bytes need (`benches/repetition.rs`, whose header has the runs).
+//! It is here for the two things that fold does badly: it is written out again
+//! at every numeric field, and it silently overflows if the author picks a
+//! type the format does not fit.
 
 use winnow_grammar::grammar;
 use winnow_grammar::testing::WinnowTestExt;
