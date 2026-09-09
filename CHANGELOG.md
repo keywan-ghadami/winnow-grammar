@@ -343,6 +343,23 @@
 
 ### Added
 
+- **`ParseContext::expect_distinct_keys(n)`**: size the interning cache for the
+  parse in front of you. The default 512 slots are sized for a compiler's
+  identifier stream, where a few words are hot, the table is direct-mapped and
+  a displaced entry is simply interned again. An aggregation over data is the
+  other shape: 1BRC has 413 distinct station names, so displacement is the
+  *common* case and every miss falls through to a shard lock and a hash -
+  measured at 617 instructions per row against 514 for a plain fast-hashed map,
+  which is the cache costing more than it saves.
+
+  How many distinct keys a parse will see is the caller's knowledge, not the
+  library's, which is why this is a method and not a heuristic. The table takes
+  the next power of two at or above `2 * keys` - direct-mapped with no
+  collision handling, half empty is what keeps most keys in a slot of their own
+  - clamped to 64..=65 536 slots. It empties rather than rehashes: a lost entry
+  costs one interner call, and rehashing would cost more than that for every
+  entry nobody looks up again.
+
 - **A rule may be labelled: `rule expr -> i64 # "expression" = …`.** The same
   syntax after an alternative already named that alternative; between a rule's
   return type and its `=` it names the rule, and stands in for every

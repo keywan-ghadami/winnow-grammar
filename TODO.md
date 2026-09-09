@@ -118,29 +118,7 @@ characters. **Next step:** measure where the crossover actually sits on a real
 machine, then have the code generator take the character path where it knows
 the upper bound is below it - `{1,2}` is a compile-time fact.
 
-## 6. `InternCache` is sized for identifiers, not for aggregation
-
-Not a defect - an assumption worth making settable. The cache is 512
-direct-mapped slots and says so plainly: *"There is no collision handling
-because there is nothing to handle - a displaced entry is simply interned
-again."* Right for a compiler's identifier stream, where a few words are hot.
-
-An aggregation over a data file is the other shape. 1BRC has 413 distinct keys,
-so displacement is the common case and every miss falls through to
-`ThreadedRodeo` - a shard lock and a hash, ~2.5x a cache hit. Measured by
-Nikaia, keying its station table by `Symbol` and indexing a `Vec` against
-hashing the `&str` directly:
-
-| keys | intern cache + `Vec` index | plain map, fast hash |
-| ---: | ---: | ---: |
-| 15 | 507 instructions/row | 512 |
-| 413 | **617** | 514 |
-
-The map is flat and the cache degrades. Making `InternCache::BITS` settable per
-context would close it: how many distinct keys a parse will see is the caller's
-knowledge and not the library's.
-
-## 7. Release readiness for 0.1.0
+## 6. Release readiness for 0.1.0
 
 `CHANGELOG.md` has collected real breaking changes under *Unreleased* -
 `parse_<rule>_pieces` taking a context, `Diagnostics` gaining a method,
@@ -149,5 +127,5 @@ migration note, that the examples in `README.md` and `SYNTAX.md` still compile
 as written, and that nothing in them describes a version that no longer exists.
 Twice in one week a stale sentence sent someone down the wrong path - an
 attribute that never existed, and a return type that had changed - so this is a
-pass over the documents, not over the code. **Not before §1-§6**: there is
+pass over the documents, not over the code. **Not before §1-§5**: there is
 still language missing.

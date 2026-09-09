@@ -53,14 +53,24 @@ pub struct InternCache {
     /// replaced between parses gets an empty cache rather than another
     /// interner's numbers.
     interner: usize,
+    /// `1 << bits` slots. Settable per context, because how many distinct
+    /// strings a parse will see is the caller's knowledge - see
+    /// [`ParseContext::expect_distinct_keys`](crate::ParseContext::expect_distinct_keys).
+    bits: u32,
 }
 
 impl InternCache {
     /// 512 slots, 8 KiB. L1d is 32-48 KiB *in total* and the parse also wants
     /// the input, the stack and its output in there, so the table is sized to
-    /// leave room rather than to fill the cache.
-    const BITS: u32 = 9;
-    const SLOTS: usize = 1 << Self::BITS;
+    /// leave room rather than to fill the cache. Right for a compiler's
+    /// identifier stream, where a few words are hot; a caller whose parse sees
+    /// hundreds of distinct keys says so instead.
+    const DEFAULT_BITS: u32 = 9;
+    /// 64 slots (1 KiB) to 65 536 (1 MiB). The floor is where a table stops
+    /// being worth its own cache line; the ceiling is where it stops fitting
+    /// in any cache and a hit costs what a miss would have.
+    const MIN_BITS: u32 = 6;
+    const MAX_BITS: u32 = 16;
 
     fn empty_slot() -> Slot {
         Slot {
@@ -74,6 +84,33 @@ impl InternCache {
         Self {
             slots: Vec::new(),
             interner: 0,
+            bits: Self::DEFAULT_BITS,
+        }
+    }
+
+    /// Size the table for a parse that will see about `keys` distinct strings.
+    ///
+    /// The table gets the next power of two at or above `2 * keys`: it is
+    /// direct-mapped with no collision handling, so leaving half of it empty is
+    /// what keeps most keys in a slot of their own. Clamped to
+    /// [`MIN_BITS`](Self::MIN_BITS)..=[`MAX_BITS`](Self::MAX_BITS).
+    ///
+    /// The table is emptied, not rehashed: it is a cache, a lost entry costs
+    /// one interner call, and rehashing would cost more than that for every
+    /// entry that is never looked up again.
+    pub(crate) fn size_for(&mut self, keys: usize) {
+        // `checked_`, because a caller who says `usize::MAX` means "as big as
+        // it goes" and the clamp below is what answers that - not a panic.
+        let wanted = keys
+            .saturating_mul(2)
+            .max(1)
+            .checked_next_power_of_two()
+            .unwrap_or(usize::MAX);
+        let bits = (usize::BITS - 1 - wanted.leading_zeros().min(usize::BITS - 1))
+            .clamp(Self::MIN_BITS, Self::MAX_BITS);
+        if bits != self.bits {
+            self.bits = bits;
+            self.slots = Vec::new();
         }
     }
 
@@ -110,11 +147,11 @@ impl InternCache {
     }
 
     #[inline]
-    fn index(tag: u64) -> usize {
-        // A multiply folds the low bits upward; the top `BITS` are then the
+    fn index(&self, tag: u64) -> usize {
+        // A multiply folds the low bits upward; the top `bits` are then the
         // bucket. Fixed constant: the cache is not adversary-facing - a
         // collision costs one interner call, not a quadratic blow-up.
-        (tag.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - Self::BITS)) as usize
+        (tag.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - self.bits)) as usize
     }
 
     /// Empties the cache if it belongs to another interner. Called where a
@@ -133,7 +170,7 @@ impl InternCache {
     #[cold]
     #[inline(never)]
     fn fill(&mut self) {
-        self.slots = vec![Self::empty_slot(); Self::SLOTS];
+        self.slots = vec![Self::empty_slot(); 1 << self.bits];
     }
 
     #[inline]
@@ -143,7 +180,8 @@ impl InternCache {
         }
         let tag = Self::tag(text);
         let len = text.len() as u32;
-        let slot = &mut self.slots[Self::index(tag)];
+        let at = self.index(tag);
+        let slot = &mut self.slots[at];
 
         if slot.sym != 0 && slot.tag == tag && slot.len == len {
             let sym = Symbol::from_index(slot.sym - 1);
@@ -184,5 +222,65 @@ impl Clone for InternCache {
 impl std::fmt::Debug for InternCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("InternCache")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InternCache;
+    use crate::InternerContext;
+
+    /// The cache is a cache: whatever its size, the symbol it hands back is
+    /// the interner's, and the same text twice is the same symbol.
+    #[test]
+    fn every_size_agrees_with_the_interner() {
+        let words: Vec<String> = (0..500).map(|i| format!("station_{i}")).collect();
+
+        for keys in [0, 1, 8, 413, 100_000] {
+            let interner = InternerContext::new();
+            let mut cache = InternCache::new();
+            cache.size_for(keys);
+            cache.rebind(&interner);
+
+            for w in &words {
+                let through_cache = cache.intern(&interner, w);
+                assert_eq!(through_cache, interner.intern_string(w), "{w} at {keys}");
+                // And again, which is the path the cache exists for.
+                assert_eq!(cache.intern(&interner, w), through_cache);
+            }
+        }
+    }
+
+    /// `keys` asks for twice as many slots, rounded up, and the clamp holds at
+    /// both ends.
+    #[test]
+    fn the_table_is_sized_from_the_key_count() {
+        let cases = [
+            (0, InternCache::MIN_BITS),
+            (413, 10), // 826 -> 1024
+            (512, 10), // 1024
+            (513, 11), // 1026 -> 2048
+            (usize::MAX, InternCache::MAX_BITS),
+        ];
+        for (keys, bits) in cases {
+            let mut cache = InternCache::new();
+            cache.size_for(keys);
+            assert_eq!(cache.bits, bits, "{keys} keys");
+        }
+    }
+
+    /// Resizing empties the table, and the emptied table refills itself.
+    #[test]
+    fn resizing_empties_and_the_cache_refills() {
+        let interner = InternerContext::new();
+        let mut cache = InternCache::new();
+        cache.rebind(&interner);
+        let before = cache.intern(&interner, "Hamburg");
+        assert!(!cache.slots.is_empty());
+
+        cache.size_for(413);
+        assert!(cache.slots.is_empty(), "a resize empties the table");
+        assert_eq!(cache.intern(&interner, "Hamburg"), before);
+        assert_eq!(cache.slots.len(), 1 << 10);
     }
 }
