@@ -358,6 +358,40 @@
 
 ### Added
 
+- **A parse error prints the line it is about, with a caret under the token**
+  (ADR 15, point 13). `render(source)` said `at line 3, column 5` and left the
+  reader to go and find line 3 - true, and half a diagnostic. It now reads
+
+  ```text
+  expected `}`; found unexpected token `temp` at line 3, column 5
+     3 |     temp: f64,
+             ^^^^
+  note: also possible here: `,`
+  in struct_item
+  ```
+
+  The caret is as wide as what was *found* when the token really is the text at
+  that offset, and one character otherwise - `found` is a rendering (`newline`
+  for a `\n`), so it is used as a width only when it matches verbatim. This
+  costs a backward scan for one newline, on the path where the parse has already
+  failed; `Display`, which has no source to scan, is unchanged.
+
+  Four cases the tests pin because getting the caret under the right character
+  is not obvious in any of them: a **tab**-indented line has its own leading
+  characters reproduced rather than measured, since what a tab is worth is the
+  terminal's business; the column counts **characters**, so a non-ASCII word
+  before the position does not shift it; a **line too long to print** is
+  windowed around the position with `…` at the cut ends, because a minified
+  document is one line and a caret four thousand columns to the right is not a
+  diagnostic; and at the **end of input** the caret goes where the missing
+  character would be.
+
+- **`span::caret(source, offset, width)` and `SpanExt::caret(source)`**, the
+  same two lines for any offset or `@` span a grammar produced - a diagnostic
+  about a value the parse *succeeded* on gets what a parse error gets. A span
+  crossing a line break underlines to the end of its first line: that is where
+  the reader has to look.
+
 - **`ParseContext::expect_distinct_keys(n)`**: size the interning cache for the
   parse in front of you. The default 512 slots are sized for a compiler's
   identifier stream, where a few words are hot, the table is direct-mapped and

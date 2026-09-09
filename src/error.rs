@@ -352,17 +352,53 @@ impl ParseError {
         crate::span::line_column(source, self.offset)
     }
 
+    /// How wide the caret should be: the token that was actually found, when
+    /// it really is the text at that offset, and one character otherwise.
+    ///
+    /// `found` is a *rendering* of what is there - `newline` for a `\n`, the
+    /// first character for anything unwordlike - so it is used as a width only
+    /// when it matches the source verbatim. Everything else gets one caret,
+    /// which is never wrong.
+    fn caret_width(&self, source: &str) -> usize {
+        let offset = self.offset.min(source.len());
+        match &self.found {
+            Some(f) if source[offset..].starts_with(f.as_str()) => f.chars().count(),
+            _ => 1,
+        }
+    }
+
     /// The complete message with position, as a user should see it.
     ///
     /// `Display` leaves out the position because winnow's own `ParseError`
     /// (from `Parser::parse`) prepends it along with the source line; whoever
     /// goes through `parse_next` has the source themselves and calls this.
+    ///
+    /// The line itself is printed under the message, with a caret under the
+    /// token that was found:
+    ///
+    /// ```text
+    /// expected `}`; found unexpected token `temp` at line 3, column 5
+    ///    3 |     temp: f64,
+    ///            ^^^^
+    /// note: also possible here: `,`
+    /// in struct_item
+    /// ```
+    ///
+    /// A position a reader still has to go and look up is half a diagnostic.
+    /// This costs a backward scan for one newline, on the path where the parse
+    /// has already failed.
     pub fn render(&self, source: &str) -> String {
         if self.undiagnosed {
             return self.headline();
         }
         let (line, column) = self.line_column(source);
         let mut s = format!("{} at line {}, column {}", self.headline(), line, column);
+        s.push('\n');
+        s.push_str(&crate::span::caret(
+            source,
+            self.offset,
+            self.caret_width(source),
+        ));
         let also = self.also_possible();
         if !also.is_empty() {
             s.push_str(&format!("\nnote: also possible here: {}", also.join(", ")));

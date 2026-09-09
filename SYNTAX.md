@@ -97,10 +97,13 @@ use winnow_grammar::span::{line_column, SpanExt};
 
 assert_eq!(at.text(source), "counter");
 let ((line, col), _end) = at.line_columns(source);
+eprintln!("{line}:{col}: too many of these\n{}", at.caret(source));
 ```
 
 It is the same function the error messages use, so a span and a diagnostic
-cannot disagree about where something is.
+cannot disagree about where something is - `at.caret(source)` is the line with
+a caret under the span, the two lines `ParseError::render` prints under its own
+message.
 
 ### Alternatives
 Match one of several alternatives using `|`. The first one that matches wins.
@@ -1006,9 +1009,24 @@ Tools you have:
   whitespace a syntactic rule skips at its start is skipped *outside* the
   label, so a blank before the failure does not stop the label substituting.
 - `fail("…")` reports the text verbatim, with high priority.
-- `parse_next` returns the bare `ParseError` (use `e.render(source)` for the
-  position); `.parse()` goes through winnow's own `ParseError`, which prints the
-  position and the source line itself.
+- `parse_next` returns the bare `ParseError`; `e.render(source)` is the message
+  a user should see - the position, **the line it is about with a caret under
+  the token**, the note, and the rule stack:
+
+  ```text
+  expected `}`; found unexpected token `temp` at line 3, column 5
+     3 |     temp: f64,
+             ^^^^
+  note: also possible here: `,`
+  in struct_item
+  ```
+
+  A line too long to print is windowed around the position and the cut ends are
+  marked with `…`. `.parse()` goes through winnow's own `ParseError`, which
+  prints the position and the source line itself.
+- `span::caret(source, offset, width)` and `SpanExt::caret(source)` give the
+  same two lines for any offset or `@` span, so a diagnostic about a value the
+  parse *succeeded* on looks like one about a value it did not.
 - The error is a value: `e.expected`, `e.found`, `e.rule_stack`, `e.offset`,
   and `e.also_possible()` for what the note would say.
 
