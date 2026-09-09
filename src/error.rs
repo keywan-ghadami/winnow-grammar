@@ -447,8 +447,10 @@ pub trait Diagnostics: Sized {
     fn expected(self, start: usize, what: &'static str) -> Self;
 
     /// Remembers an error that a successful backtrack (`x?`, `x*`) is about
-    /// to discard - see [`crate::ParseContext::record`].
-    fn record<S>(&self, ctx: &mut crate::ParseContext<S>);
+    /// to discard - see [`crate::ParseContext::record`]. `start` is where the
+    /// discarded attempt began, which decides whether it was an optional
+    /// continuation or an element that had already committed.
+    fn record<S>(&self, ctx: &mut crate::ParseContext<S>, start: usize);
 
     /// The error of a hand-written parser plugged into a grammar. Those
     /// return [`ParseError`] whatever the grammar's error type is.
@@ -501,8 +503,8 @@ impl Diagnostics for ParseError {
         }
     }
 
-    fn record<S>(&self, ctx: &mut crate::ParseContext<S>) {
-        ctx.record(self);
+    fn record<S>(&self, ctx: &mut crate::ParseContext<S>, start: usize) {
+        ctx.record(self, start);
     }
 
     fn from_parse_error(e: ParseError) -> Self {
@@ -537,7 +539,7 @@ impl Diagnostics for EmptyError {
         self
     }
 
-    fn record<S>(&self, _ctx: &mut crate::ParseContext<S>) {}
+    fn record<S>(&self, _ctx: &mut crate::ParseContext<S>, _start: usize) {}
 
     fn from_parse_error(_e: ParseError) -> Self {
         EmptyError

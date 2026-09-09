@@ -328,10 +328,11 @@ where
 {
     move |input| {
         let cp = input.checkpoint();
+        let start = input.current_token_start();
         match p.parse_next(input) {
             Ok(v) => Ok(Some(v)),
             Err(ErrMode::Backtrack(e)) => {
-                e.record(&mut input.state);
+                e.record(&mut input.state, start);
                 input.reset(&cp);
                 Ok(None)
             }
@@ -412,7 +413,7 @@ where
                     if items.len() < min {
                         return Err(ErrMode::Backtrack(e));
                     }
-                    e.record(&mut input.state);
+                    e.record(&mut input.state, start);
                     input.reset(&cp);
                     break;
                 }
@@ -482,7 +483,7 @@ where
                     if seen < min {
                         return Err(ErrMode::Backtrack(e));
                     }
-                    e.record(&mut input.state);
+                    e.record(&mut input.state, start);
                     input.reset(&cp);
                     break;
                 }
@@ -618,7 +619,7 @@ where
                     if seen < min {
                         return Err(ErrMode::Backtrack(e));
                     }
-                    e.record(&mut input.state);
+                    e.record(&mut input.state, start);
                     input.reset(&cp);
                     break;
                 }
@@ -801,8 +802,26 @@ where
 {
     let outer = input.state.in_trivia;
     input.state.in_trivia = true;
+    let from = input.current_token_start();
     let r = ws(input);
     input.state.in_trivia = outer;
+    // Where this skip ran, for `ParseContext::record`: an attempt that failed
+    // inside the trivia its own rule skipped has not begun. Skips *chain* -
+    // a rule skips at its start and the first element of its sequence skips
+    // again at the same position - so one that begins where the last one
+    // ended continues it rather than replacing it. A skip that begins
+    // anywhere else starts a new chain, which is exactly the case where a
+    // token was consumed in between. Only the diagnosing pass records
+    // anything, so only it pays the two stores.
+    if E::RECORDING {
+        let to = input.current_token_start();
+        let chain = &mut input.state.last_trivia;
+        if chain.1 == from {
+            chain.1 = to;
+        } else {
+            *chain = (from, to);
+        }
+    }
     r
 }
 

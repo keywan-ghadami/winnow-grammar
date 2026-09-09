@@ -88,6 +88,29 @@
 
 ### Fixed
 
+- **An element that *began* is not an optional continuation.** A repetition at
+  or above its minimum records the element's error instead of returning it, and
+  `record` marked the whole of it optional - including what the element had
+  already established. Where the entry rule is a repetition (`program = item*`)
+  that is everything, so an unfinished item's missing `}` ranked no higher than
+  the operators a complete expression could have continued with, and lost to
+  them on priority.
+
+  The distinction is whether the attempt got anywhere: an error at the position
+  the element was tried at is the ordinary "something else could have gone
+  here"; one further along belongs to an element that read tokens and did not
+  finish, and what it was missing is a requirement. `fn(){let 1;` at end of
+  input now reads ``expected `}` `` with `let` in the note, where it used to
+  report every continuation of the statement before it.
+
+  The check is against the end of the trivia the element skipped, not against
+  its start - a rule skips whitespace before its first element, so an attempt
+  that failed one blank along has consumed nothing of its own. Skips chain (a
+  rule skips at its start, then the first element of its sequence skips again
+  at the same position), so `ParseContext` carries the chain's span and
+  `rt::skip_trivia` extends it; it is written only when the error type records
+  at all, so the fast pass does not pay for it.
+
 - **`text(p)` and `dec<T>(p)` could not appear inside a `#[frame]`.** The
   frame check had no arm for either in `builtin_may_consume`, so `_ => true`
   said they consume anything and the walk rejected the grammar the check

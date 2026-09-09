@@ -924,9 +924,15 @@ How the message is chosen, in this order:
 2. **What the grammar required**, at the same position — an expectation the
    grammar *insisted* on outranks one it would merely have accepted. A
    repetition below its minimum insists; one that has already met it, and an
-   `x?`, do not. Among those it merely accepts, the implicit whitespace skip
-   ranks last: where the entry rule is a repetition, everything is optional,
-   and the reader is looking for the next token and not for trivia.
+   `x?`, do not — *unless the attempt got somewhere*. An element that failed
+   where it was tried is the ordinary "something else could have gone here";
+   one that read tokens and then failed had begun, and what it is missing is a
+   requirement however optional the attempt was. (The line is drawn past the
+   whitespace such an element skips first, so a blank does not count as
+   getting somewhere.) Among what the grammar merely accepts, the implicit
+   whitespace skip ranks last: where the entry rule is a repetition,
+   everything is optional, and the reader is looking for the next token and
+   not for trivia.
 3. **Priority** — `fail("…")` beats everything, a labelled alternative beats a
    bare token expectation.
 4. Otherwise the expectations are **merged** into `expected one of: …`.

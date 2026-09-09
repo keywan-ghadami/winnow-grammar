@@ -125,6 +125,17 @@ pub struct ParseContext<S = ()> {
     /// what the grammar was looking for. See [`crate::rt::skip_trivia`].
     #[doc(hidden)]
     pub in_trivia: bool,
+    /// Where the last chain of implicit whitespace skips started and ended.
+    ///
+    /// Only [`record`](Self::record) reads it, and only to answer one
+    /// question: did the attempt it is recording *begin*? A syntactic rule
+    /// skips trivia before its first element, so an attempt that failed one
+    /// blank past where it started has consumed nothing of its own - and the
+    /// offsets alone cannot tell that apart from an element that read three
+    /// tokens and then failed. Written only when the error type records at
+    /// all, so the fast pass does not pay for it.
+    #[doc(hidden)]
+    pub last_trivia: (usize, usize),
 }
 
 impl<S: Default> Default for ParseContext<S> {
@@ -140,6 +151,7 @@ impl<S: Default> Default for ParseContext<S> {
             recovered: Vec::new(),
             fold: FoldProgress::default(),
             in_trivia: false,
+            last_trivia: (usize::MAX, usize::MAX),
         }
     }
 }
@@ -163,6 +175,7 @@ impl<S> ParseContext<S> {
             recovered: Vec::new(),
             fold: FoldProgress::default(),
             in_trivia: false,
+            last_trivia: (usize::MAX, usize::MAX),
         }
     }
 
@@ -224,15 +237,31 @@ impl<S> ParseContext<S> {
 
     /// Records a discarded error - following the same ranking as
     /// [`ParseError::merge`].
-    pub fn record(&mut self, e: &ParseError) {
+    pub fn record(&mut self, e: &ParseError, start: usize) {
         let mut e = e.clone();
-        // Everything that reaches here is an optional continuation: the only
-        // callers are `opt_recording` and a repetition that has already met
-        // its minimum. Below the minimum the element's error is *returned*,
-        // and a returned error is a requirement. So the distinction the
-        // message needs is one the runtime already draws - see
-        // `ParseError::merge`.
-        e.optional = true;
+        // Optional, but only where the attempt failed at `start` - the
+        // position it would have begun at. The callers are `opt_recording` and
+        // a repetition that has met its minimum, so the *attempt* was
+        // optional; what it found once it began is not. `fn f() { let x = 1`
+        // at end of input is the case: the `}` is missing, the item that would
+        // have supplied it began and did not finish, and reporting the
+        // continuations of a complete expression instead of the brace is the
+        // wrong half of what the parser knows.
+        //
+        // An attempt that failed exactly where it started took nothing back
+        // with it, which is the ordinary "another element could have gone
+        // here" - see `ParseError::merge`.
+        // A syntactic rule skips trivia before its first element, so "failed
+        // where it started" means "failed no further than the end of that
+        // skip". Without this, `xs:item* "."` over `1 2 x` calls the item
+        // required - it failed at `x`, one blank past where it began - and the
+        // `.` that would fix the input loses to it.
+        let began = if self.last_trivia.0 == start {
+            self.last_trivia.1
+        } else {
+            start
+        };
+        e.optional = e.offset <= began;
         e.trivia = self.in_trivia;
         for r in self.rules.iter().rev() {
             e.push_rule(r);
