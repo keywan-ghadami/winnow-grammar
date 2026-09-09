@@ -33,7 +33,16 @@ struct Slot {
 /// which callers build with a struct literal. It has no API and no
 /// guarantees; do not name it.
 pub struct InternCache {
-    slots: Box<[Slot]>,
+    /// Allocated with the context, not on first use. Filling it lazily was
+    /// tried and reverted: the `is_empty` check costs ~6% of the hit path,
+    /// and a parse that interns does so thousands of times, while the ~0.1 µs
+    /// it would save is paid once per context - and is already dwarfed by the
+    /// `InternerContext::new()` beside it, which measures 1.4 µs
+    /// (`benches/context.rs`). A grammar that never interns pays eight
+    /// kilobytes it never reads; that is the cache's price and it is charged
+    /// per context built, not per parse - a *cloned* context starts with an
+    /// empty one.
+    slots: Vec<Slot>,
     /// Which interner the slots belong to. A context whose interner is
     /// replaced between parses gets an empty cache rather than another
     /// interner's numbers.
@@ -57,7 +66,7 @@ impl InternCache {
 
     pub fn new() -> Self {
         Self {
-            slots: vec![Self::empty_slot(); Self::SLOTS].into_boxed_slice(),
+            slots: vec![Self::empty_slot(); Self::SLOTS],
             interner: 0,
         }
     }

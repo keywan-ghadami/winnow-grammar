@@ -300,6 +300,13 @@
     cost depend on its input, which ADR 17 promises it does not. The count is
     what would make it possible if the two-step proves clumsy.
 
+- **`benches/context.rs`, and the advice it makes concrete.** Building a
+  `ParseContext` costs 1.4 µs, essentially all of it `InternerContext::new()`:
+  a `ThreadedRodeo` is a sharded map and allocates every shard. Parsing a small
+  input with a *cloned* context is 50 ns. So build one context and clone it -
+  which also shares the interner, which is what ADR 14 wanted - and README now
+  says so where a reader starts.
+
 - **The `ahash` cargo feature**, and the first documentation of any of them.
   With it the interner hashes with `ahash::RandomState` instead of std's; both
   are seeded per process, and `ahash` is faster on the short keys an interner

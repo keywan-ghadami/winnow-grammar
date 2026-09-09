@@ -53,3 +53,7 @@ harness = false
 [[bench]]
 name = "repetition"
 harness = false
+
+[[bench]]
+name = "context"
+harness = false
