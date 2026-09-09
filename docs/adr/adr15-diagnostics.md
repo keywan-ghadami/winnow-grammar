@@ -68,6 +68,7 @@ nested 500 deep overflowed the stack in a debug build.
 | 10 | List items carry their index | `in item 2` |
 | 11 | `Display` without position, `render(source)` with it | winnow's `Parser::parse` prints the position itself |
 | 12 | The error is a value with fields | `e.expected`, `e.found`, `e.rule_stack`, `e.offset` |
+| 13 | `render(source)` prints the line under the message, with a caret under what was found | `   3 \|     temp: f64,` / `           ^^^^` |
 
 Built-ins get an expectation (`identifier`, `integer literal`, …) because
 winnow's primitives only report the position.

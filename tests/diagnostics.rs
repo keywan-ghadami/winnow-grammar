@@ -150,6 +150,27 @@ fn p11_display_without_position_render_with() {
     assert_eq!(e.offset, 8);
 }
 
+/// Point 13: the message shows the line it is about, with a caret under the
+/// token that was found.
+///
+/// `at line 1, column 9` is a position a reader has to go and look up; the
+/// point of a diagnostic is that they do not have to. The caret is as wide as
+/// the token when the token really is the text at that offset - one character
+/// otherwise, which is never wrong.
+#[test]
+fn p13_source_line_with_caret() {
+    let src = "let\n  oops;";
+    let mut s = Stateful {
+        state: ParseContext::<()>::default(),
+        input: LocatingSlice::new(src),
+    };
+    let e = Diag::parse_assign()
+        .parse_next(&mut s)
+        .unwrap_err()
+        .render(src);
+    assert!(e.contains("\n   2 |   oops;\n         ^^^^"), "{e}");
+}
+
 /// Point 12: the error is a value with fields - tools can evaluate it instead
 /// of parsing text.
 #[test]
