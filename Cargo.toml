@@ -18,6 +18,9 @@ trace = ["winnow/debug"]
 # `parse_<rule>_pieces` on a `par_fold` rule runs the pieces on rayon's global
 # pool. Without it the same function runs them in sequence.
 rayon = ["dep:rayon"]
+# The interner hashes with `ahash` instead of std's `RandomState`. Both are
+# seeded per process; `ahash` is faster on the short keys an interner sees.
+ahash = ["dep:ahash"]
 
 [dependencies]
 # `simd` routes winnow's `find_slice` through `memchr` (SIMD where the target
@@ -33,6 +36,7 @@ lasso = { version = "0.7", features = ["multi-threaded"] }
 # available to users of the macro as well - not only to our own tests.
 paste = "1.0"
 rayon = { version = "1.10", optional = true }
+ahash = { version = "0.8.12", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }

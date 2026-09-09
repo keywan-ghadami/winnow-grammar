@@ -1,4 +1,11 @@
 use lasso::{Key, Spur, ThreadedRodeo};
+
+/// How the interner hashes. `ahash` under its feature, std's `RandomState`
+/// otherwise - see `InternerContext`.
+#[cfg(feature = "ahash")]
+type Hasher = ahash::RandomState;
+#[cfg(not(feature = "ahash"))]
+type Hasher = std::hash::RandomState;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -73,15 +80,29 @@ impl Symbol {
     }
 }
 
+/// The interner a parse interns into: a shared `lasso::ThreadedRodeo` behind
+/// an `Arc`, which ADR 14 makes the caller's to own and to share.
+///
+/// **The hash function is a cargo feature, not a type parameter.** With
+/// `ahash` on, it hashes with `ahash::RandomState`; otherwise with std's.
+/// Both are seeded per process. Making it a type parameter instead would put
+/// one in `ParseContext` and from there in every generated signature, for a
+/// choice that has two sensible answers - so it is a feature, and the crate
+/// does not ask a grammar author about it.
+///
+/// A caller who wants an interner of a different *kind* - a slot table whose
+/// numbers are the identity, say - does not replace this one: they declare a
+/// `state` and put it there (ADR 20). `ident` and `intern(…)` keep meaning
+/// this interner, which is what a built-in is for.
 #[derive(Debug, Clone)]
 pub struct InternerContext {
-    backend: Arc<ThreadedRodeo>,
+    backend: Arc<ThreadedRodeo<Spur, Hasher>>,
 }
 
 impl InternerContext {
     pub fn new() -> Self {
         Self {
-            backend: Arc::new(ThreadedRodeo::default()),
+            backend: Arc::new(ThreadedRodeo::with_hasher(Hasher::default())),
         }
     }
 

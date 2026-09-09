@@ -300,6 +300,20 @@
     cost depend on its input, which ADR 17 promises it does not. The count is
     what would make it possible if the two-step proves clumsy.
 
+- **The `ahash` cargo feature**, and the first documentation of any of them.
+  With it the interner hashes with `ahash::RandomState` instead of std's; both
+  are seeded per process, and `ahash` is faster on the short keys an interner
+  sees - **15-28% on the interner itself**, on a lookup, an insert and the
+  cache's fallbacks alike. It does not measurably change a parse: the lookup
+  cache is what a parse hits, and across repeated runs the parse benchmarks
+  moved between -5% and +9%, which is noise rather than a result. Off by
+  default; README now has a *Cargo features* table (`rayon`, `ahash`, `trace`),
+  which nothing had documented before.
+  - The hasher is a feature rather than a type parameter on purpose: a
+    parameter would land in `ParseContext` and from there in every generated
+    signature, for a choice with two sensible answers. An interner of a
+    different *kind* is `state T;`, not this knob.
+
 - **A lookup cache in front of the interner.** `ParseContext` carries a
   direct-mapped table of 512 slots (8 KiB), and `ParseContext::intern` - what
   `ident` and `intern(…)` call - answers from it before asking the interner.

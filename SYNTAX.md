@@ -370,6 +370,13 @@ input, between two interners over the same input, and - when the pieces of a
 `par_fold` share one interner - on how the threads interleaved. Do not persist
 it and do not read order into it. `resolve` is the way back to the text.
 
+**Which hasher the interner uses** is the `ahash` cargo feature, not a type
+parameter: on, it hashes with `ahash`; off, with std's `RandomState`. Both are
+seeded per process. It makes the interner itself 15-28% faster and does not
+measurably change a parse, because the context's lookup cache is what a parse
+actually hits - README's *Cargo features* has the numbers. An interner of a
+different *kind* is not this knob: declare a `state` and put it there.
+
 Two properties come from the interner rather than from `intern`. An
 alternative that interns and then backtracks leaves its entry behind - no
 symbol is ever wrong, the interner just holds more than the result names. And

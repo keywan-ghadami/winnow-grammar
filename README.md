@@ -29,6 +29,30 @@ winnow-grammar = "0.1.0"
 winnow = "0.6"
 ```
 
+### Cargo features
+
+All are off by default; the crate is complete without them.
+
+| feature | what it does |
+|---|---|
+| `rayon` | `parse_<rule>_pieces` runs the pieces of a `par_fold` rule on rayon's global pool. Without it the same driver runs them in sequence - the same cut, the same answer - which is what lets a test check the split without threads. |
+| `ahash` | The interner hashes with [`ahash`](https://crates.io/crates/ahash) instead of std's `RandomState`. See below. |
+| `trace` | Turns on `winnow/debug`, which traces every rule as it runs. |
+
+**About `ahash`.** Both hashers are seeded per process, so neither can be
+driven quadratic by chosen input; `ahash` is simply faster on the short keys an
+interner sees. Measured on `benches/interning.rs`, it makes **the interner
+itself 15-28% faster** - a lookup, an insert, and the cache's own fallbacks
+alike.
+
+What it does *not* do is show up in a parse. A `ParseContext` keeps a lookup
+cache in front of the interner, so a parse that sees the same words repeatedly -
+which is what a parse does - rarely reaches the hasher at all; across repeated
+runs the parse benchmarks moved between -5% and +9%, which is this machine's
+noise and not a result. Turn it on if you call the interner directly, or if
+your input has many distinct strings so that inserts dominate; leave it off
+otherwise and save the dependency.
+
 ## Quick Start
 
 Here is a complete example of a Cron expression parser.
