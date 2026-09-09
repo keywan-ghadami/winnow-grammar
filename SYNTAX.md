@@ -919,9 +919,33 @@ in decl
 How the message is chosen, in this order:
 
 1. **Progress** — of two failing branches, the one that got further wins.
-2. **Priority** at the same position — `fail("…")` beats everything, a labelled
-   alternative beats a bare token expectation.
-3. Otherwise the expectations are **merged** into `expected one of: …`.
+2. **What the grammar required**, at the same position — an expectation the
+   grammar *insisted* on outranks one it would merely have accepted. A
+   repetition below its minimum insists; one that has already met it, and an
+   `x?`, do not. Among those it merely accepts, the implicit whitespace skip
+   ranks last: where the entry rule is a repetition, everything is optional,
+   and the reader is looking for the next token and not for trivia.
+3. **Priority** — `fail("…")` beats everything, a labelled alternative beats a
+   bare token expectation.
+4. Otherwise the expectations are **merged** into `expected one of: …`.
+
+Nothing that loses is thrown away. What was possible but not required is named
+under the message:
+
+```text
+expected `.`; found unexpected token `x` at line 1, column 5
+note: also possible here: `#`, integer literal
+in item
+in item 3
+in doc
+```
+
+Whitespace is the one thing left out of that note, and it is left out for a
+reason that holds generally: **an expectation is worth reporting only if
+satisfying it can move the parse past this position.** The skip is greedy, so
+at this offset it has already taken all the whitespace there was, and adding
+more only moves the same failure to offset + n. A comment form stays — a `/`
+where `//` belongs is a real mistake.
 
 Failures that an optional (`x?`) or a repetition (`x*`) discards are remembered:
 if the rule later fails at a shallower position, or input is left over, that
@@ -936,7 +960,8 @@ Tools you have:
 - `parse_next` returns the bare `ParseError` (use `e.render(source)` for the
   position); `.parse()` goes through winnow's own `ParseError`, which prints the
   position and the source line itself.
-- The error is a value: `e.expected`, `e.found`, `e.rule_stack`, `e.offset`.
+- The error is a value: `e.expected`, `e.found`, `e.rule_stack`, `e.offset`,
+  and `e.also_possible()` for what the note would say.
 
 The contract, one test per point, is in `docs/adr/adr15-diagnostics.md`.
 
