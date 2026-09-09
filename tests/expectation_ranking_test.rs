@@ -123,3 +123,58 @@ fn an_element_that_only_skipped_whitespace_did_not_begin() {
     // …and it is a note, not the headline: the trailing input is the failure.
     assert!(!e.starts_with("expected `fn`"), "{e}");
 }
+
+grammar! {
+    grammar Calls {
+        // A file of blocks, because that is the shape the ranking is about:
+        // the outer repetition is what records an unfinished block's error.
+        pub rule doc -> usize = bs:block* -> { bs.len() }
+        rule block -> usize = "{" xs:stmt* "}" -> { xs.len() }
+        rule stmt -> usize =
+              n:name "(" ")" -> { n.len() }
+            | n:name "{" "}" -> { n.len() }
+            | n:name -> { n.len() }
+        rule name -> &'a str = s:raw_ident -> { s }
+    }
+}
+
+/// What a *losing* alternative found is kept when it had begun.
+///
+/// `alt` throws away the errors of the alternatives before the winning one.
+/// Usually that is right - they failed where they started and said nothing new.
+/// Where a shorter alternative succeeds and a longer one failed after reading
+/// tokens, it is how the useful message disappears: here `a` parses as a bare
+/// name, so the two alternatives that read the name and wanted a `(` or a `{`
+/// are abandoned, and without recording them nothing at all is known about the
+/// position after `a`.
+#[test]
+fn an_alternative_that_began_is_kept_when_a_shorter_one_wins() {
+    let e = Calls::parse_doc().parse_test("{ a").inner.unwrap_err();
+    // The `}` the block is missing - not the `(` or `{` a call could have had.
+    assert!(
+        e.starts_with("unexpected end of input, expected `}`"),
+        "{e}"
+    );
+    assert!(e.contains("`(`") && e.contains("`{`"), "{e}");
+}
+
+/// Two requirements at one position are told apart by how long each has been
+/// open.
+///
+/// The block started at the first character and is still missing its `}`; the
+/// alternative that read `a` and hoped for a `(` started two characters ago.
+/// Without this the guess wins, because two expectations beat one on priority -
+/// the flaw the ranking removed for optional continuations and which applies
+/// again as soon as both sides are requirements.
+#[test]
+fn the_requirement_that_has_been_open_longest_leads() {
+    let e = Calls::parse_doc().parse_test("{ a").inner.unwrap_err();
+    assert!(
+        e.starts_with("unexpected end of input, expected `}`"),
+        "{e}"
+    );
+    assert!(
+        !e.starts_with("unexpected end of input, expected one of"),
+        "{e}"
+    );
+}

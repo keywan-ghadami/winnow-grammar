@@ -82,10 +82,13 @@ impl<'a> Codegen<'a> {
             // `# "…"`: if the alternative fails at its starting position, its
             // name counts as the expectation. Until now the label was parsed
             // and discarded.
-            match &v.label {
+            let labelled = match &v.label {
                 Some(label) => quote_spanned! {span=> ::winnow_grammar::rt::labelled(#label, #closure) },
                 None => closure,
-            }
+            };
+            // What an alternative found is kept when it had begun - see
+            // `rt::alternative`.
+            quote_spanned! {span=> ::winnow_grammar::rt::alternative(#labelled) }
         });
 
         if variants.len() == 1 {

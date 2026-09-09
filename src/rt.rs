@@ -317,6 +317,39 @@ pub fn frames_bytes(input: &[u8], boundary: &[u8], n: usize) -> Vec<std::ops::Ra
     starts.windows(2).map(|w| w[0]..w[1]).collect()
 }
 
+/// One alternative of a rule, with its failure kept when it had **begun**.
+///
+/// `alt` keeps the first alternative that matches and throws away what the ones
+/// before it found. Usually that is right - they failed where they started and
+/// said nothing the `alt` does not already know. Where a *shorter* alternative
+/// succeeds and a longer one failed after reading tokens, it is how the useful
+/// message disappears: in `let xs = [1, 2`, `let` and `xs` each parse as an
+/// expression statement, so the statement that would have said `expected
+/// expression` at the `[` is abandoned and nothing at that position survives -
+/// except the implicit whitespace skip, which is then the furthest thing that
+/// failed and becomes the message.
+///
+/// Recording it is the treatment `x?` and `x*` already give a discarded error,
+/// and the ranking decides afterwards whether it was worth reporting.
+#[inline]
+pub fn alternative<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+    mut p: P,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>>
+where
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+{
+    move |input| {
+        let start = input.current_token_start();
+        match p.parse_next(input) {
+            Err(ErrMode::Backtrack(e)) => {
+                e.record_if_begun(&mut input.state, start);
+                Err(ErrMode::Backtrack(e))
+            }
+            r => r,
+        }
+    }
+}
+
 /// `x?` - at most once. A failed attempt is **recorded**, not thrown away:
 /// if the rule later fails at a shallower position or input is left over, it
 /// is the better message.
