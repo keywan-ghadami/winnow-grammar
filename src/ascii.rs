@@ -23,6 +23,14 @@
 //! short and the scan is a fraction of the work, it is ~10%
 //! (`benches/interning.rs`, `parse/idents`).
 //!
+//! **A run of nothing is answered before the word loop is entered.** That
+//! comparison is against a character predicate over runs that exist; the case
+//! the scan was losing was the one where there is nothing to scan, and the
+//! implicit whitespace skip makes that the most frequent call in any syntactic
+//! grammar. Testing the first byte costs 6 instructions where the run is real
+//! and saves 22 where it is not - worth 17% of Nikaia's compiler parsing its
+//! own examples. `TODO.md` §5 has the measurement.
+//!
 //! Note what the middle of that comparison rules out: scanning the same class
 //! one *byte* at a time reaches 2.67 GiB/s, so decoding was never the cost -
 //! winnow already walks a `&str` byte by byte for an ASCII predicate. The
@@ -128,6 +136,27 @@ impl AsciiClass {
     /// How many leading bytes of `b` are in the class.
     #[inline]
     pub fn run(self, b: &[u8]) -> usize {
+        // A run of nothing is the common case, and one byte test answers it.
+        //
+        // The word loop pays its whole setup - eight bytes read, a mask built,
+        // a count of trailing zeros divided - to report that the very first
+        // byte is not in the class. Measured with callgrind, that is 43
+        // instructions against 21 for the guarded path, and the guard costs 6
+        // on a run that does have something in it.
+        //
+        // It is worth it because of *who* calls this. The implicit whitespace
+        // skip runs between every pair of elements of every syntactic rule, and
+        // in a language written without gratuitous blanks most of those find
+        // nothing - so a parse pays at least one empty run per token, against
+        // one non-empty run per token that is a class. Nikaia's compiler
+        // parsing 2 000 small functions goes 281.6 M instructions -> 233.7 M,
+        // which is **17%**; its 1BRC example over 200 000 rows goes 123.6 M ->
+        // 120.0 M, and the per-byte scan it is being compared against is
+        // 119.4 M, so the guard recovers seven eighths of what the word scan
+        // costs there. See `TODO.md` §5 for the measurement this replaced.
+        if b.is_empty() || !self.contains(b[0]) {
+            return 0;
+        }
         let mut n = 0;
         while n + 8 <= b.len() {
             let w = u64::from_le_bytes(b[n..n + 8].try_into().expect("eight bytes"));

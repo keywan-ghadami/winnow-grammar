@@ -358,6 +358,12 @@
 
 ### Added
 
+- **A run of nothing is answered before the word loop is entered** (`TODO.md` §5, now closed). `AsciiClass::run` scans eight bytes at a time, and it paid that whole setup - eight bytes read, a mask built, a count of trailing zeros divided - to report that the very *first* byte is not in the class. Testing that byte first costs 6 instructions where the run is real and saves 22 where it is not.
+
+  It is worth it because of who calls this: the implicit whitespace skip runs between every pair of elements of every syntactic rule, and in a language written without gratuitous blanks most of those find nothing, so a parse pays at least one empty run per token. Callgrind, same source and flags, so the numbers do not depend on the machine: **Nikaia's compiler parsing 2 000 small functions goes 281.6 M instructions to 233.7 M, which is 17%**; its 1BRC example over 200 000 rows goes 123.6 M to 120.0 M, against 119.4 M for a build with no word scan at all - so the guard recovers seven eighths of what the scan costs there while keeping everything it buys on long runs.
+
+  The item this closes had estimated the word path at ~30 instructions against ~4-5 per character, break-even at six to eight characters, and proposed a threshold in the code generator. Measured, the per-character loop is ~7 a character and the word path's fixed cost is 9 above it: **the crossover is at three characters**, and a class that always matches exactly one is written as `digit`, which is a `one_of` and never reaches this code. There is no threshold worth having, and the cost was somewhere else.
+
 - **A parse error prints the line it is about, with a caret under the token**
   (ADR 15, point 13). `render(source)` said `at line 3, column 5` and left the
   reader to go and find line 3 - true, and half a diagnostic. It now reads
