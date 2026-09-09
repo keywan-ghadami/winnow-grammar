@@ -251,17 +251,12 @@ impl<S> ParseContext<S> {
         // An attempt that failed exactly where it started took nothing back
         // with it, which is the ordinary "another element could have gone
         // here" - see `ParseError::merge`.
-        // A syntactic rule skips trivia before its first element, so "failed
-        // where it started" means "failed no further than the end of that
-        // skip". Without this, `xs:item* "."` over `1 2 x` calls the item
-        // required - it failed at `x`, one blank past where it began - and the
-        // `.` that would fix the input loses to it.
-        let began = if self.last_trivia.0 == start {
-            self.last_trivia.1
-        } else {
-            start
-        };
-        e.optional = e.offset <= began;
+        e.optional = !self.began(start, e.offset);
+        // Only a requirement is ranked by it, and only against another
+        // requirement - see `ParseError::begun_at`.
+        if !e.optional {
+            e.begun_at = Some(e.begun_at.map_or(start, |b| b.min(start)));
+        }
         e.trivia = self.in_trivia;
         for r in self.rules.iter().rev() {
             e.push_rule(r);
@@ -270,6 +265,23 @@ impl<S> ParseContext<S> {
             Some(f) => f.merge(e),
             None => e,
         });
+    }
+
+    /// Did an attempt that started at `start` and failed at `offset` get
+    /// anywhere?
+    ///
+    /// A syntactic rule skips trivia before its first element, so "failed where
+    /// it started" means "failed no further than the end of that skip".
+    /// Without that correction `xs:item* "."` over `1 2 x` calls the item
+    /// *begun* - it failed at `x`, one blank past where it was tried - and the
+    /// `.` that would fix the input loses to it.
+    pub fn began(&self, start: usize, offset: usize) -> bool {
+        let from = if self.last_trivia.0 == start {
+            self.last_trivia.1
+        } else {
+            start
+        };
+        offset > from
     }
 
     /// The better of the returned error and the recorded one.

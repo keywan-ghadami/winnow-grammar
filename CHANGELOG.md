@@ -88,6 +88,35 @@
 
 ### Fixed
 
+- **A losing alternative took its error with it.** `alt` keeps the first
+  alternative that matches and throws away what the ones before it found.
+  Usually right - they failed where they started and said nothing the `alt`
+  does not know. Where a *shorter* alternative succeeds over one that read
+  tokens first, it is how the useful message disappears: `{ a` against
+  `stmt = name "(" ")" | name "{" "}" | name` parses `a` as a bare name, and
+  nothing is then known about the position after it. An alternative that had
+  **begun** is now recorded, the same treatment `x?` and `x*` already get; one
+  that failed where it started still is not, or every branch not taken would
+  be in the message.
+
+  Measured on Nikaia's corpus, where three rows had been filed as "the
+  whitespace skip wins on progress" and were this instead: `let xs = [1, 2`
+  reported ``expected one of: `//`, whitespace`` because `let` and `xs` each
+  parse as an expression statement and the alternative that would have said
+  `expected expression` at the `[` was abandoned. All three now say
+  `expected expression`. So does an unterminated string literal, which reports
+  the `"` it is missing rather than `` `\`, any character ``.
+
+- **Two requirements at one position are told apart by how long each has been
+  open.** The one whose attempt started earlier is the structure the reader is
+  inside; the other is a guess made a token ago. Without it, `fn f() {` … at
+  end of input reported ``expected one of: `(`, `{` `` - an identifier that
+  could have been a call or a struct literal - over the `}` an unclosed block
+  is missing, because two expectations beat one on priority. That is the flaw
+  the ranking removed for optional continuations, and it applies again as soon
+  as both sides are requirements. `ParseError::begun_at` carries it and the
+  comparison sits above priority.
+
 - **An element that *began* is not an optional continuation.** A repetition at
   or above its minimum records the element's error instead of returning it, and
   `record` marked the whole of it optional - including what the element had

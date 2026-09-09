@@ -933,9 +933,13 @@ How the message is chosen, in this order:
    whitespace skip ranks last: where the entry rule is a repetition,
    everything is optional, and the reader is looking for the next token and
    not for trivia.
-3. **Priority** — `fail("…")` beats everything, a labelled alternative beats a
+3. **How long each has been open**, between two requirements — the one whose
+   attempt started earlier is the structure the reader is inside, and the other
+   is a guess made a token ago. `{ a` at end of input wants the block's `}`,
+   not the `(` a call could have had after the name.
+4. **Priority** — `fail("…")` beats everything, a labelled alternative beats a
    bare token expectation.
-4. Otherwise the expectations are **merged** into `expected one of: …`.
+5. Otherwise the expectations are **merged** into `expected one of: …`.
 
 Nothing that loses is thrown away. What was possible but not required is named
 under the message:
@@ -958,6 +962,14 @@ where `//` belongs is a real mistake.
 Failures that an optional (`x?`) or a repetition (`x*`) discards are remembered:
 if the rule later fails at a shallower position, or input is left over, that
 remembered reason is reported instead of a generic message.
+
+**So is what a losing alternative found, when it had begun.** `alt` keeps the
+first alternative that matches and drops the errors of the ones before it —
+right when they failed where they started, and wrong when a *shorter*
+alternative wins over one that read tokens first. `{ a` against
+`stmt = name "(" ")" | name "{" "}" | name` parses `a` as a bare name, and
+without keeping what the other two found, nothing at all is known about the
+position after it.
 
 Tools you have:
 

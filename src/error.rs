@@ -86,6 +86,16 @@ pub struct ErrorCore {
     /// optional continuation: the grammar was not looking for trivia here,
     /// it was looking for the next token.
     pub trivia: bool,
+    /// Where the attempt that produced this error began, when it was recorded
+    /// rather than returned.
+    ///
+    /// Two requirements at one offset are told apart by how long each has been
+    /// open. `fn f() {` … `let x = 1` at end of input wants its `}`, and the
+    /// alternative that read the `1` and hoped for a `(` after it wants
+    /// something too - but it started two characters ago and the block started
+    /// at the beginning of the file. The one that has been open longest is the
+    /// structure the reader is actually inside.
+    pub begun_at: Option<usize>,
 }
 
 impl ParseError {
@@ -102,6 +112,7 @@ impl ParseError {
             also: Vec::new(),
             optional: false,
             trivia: false,
+            begun_at: None,
         }))
     }
 
@@ -121,6 +132,7 @@ impl ParseError {
             also: Vec::new(),
             optional: false,
             trivia: false,
+            begun_at: None,
         }))
     }
 
@@ -195,6 +207,17 @@ impl ParseError {
         match (self.trivia, other.trivia) {
             (true, false) => return other.absorbing(*self.0),
             (false, true) => return self.absorbing(*other.0),
+            _ => {}
+        }
+        // Then how long each has been open. Both are requirements at the same
+        // position; the one whose attempt started earlier is the structure the
+        // reader is inside, and the other is a guess made two characters ago.
+        // Without this, `expected one of: `(`, `{`` - an identifier that could
+        // have been a call or a struct literal - outranks the `}` an unclosed
+        // block is missing, because two expectations beat one on priority.
+        match (self.begun_at, other.begun_at) {
+            (Some(a), Some(b)) if a < b => return self.absorbing_also(*other.0),
+            (Some(a), Some(b)) if b < a => return other.absorbing_also(*self.0),
             _ => {}
         }
         match self.priority.cmp(&other.priority) {
@@ -452,6 +475,17 @@ pub trait Diagnostics: Sized {
     /// continuation or an element that had already committed.
     fn record<S>(&self, ctx: &mut crate::ParseContext<S>, start: usize);
 
+    /// [`record`](Self::record) for an alternative of a rule that lost, kept
+    /// **only if it had begun**.
+    ///
+    /// `alt` throws away what the alternatives before the winning one found,
+    /// and where a *shorter* alternative succeeds that can be the only error
+    /// at the position the input actually goes wrong. An alternative that
+    /// failed where it started has already told the `alt` above it everything
+    /// it knows, and recording those would bury the message in every
+    /// expectation of every branch not taken.
+    fn record_if_begun<S>(&self, ctx: &mut crate::ParseContext<S>, start: usize);
+
     /// The error of a hand-written parser plugged into a grammar. Those
     /// return [`ParseError`] whatever the grammar's error type is.
     fn from_parse_error(e: ParseError) -> Self;
@@ -507,6 +541,12 @@ impl Diagnostics for ParseError {
         ctx.record(self, start);
     }
 
+    fn record_if_begun<S>(&self, ctx: &mut crate::ParseContext<S>, start: usize) {
+        if ctx.began(start, self.offset) {
+            ctx.record(self, start);
+        }
+    }
+
     fn from_parse_error(e: ParseError) -> Self {
         e
     }
@@ -540,6 +580,8 @@ impl Diagnostics for EmptyError {
     }
 
     fn record<S>(&self, _ctx: &mut crate::ParseContext<S>, _start: usize) {}
+
+    fn record_if_begun<S>(&self, _ctx: &mut crate::ParseContext<S>, _start: usize) {}
 
     fn from_parse_error(_e: ParseError) -> Self {
         EmptyError

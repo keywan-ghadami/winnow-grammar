@@ -82,51 +82,7 @@ of a live counter. **Unmeasured**, and worth measuring before building - the
 second pass is not free either, and `count(p)` over anything but a character
 class cannot use it.
 
-## 5. An alternative that loses takes its error with it
-
-`alt` keeps the first alternative that matches and throws away what the ones
-before it found. Where a **shorter** alternative succeeds and a longer one
-failed deep inside, the message a reader gets is about the wrong position.
-
-Nikaia's corpus row A4 is the reproduction, and it looks like a trivia problem
-until it is traced:
-
-```nika
-fn f() {
-    let xs = [1, 2
-}
-```
-
-`let` parses as an expression statement, and so does `xs`; the statement that
-would have said `expected expression` at the `[` is abandoned, and with it the
-only error at that offset. What is left there is the implicit whitespace skip,
-which is therefore the furthest thing that failed and becomes the message:
-``expected one of: `//`, whitespace``. B1 (`let y = ` before a `}`) and G1 (a
-curly quote) are the same shape.
-
-**The fix is the treatment `x?` and `x*` already get**: record a failing
-alternative's error instead of dropping it, and let the ranking decide
-afterwards. Two attempts, both reverted, both worth knowing about:
-
-* **Recording every failing alternative** (`rt::alternative` around each
-  variant) fixes A4 and breaks `diagnostics.rs` p03 and p12: the error recorded
-  by the *alternative* reaches `furthest` before the enclosing repetition
-  records it with `.item(1)`, and the merge keeps the first stack, so `in item
-  1` disappears from the rule stack. The tie-break in `ParseError::merge` says
-  the most recently recorded stack wins, and it does *not* apply here, so the
-  first thing to find out is which branch of the ranking these two take.
-* **Keeping trivia in a slot of its own**, so it never wins the progress race,
-  removes the trivia headline and puts the message on a token that was correct:
-  A4 then reads ``expected `}` `` at the `=`, which is worse than a useless
-  expectation at the right position. This was tried once before and reverted
-  for the same reason; it is a symptom fix, and the cause is above.
-
-Restricting the recording to alternatives that **consumed input** before
-failing is the untried third option, and the one that matches the rest of the
-ranking: an alternative that failed where it began has told the `alt` above it
-everything it knows anyway.
-
-## 6. The word-at-a-time class scan below its break-even
+## 5. The word-at-a-time class scan below its break-even
 
 ADR 23's changelog entry says of the eight-bytes-at-a-time scan that on short
 runs it *"is smaller but never negative."* On a bounded run of one or two
@@ -162,7 +118,7 @@ characters. **Next step:** measure where the crossover actually sits on a real
 machine, then have the code generator take the character path where it knows
 the upper bound is below it - `{1,2}` is a compile-time fact.
 
-## 7. `InternCache` is sized for identifiers, not for aggregation
+## 6. `InternCache` is sized for identifiers, not for aggregation
 
 Not a defect - an assumption worth making settable. The cache is 512
 direct-mapped slots and says so plainly: *"There is no collision handling
@@ -184,7 +140,7 @@ The map is flat and the cache degrades. Making `InternCache::BITS` settable per
 context would close it: how many distinct keys a parse will see is the caller's
 knowledge and not the library's.
 
-## 8. Release readiness for 0.1.0
+## 7. Release readiness for 0.1.0
 
 `CHANGELOG.md` has collected real breaking changes under *Unreleased* -
 `parse_<rule>_pieces` taking a context, `Diagnostics` gaining a method,
@@ -193,5 +149,5 @@ migration note, that the examples in `README.md` and `SYNTAX.md` still compile
 as written, and that nothing in them describes a version that no longer exists.
 Twice in one week a stale sentence sent someone down the wrong path - an
 attribute that never existed, and a return type that had changed - so this is a
-pass over the documents, not over the code. **Not before §1-§7**: there is
+pass over the documents, not over the code. **Not before §1-§6**: there is
 still language missing.
