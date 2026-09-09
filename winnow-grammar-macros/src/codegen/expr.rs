@@ -691,9 +691,18 @@ impl<'a> Codegen<'a> {
             ::winnow::token::take_while(1.., |c| ::winnow::stream::AsChar::as_char(c).is_alphanumeric() || ::winnow::stream::AsChar::as_char(c) == '_')
         };
 
+        // `interner I;` sends `ident` and `intern(…)` to the declared interner
+        // instead of the context's - ADR 22.
+        let intern_with = |inner: &TokenStream| match &self.grammar.interner {
+            Some(ty) => quote_spanned! {span=>
+                ::winnow_grammar::rt::intern_in::<#ty, _, _, _, _>(#inner)
+            },
+            None => quote_spanned! {span=> ::winnow_grammar::rt::intern(#inner) },
+        };
+
         let p = match name_str.as_str() {
             "raw_ident" => raw_ident,
-            "ident" => quote_spanned! {span=> ::winnow_grammar::rt::intern(#raw_ident) },
+            "ident" => intern_with(&raw_ident),
             // `intern(p)`: the one builtin that takes an argument. The
             // argument is an ordinary pattern, so `intern(until(";"))` and
             // `intern(my_rule)` are the same shape as `intern(string)`.
@@ -769,7 +778,7 @@ impl<'a> Codegen<'a> {
             "intern" => match args {
                 [arg] => {
                     let inner = self.generate_argument_expr(arg, is_lexical);
-                    quote_spanned! {span=> ::winnow_grammar::rt::intern(#inner) }
+                    intern_with(&inner)
                 }
                 _ => {
                     let msg = format!(

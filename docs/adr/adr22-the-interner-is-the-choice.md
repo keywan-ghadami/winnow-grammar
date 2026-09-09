@@ -1,6 +1,11 @@
 # ADR 22: Which Interner Is the Choice; Sharing, Threading and Merging Are Its Consequences
 
-**Status:** Proposed, not implemented. **Date:** 2026-09-09.
+**Status:** Accepted, implemented. **Date:** 2026-09-09.
+**Tests:** `tests/interner_decl_test.rs` (`ident` and `intern(…)` reaching a
+declared slot table, one state carrying a `state` and an `interner`, and a
+grammar that declares nothing behaving as before), `tests/ui/state.rs` (a
+second declaration, a state that provides none, and a type that is not an
+interner).
 **Supersedes:** ADR 20's rejection of a pluggable interner, which answered a
 different question (below).
 **Related:** ADR 14 (the shared context), ADR 19 (`_pieces` clones a context),
@@ -50,7 +55,7 @@ that wants a different interner must also stop using the two built-ins that
 exist to intern. The rejection answered "can I have my own interner?" when the
 question is "can the language's own interning operators use it?"
 
-## Decision (proposed)
+## Decision
 
 **`interner I;`, declared like `state T;` and implemented the same way: a
 bound, not a type parameter.**
@@ -102,12 +107,14 @@ affordable:
 
 ## Costs, and why this is proposed rather than built
 
-* **The lookup cache does not obviously fit.** `ParseContext`'s cache keys on
-  "the interner that made these symbols" and skips ~13 ns of a ~21 ns lookup.
-  With a pluggable interner it either moves behind the trait - each
-  implementation caching as it sees fit, and a slot table does not need one -
-  or it stays and has to be told when the interner beneath it changed. The
-  second is what exists; the first is probably right. Unresolved.
+* **The lookup cache stays with the built-in interner.** It keys on "the
+  interner that made these symbols" and skips ~13 ns of a ~21 ns lookup, and it
+  knows how to invalidate itself only for the interner it was written against.
+  A declared interner therefore does not go through it and caches as it sees
+  fit - which the interesting ones do not need, a slot table's lookup already
+  being an index. Resolved this way rather than moving the cache behind the
+  trait, because the trait would then have to carry the invalidation contract
+  for an optimisation most implementations do not want.
 * **Three ADRs now touch this seam** (14, 19, 21), and each of them chose a
   default. Building this before ADR 21's measurement - the shared table's lock
   against a per-piece table on more cores than four - risks making the wrong
@@ -118,7 +125,15 @@ affordable:
   a bound's advantage over a parameter, and it should be measured rather than
   assumed.
 
-**Recommendation: design it together with ADR 21, and build both once the
-per-piece question has been measured on hardware worth measuring on.** What
-this ADR settles now is the framing - that there is one choice here and not
-three - and that ADR 20's rejection of it does not stand.
+**Built, and it did not wait for ADR 21's measurement** - because it removes
+the need for it. That measurement was to decide a *default*: shared interner or
+one per piece. With the interner declared by the grammar and living in the
+state, the caller decides, and `parse_<rule>_pieces` versus `_pieces_with`
+(ADR 19 §2) is where they say so. ADR 21's `finish` is still what a per-piece
+interner needs at merge time, and it is still unbuilt; this ADR is what makes
+its absence a limitation of one workload rather than of the design.
+
+One thing the implementation found that the proposal had missed:
+`Symbol::from_index` was `pub(crate)`, so a trait that produces `Symbol` could
+not be implemented outside this crate at all. It is public now, with the
+contract written on it - the number must be one that interner assigned.

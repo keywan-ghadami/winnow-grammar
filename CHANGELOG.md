@@ -324,6 +324,27 @@
     cost depend on its input, which ADR 17 promises it does not. The count is
     what would make it possible if the two-step proves clumsy.
 
+- **`interner I;`: `ident` and `intern(…)` use the interner the grammar names**
+  (ADR 22). A grammar could already put an interner of its own in its state and
+  reach it from a hand-written parser; what it could not do was make the
+  language's own interning operators use it, since those compiled to
+  `ParseContext::intern`. Now they compile to the declared one.
+  - `winnow_grammar::Interner` is the trait - `intern(&mut self, &str) -> Symbol`
+    and `resolve`. **`Symbol` stays the identity type**, so no rule's return
+    type changes, and `Symbol::from_index` is public because an implementation
+    outside this crate has to produce symbols. A slot table's slot number *is*
+    that id.
+  - A bound, not a type parameter, like `state T;` - so one state carries both
+    declarations and two grammars with different interners run over one
+    context. A grammar that declares nothing is unchanged, cache included.
+  - A declared interner does not go through the context's lookup cache: the
+    cache belongs to the built-in interner, which it knows how to invalidate,
+    and an interner whose lookup is already a slot index has nothing to gain.
+  - Why it matters beyond speed: whether the interner can be shared across the
+    pieces of a `par_fold`, whether it must be thread-safe, and whether a merge
+    has to remap identities are all consequences of *which* interner is in the
+    context - one choice that ADRs 14, 19 and 21 had each answered separately.
+
 - **A grammar that never interns no longer pays for an interner.** Building a
   `ParseContext` cost **1.35 µs**, essentially all of it
   `InternerContext::new()` - a `ThreadedRodeo` is a sharded map and allocates

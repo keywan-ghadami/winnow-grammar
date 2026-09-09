@@ -15,6 +15,7 @@ pub mod error;
 #[doc(hidden)]
 pub mod intern_cache;
 pub mod interner;
+pub mod interner_trait;
 /// Runtime helpers for the generated code.
 pub mod rt;
 pub mod span;
@@ -27,6 +28,7 @@ pub use error::{
 };
 
 pub use interner::{InternerContext, Symbol};
+pub use interner_trait::{Interner, InternerOf};
 pub use state::StateOf;
 
 /// When and how a failing parse produces its diagnostics.

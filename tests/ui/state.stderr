@@ -4,10 +4,129 @@ error: a grammar declares at most one `state`; a grammar that needs two things i
 25 |         state Unrelated;
    |         ^^^^^
 
-error[E0277]: the grammar declares `state Table`, but this parse's state does not provide one
-  --> tests/ui/state.rs:32:13
+error: a grammar declares at most one `interner`
+  --> tests/ui/state.rs:35:9
    |
-32 |     let _ = Needs::parse_r().parse_test_in(Unrelated, "abc");
+35 |         interner Unrelated;
+   |         ^^^^^^^^
+
+error[E0277]: `interner Table;` names a type that is not an interner
+  --> tests/ui/state.rs:40:1
+   |
+40 | / grammar! {
+41 | |     grammar NeedsInterner {
+42 | |         interner Table;
+43 | |         pub r -> winnow_grammar::Symbol = w:ident -> { w }
+44 | |     }
+45 | | }
+   | |_^ not an interner
+   |
+help: the trait `Interner` is not implemented for `Table`
+  --> tests/ui/state.rs:7:1
+   |
+ 7 | pub struct Table {
+   | ^^^^^^^^^^^^^^^^
+   = note: implement `winnow_grammar::Interner` for it: `intern(&mut self, &str) -> Symbol` and `resolve(&self, Symbol) -> &str`
+help: the trait `Interner` is implemented for `InternerContext`
+  --> src/interner.rs
+   |
+   | impl crate::Interner for InternerContext {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `InternerOf`
+  --> src/interner_trait.rs
+   |
+   | pub trait InternerOf<I: Interner> {
+   |                         ^^^^^^^^ required by this bound in `InternerOf`
+   = note: this error originates in the macro `grammar` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `interner Table;` names a type that is not an interner
+  --> tests/ui/state.rs:42:18
+   |
+42 |         interner Table;
+   |                  ^^^^^ not an interner
+   |
+help: the trait `Interner` is not implemented for `Table`
+  --> tests/ui/state.rs:7:1
+   |
+ 7 | pub struct Table {
+   | ^^^^^^^^^^^^^^^^
+   = note: implement `winnow_grammar::Interner` for it: `intern(&mut self, &str) -> Symbol` and `resolve(&self, Symbol) -> &str`
+help: the trait `Interner` is implemented for `InternerContext`
+  --> src/interner.rs
+   |
+   | impl crate::Interner for InternerContext {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `interner`
+  --> src/interner_trait.rs
+   |
+   | pub trait InternerOf<I: Interner> {
+   |                         ^^^^^^^^ required by this bound in `InternerOf::interner`
+   |     /// The interner this state carries.
+   |     fn interner(&mut self) -> &mut I;
+   |        -------- required by a bound in this associated function
+
+error[E0277]: `interner Table;` names a type that is not an interner
+  --> tests/ui/state.rs:42:18
+   |
+42 |         interner Table;
+   |                  ^^^^^ not an interner
+   |
+help: the trait `Interner` is not implemented for `Table`
+  --> tests/ui/state.rs:7:1
+   |
+ 7 | pub struct Table {
+   | ^^^^^^^^^^^^^^^^
+   = note: implement `winnow_grammar::Interner` for it: `intern(&mut self, &str) -> Symbol` and `resolve(&self, Symbol) -> &str`
+help: the trait `Interner` is implemented for `InternerContext`
+  --> src/interner.rs
+   |
+   | impl crate::Interner for InternerContext {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `intern_in`
+  --> src/rt.rs
+   |
+   | pub fn intern_in<'a, I, S, O, P, E>(
+   |        --------- required by a bound in this function
+...
+   |     I: crate::Interner,
+   |        ^^^^^^^^^^^^^^^ required by this bound in `intern_in`
+
+error[E0277]: `interner Table;` names a type that is not an interner
+  --> tests/ui/state.rs:40:1
+   |
+40 | / grammar! {
+41 | |     grammar NeedsInterner {
+42 | |         interner Table;
+43 | |         pub r -> winnow_grammar::Symbol = w:ident -> { w }
+44 | |     }
+45 | | }
+   | |_^ not an interner
+   |
+help: the trait `Interner` is not implemented for `Table`
+  --> tests/ui/state.rs:7:1
+   |
+ 7 | pub struct Table {
+   | ^^^^^^^^^^^^^^^^
+   = note: implement `winnow_grammar::Interner` for it: `intern(&mut self, &str) -> Symbol` and `resolve(&self, Symbol) -> &str`
+help: the trait `Interner` is implemented for `InternerContext`
+  --> src/interner.rs
+   |
+   | impl crate::Interner for InternerContext {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `intern_in`
+  --> src/rt.rs
+   |
+   | pub fn intern_in<'a, I, S, O, P, E>(
+   |        --------- required by a bound in this function
+...
+   |     I: crate::Interner,
+   |        ^^^^^^^^^^^^^^^ required by this bound in `intern_in`
+   = note: this error originates in the macro `grammar` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the grammar declares `state Table`, but this parse's state does not provide one
+  --> tests/ui/state.rs:49:13
+   |
+49 |     let _ = Needs::parse_r().parse_test_in(Unrelated, "abc");
    |             ^^^^^^^^^^^^^^^^ no `Table` in this state
    |
 help: the trait `StateOf<Table>` is not implemented for `Unrelated`
@@ -16,7 +135,7 @@ help: the trait `StateOf<Table>` is not implemented for `Unrelated`
 12 | pub struct Unrelated;
    | ^^^^^^^^^^^^^^^^^^^^
    = note: parse with a state of type `Table`, or implement `StateOf<Table>` for the state you have
-note: required by a bound in `parse_r`
+note: required by a bound in `Needs::parse_r`
   --> tests/ui/state.rs:14:1
    |
 14 | / grammar! {
@@ -25,5 +144,29 @@ note: required by a bound in `parse_r`
 17 | |         pub r -> usize = _w:alpha1 -> { _state.user().n += 1; _state.user().n }
 18 | |     }
 19 | | }
+   | |_^ required by this bound in `parse_r`
+   = note: this error originates in the macro `grammar` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the grammar declares `interner Table`, but this parse's state does not provide one
+  --> tests/ui/state.rs:50:13
+   |
+50 |     let _ = NeedsInterner::parse_r().parse_test_in(Unrelated, "abc");
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^ no `Table` in this state
+   |
+help: the trait `InternerOf<Table>` is not implemented for `Unrelated`
+  --> tests/ui/state.rs:12:1
+   |
+12 | pub struct Unrelated;
+   | ^^^^^^^^^^^^^^^^^^^^
+   = note: parse with a state of type `Table`, or implement `InternerOf<Table>` for the state you have
+note: required by a bound in `NeedsInterner::parse_r`
+  --> tests/ui/state.rs:40:1
+   |
+40 | / grammar! {
+41 | |     grammar NeedsInterner {
+42 | |         interner Table;
+43 | |         pub r -> winnow_grammar::Symbol = w:ident -> { w }
+44 | |     }
+45 | | }
    | |_^ required by this bound in `parse_r`
    = note: this error originates in the macro `grammar` (in Nightly builds, run with -Z macro-backtrace for more info)

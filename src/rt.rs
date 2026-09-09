@@ -651,6 +651,29 @@ where
     }
 }
 
+/// `intern(p)` and `ident`, for a grammar that declared an `interner` - ADR 22.
+///
+/// The same combinator as [`intern`], reaching the interner the grammar named
+/// instead of the one in the context. It does *not* go through the context's
+/// lookup cache: that cache belongs to the built-in interner, which it knows
+/// how to invalidate; a declared interner caches as it sees fit, and the
+/// interesting ones - a direct-index table whose slot number is the identity -
+/// have nothing a cache would add.
+pub fn intern_in<'a, I, S, O, P, E>(
+    mut p: P,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<crate::Symbol, ErrMode<E>>
+where
+    I: crate::Interner,
+    S: Clone + std::fmt::Debug + crate::InternerOf<I>,
+    O: AsRef<str>,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+{
+    move |input| {
+        let text = p.parse_next(input)?;
+        Ok(crate::InternerOf::<I>::interner(&mut input.state.user_state).intern(text.as_ref()))
+    }
+}
+
 /// `recover(body, sync)` - run `body`, and on failure skip to `sync` and carry
 /// on, keeping what went wrong.
 ///

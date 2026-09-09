@@ -13,6 +13,9 @@ pub struct GrammarDefinition {
     /// `None` keeps them generic over any state, which is what a grammar that
     /// does not declare one has always been.
     pub state: Option<syn::Type>,
+    /// `interner I;` - the interner `ident` and `intern(…)` use (ADR 22).
+    /// `None` means the one in the context, with its lookup cache.
+    pub interner: Option<syn::Type>,
     pub imports: Vec<ImportedGrammar>,
     pub uses: Vec<syn::ItemUse>,
 }
@@ -186,6 +189,7 @@ impl From<parser::GrammarDefinition> for GrammarDefinition {
             imports: p.imports.into_iter().map(Into::into).collect(),
             uses,
             state: p.state,
+            interner: p.interner,
         }
     }
 }

@@ -378,8 +378,42 @@ it and do not read order into it. `resolve` is the way back to the text.
 parameter: on, it hashes with `ahash`; off, with std's `RandomState`. Both are
 seeded per process. It makes the interner itself 15-28% faster and does not
 measurably change a parse, because the context's lookup cache is what a parse
-actually hits - README's *Cargo features* has the numbers. An interner of a
-different *kind* is not this knob: declare a `state` and put it there.
+actually hits - README's *Cargo features* has the numbers.
+
+**An interner of a different kind is `interner I;`.** Declared like `state`, it
+sends `ident` and `intern(…)` to an interner of your own instead of the one in
+the context:
+
+```rust,ignore
+struct Slots { names: Vec<String> }
+
+impl winnow_grammar::Interner for Slots {
+    fn intern(&mut self, text: &str) -> Symbol { … }   // the slot number is the id
+    fn resolve(&self, symbol: Symbol) -> &str { &self.names[symbol.index() as usize] }
+}
+
+grammar! {
+    grammar Measurements {
+        interner Slots;
+        pub row -> Symbol = c:ident ";" digit1 -> { c }
+    }
+}
+```
+
+`Symbol` stays the identity type, so no rule's return type changes -
+`Symbol::from_index` is how an implementation makes one, and the contract is
+that the number must be one *it* assigned. The declaration is a bound like
+`state`'s, so one state can carry both and two grammars with different
+interners can run over one context. A declared interner does **not** go through
+the context's lookup cache: that cache belongs to the built-in interner, and an
+interner whose lookup is already a slot index has nothing to gain from one.
+
+What this decides beyond speed: whether the interner can be *shared* across the
+pieces of a `par_fold`, whether it must be thread-safe, and whether a merge has
+to remap identities are all consequences of which interner you name -
+`docs/adr/adr22-the-interner-is-the-choice.md` has the table.
+
+Two properties come from the interner rather than from `intern`.
 
 Two properties come from the interner rather than from `intern`. An
 alternative that interns and then backtracks leaves its entry behind - no

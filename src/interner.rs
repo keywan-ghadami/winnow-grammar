@@ -71,11 +71,16 @@ impl Symbol {
         self.0.get() - 1
     }
 
-    /// The inverse of [`index`](Self::index). Deliberately not public: a
-    /// symbol built from a number nothing interned resolves to whatever
-    /// happens to be at that index, or panics. The cache uses it to rebuild
-    /// what it stored.
-    pub(crate) fn from_index(index: u32) -> Self {
+    /// The inverse of [`index`](Self::index): a symbol *is* its number, and an
+    /// interner that hands out dense numbers hands out symbols.
+    ///
+    /// Public because [`Interner`](crate::Interner) is - an implementation
+    /// outside this crate has to produce symbols, and a slot table's slot
+    /// number is the one it means. That is also the whole of the contract:
+    /// **the number must be one this interner assigned**. A symbol built from
+    /// a number nothing interned resolves to whatever happens to sit at that
+    /// index, or panics, exactly as an index into the wrong `Vec` would.
+    pub fn from_index(index: u32) -> Self {
         Self(NonZeroU32::new(index + 1).expect("index + 1 is never zero"))
     }
 }
@@ -153,5 +158,21 @@ impl InternerContext {
 impl Default for InternerContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl crate::Interner for InternerContext {
+    /// Takes `&mut self` because the trait must admit a single-threaded
+    /// interner, which cannot intern through a shared reference. This one can,
+    /// `ThreadedRodeo` synchronising internally, so the exclusive borrow is
+    /// ignored rather than needed.
+    #[inline]
+    fn intern(&mut self, text: &str) -> Symbol {
+        self.intern_string(text)
+    }
+
+    #[inline]
+    fn resolve(&self, symbol: Symbol) -> &str {
+        InternerContext::resolve(self, symbol)
     }
 }

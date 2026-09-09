@@ -69,10 +69,16 @@ impl Codegen<'_> {
     /// a grammar that declares none. A bound rather than a substitution, so
     /// rules stay generic and one state can serve two grammars - ADR 20.
     pub fn state_bound(&self) -> TokenStream {
-        match &self.grammar.state {
+        let state = match &self.grammar.state {
             Some(ty) => quote! { + ::winnow_grammar::StateOf<#ty> },
             None => quote! {},
-        }
+        };
+        // `interner I;` rides on the same `S`, for the same reason - ADR 22.
+        let interner = match &self.grammar.interner {
+            Some(ty) => quote! { + ::winnow_grammar::InternerOf<#ty> },
+            None => quote! {},
+        };
+        quote! { #state #interner }
     }
 }
 
@@ -104,6 +110,21 @@ impl<'a> Codegen<'a> {
         // `state T;`: a grammar-local extension trait, so that an action
         // writes `_state.user()` and gets a `&mut T` with no turbofish and no
         // second live borrow of the context - ADR 20.
+        let interner_accessor = match &self.grammar.interner {
+            Some(ty) => quote_spanned! {Span::call_site()=>
+                trait __DeclaredInterner { fn declared_interner(&mut self) -> &mut #ty; }
+                impl<S: ::winnow_grammar::InternerOf<#ty>> __DeclaredInterner
+                    for ::winnow_grammar::ParseContext<S>
+                {
+                    #[inline]
+                    fn declared_interner(&mut self) -> &mut #ty {
+                        ::winnow_grammar::InternerOf::<#ty>::interner(&mut self.user_state)
+                    }
+                }
+            },
+            None => quote! {},
+        };
+
         let state_accessor = match &self.grammar.state {
             Some(ty) => quote_spanned! {Span::call_site()=>
                 trait __UserState { fn user(&mut self) -> &mut #ty; }
@@ -151,6 +172,7 @@ impl<'a> Codegen<'a> {
                 #(#use_statements)*
 
                 #state_accessor
+                #interner_accessor
 
                 use ::winnow::prelude::*;
                 use ::winnow::token::literal;

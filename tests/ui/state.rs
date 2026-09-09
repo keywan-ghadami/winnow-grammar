@@ -27,7 +27,25 @@ grammar! {
     }
 }
 
+// A grammar declares at most one interner, and a state that provides none is
+// rejected where it is passed.
+grammar! {
+    grammar TwiceInterner {
+        interner Table;
+        interner Unrelated;
+        pub r -> winnow_grammar::Symbol = w:ident -> { w }
+    }
+}
+
+grammar! {
+    grammar NeedsInterner {
+        interner Table;
+        pub r -> winnow_grammar::Symbol = w:ident -> { w }
+    }
+}
+
 fn main() {
     // The state does not provide what the grammar declared.
     let _ = Needs::parse_r().parse_test_in(Unrelated, "abc");
+    let _ = NeedsInterner::parse_r().parse_test_in(Unrelated, "abc");
 }
