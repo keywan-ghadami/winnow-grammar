@@ -82,6 +82,11 @@ pub struct ErrorCore {
     /// minimum - below the minimum the element's error is returned instead,
     /// and a returned error is a requirement.
     pub optional: bool,
+    /// Produced inside a `peek(…)` or `not(…)`. Never recorded: a lookahead
+    /// consumes nothing and demands nothing, so what fails inside it is a test
+    /// that said no rather than an expectation of the grammar at that
+    /// position. See [`crate::rt::lookahead`].
+    pub lookahead: bool,
     /// Recorded by the implicit whitespace skip. Ranks below every other
     /// optional continuation: the grammar was not looking for trivia here,
     /// it was looking for the next token.
@@ -112,6 +117,7 @@ impl ParseError {
             also: Vec::new(),
             optional: false,
             trivia: false,
+            lookahead: false,
             begun_at: None,
         }))
     }
@@ -132,6 +138,7 @@ impl ParseError {
             also: Vec::new(),
             optional: false,
             trivia: false,
+            lookahead: false,
             begun_at: None,
         }))
     }
@@ -475,6 +482,11 @@ pub trait Diagnostics: Sized {
     /// continuation or an element that had already committed.
     fn record<S>(&self, ctx: &mut crate::ParseContext<S>, start: usize);
 
+    /// Marks this error as one a lookahead produced - see
+    /// [`crate::rt::lookahead`]. It still fails the alternative around it; it
+    /// is only never *recorded*.
+    fn in_lookahead(self) -> Self;
+
     /// [`record`](Self::record) for an alternative of a rule that lost, kept
     /// **only if it had begun**.
     ///
@@ -537,6 +549,11 @@ impl Diagnostics for ParseError {
         }
     }
 
+    fn in_lookahead(mut self) -> Self {
+        self.lookahead = true;
+        self
+    }
+
     fn record<S>(&self, ctx: &mut crate::ParseContext<S>, start: usize) {
         ctx.record(self, start);
     }
@@ -576,6 +593,10 @@ impl Diagnostics for EmptyError {
     }
 
     fn expected(self, _start: usize, _what: &'static str) -> Self {
+        self
+    }
+
+    fn in_lookahead(self) -> Self {
         self
     }
 

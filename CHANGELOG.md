@@ -88,6 +88,21 @@
 
 ### Fixed
 
+- **What fails inside a `peek(…)` or `not(…)` is no longer an expectation.** A
+  lookahead consumes nothing and demands nothing: an alternative whose
+  lookahead says no simply does not apply, so its failure is a test that said
+  no rather than something the grammar wanted there. Recorded, it put the
+  *test* in the message and won on progress, because a lookahead is tried one
+  token further along than the thing that actually belongs.
+
+  Found by the grammar that needs the idiom: `peek(("{" digit))` is how a
+  repetition bound is told apart from a brace group, and every brace group
+  that was not a bound then reported `expected a digit`. Nikaia's `n:digit1
+  { n }` - an action block missing its `->` - now reports ``expected `->` ``.
+  The error is still returned, so the alternative fails as it did; only the
+  recording is suppressed, inside the lookahead and on the error that comes
+  back out of it.
+
 - **A losing alternative took its error with it.** `alt` keeps the first
   alternative that matches and throws away what the ones before it found.
   Usually right - they failed where they started and said nothing the `alt`

@@ -125,6 +125,13 @@ pub struct ParseContext<S = ()> {
     /// what the grammar was looking for. See [`crate::rt::skip_trivia`].
     #[doc(hidden)]
     pub in_trivia: bool,
+    /// Set while a `peek(…)` or `not(…)` runs. What fails inside a lookahead
+    /// is not recorded: the lookahead asks whether something is there and an
+    /// alternative whose answer is no simply does not apply, so its failure is
+    /// not an expectation of the grammar at that position. See
+    /// [`crate::rt::lookahead`].
+    #[doc(hidden)]
+    pub in_lookahead: bool,
     /// Where the last chain of implicit whitespace skips started and ended.
     ///
     /// Only [`record`](Self::record) reads it, and only to answer one
@@ -151,6 +158,7 @@ impl<S: Default> Default for ParseContext<S> {
             recovered: Vec::new(),
             fold: FoldProgress::default(),
             in_trivia: false,
+            in_lookahead: false,
             last_trivia: (usize::MAX, usize::MAX),
         }
     }
@@ -175,6 +183,7 @@ impl<S> ParseContext<S> {
             recovered: Vec::new(),
             fold: FoldProgress::default(),
             in_trivia: false,
+            in_lookahead: false,
             last_trivia: (usize::MAX, usize::MAX),
         }
     }
@@ -268,6 +277,10 @@ impl<S> ParseContext<S> {
     /// Records a discarded error - following the same ranking as
     /// [`ParseError::merge`].
     pub fn record(&mut self, e: &ParseError, start: usize) {
+        // A lookahead demands nothing - see `rt::lookahead`.
+        if self.in_lookahead || e.lookahead {
+            return;
+        }
         let mut e = e.clone();
         // Optional, but only where the attempt failed at `start` - the
         // position it would have begun at. The callers are `opt_recording` and
