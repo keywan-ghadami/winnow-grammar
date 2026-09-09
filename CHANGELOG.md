@@ -415,6 +415,15 @@
   costs one interner call, and rehashing would cost more than that for every
   entry nobody looks up again.
 
+  **And what it is worth, measured since.** Callgrind over `intern(until(";"))`
+  on 100 000 rows, sized against unsized: at 413 distinct keys it saves **one**
+  instruction per row, at 5 000 it saves **60**. The default 512 slots already
+  holds 1BRC's 413 stations without thrashing, so sizing for that parse buys
+  nothing - and the 617-against-514 above, which rejected keying the aggregation
+  by `Symbol` at all, was not an artefact of an unsized cache. The win starts
+  where the key count passes the default by an order of magnitude, and the
+  documentation says so rather than leaving the reader to guess.
+
 - **A rule may be labelled: `rule expr -> i64 # "expression" = …`.** The same
   syntax after an alternative already named that alternative; between a rule's
   return type and its `=` it names the rule, and stands in for every
