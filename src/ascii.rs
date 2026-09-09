@@ -64,7 +64,7 @@ impl AsciiClass {
         ranges: &[(b'a', b'z'), (b'A', b'Z')],
     };
     /// What `raw_ident` matches in its ASCII half; the rest is decoded, see
-    /// [`run_or_wide`].
+    /// [`Self::run_or_wide`].
     pub const IDENT: Self = Self {
         ranges: &[(b'0', b'9'), (b'a', b'z'), (b'A', b'Z'), (b'_', b'_')],
     };

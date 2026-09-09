@@ -402,7 +402,7 @@ the context:
 struct Slots { names: Vec<String> }
 
 impl winnow_grammar::Interner for Slots {
-    fn intern(&mut self, text: &str) -> Symbol { … }   // the slot number is the id
+    fn intern(&mut self, text: &str) -> Symbol { todo!() }   // the slot number is the id
     fn resolve(&self, symbol: Symbol) -> &str { &self.names[symbol.index() as usize] }
 }
 
