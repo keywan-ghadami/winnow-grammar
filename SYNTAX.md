@@ -963,6 +963,15 @@ Failures that an optional (`x?`) or a repetition (`x*`) discards are remembered:
 if the rule later fails at a shallower position, or input is left over, that
 remembered reason is reported instead of a generic message.
 
+**What fails inside a `peek(…)` or `not(…)` is not.** A lookahead consumes
+nothing and demands nothing — an alternative whose lookahead says no simply
+does not apply — so its failure is a test that said no rather than an
+expectation of the grammar at that position. Without that,
+`peek(("{" digit))`, which tells a repetition bound apart from a brace group,
+would report `expected a digit` for every brace group that is not a bound —
+and win, because a lookahead is tried one token further along than the thing
+that actually belongs there.
+
 **So is what a losing alternative found, when it had begun.** `alt` keeps the
 first alternative that matches and drops the errors of the ones before it —
 right when they failed where they started, and wrong when a *shorter*

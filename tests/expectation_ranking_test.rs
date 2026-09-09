@@ -178,3 +178,34 @@ fn the_requirement_that_has_been_open_longest_leads() {
         "{e}"
     );
 }
+
+grammar! {
+    grammar Bounds {
+        pub rule doc -> usize = "x" b:bound? "!" -> { b.unwrap_or(0) }
+        // A brace group is a bound only when it starts with a digit - the
+        // lookahead is how a grammar tells the two apart.
+        rule bound -> usize = peek(("{" digit)) "{" n:usize "}" -> { n }
+    }
+}
+
+/// What fails inside a `peek(…)` is a test that said no, not an expectation.
+///
+/// The lookahead consumes nothing and demands nothing: an alternative whose
+/// lookahead fails simply does not apply. Recorded, it puts the *test* in the
+/// message - every brace group that is not a bound would report
+/// `expected a digit` - and it wins on progress, because a lookahead is tried
+/// one token further along than the thing that actually belongs there.
+#[test]
+fn a_failing_lookahead_is_not_an_expectation() {
+    let e = Bounds::parse_doc().parse_test("x{a}").inner.unwrap_err();
+    assert!(e.starts_with("expected `!`"), "{e}");
+    assert!(!e.contains("digit"), "{e}");
+}
+
+/// And the lookahead still does its work: a brace group that *is* a bound is
+/// one, and the rule that reads it is entered.
+#[test]
+fn the_lookahead_still_decides_the_alternative() {
+    Bounds::parse_doc().parse_test("x{7}!").assert_success_is(7);
+    Bounds::parse_doc().parse_test("x!").assert_success_is(0);
+}

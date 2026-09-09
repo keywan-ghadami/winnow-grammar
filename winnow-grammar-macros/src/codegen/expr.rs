@@ -1177,11 +1177,15 @@ impl<'a> Codegen<'a> {
             }
             ModelPattern::Peek(inner, _) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
-                quote_spanned! {span=> ::winnow::combinator::peek(#p) }
+                quote_spanned! {span=>
+                    ::winnow_grammar::rt::lookahead(::winnow::combinator::peek(#p))
+                }
             }
             ModelPattern::Not(inner, _) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
-                quote_spanned! {span=> ::winnow::combinator::not(#p) }
+                quote_spanned! {span=>
+                    ::winnow_grammar::rt::lookahead(::winnow::combinator::not(#p))
+                }
             }
             ModelPattern::Until { pattern, .. } => self.generate_skip_to(pattern, is_lexical),
             ModelPattern::Count { pattern, .. } => {

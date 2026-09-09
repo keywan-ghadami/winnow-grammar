@@ -317,6 +317,40 @@ pub fn frames_bytes(input: &[u8], boundary: &[u8], n: usize) -> Vec<std::ops::Ra
     starts.windows(2).map(|w| w[0]..w[1]).collect()
 }
 
+/// `peek(X)` and `not(X)`: what fails inside a lookahead is not recorded.
+///
+/// A lookahead consumes nothing and demands nothing - it asks whether `X` is
+/// there, and an alternative whose lookahead says no simply does not apply.
+/// Its failure is therefore not an expectation of the grammar at that
+/// position, and recording it puts the *test* in the message instead of the
+/// thing being tested. `peek(("{" digit))`, which tells a repetition bound
+/// apart from a brace group, would otherwise report `expected a digit` for
+/// every brace group that is not a bound.
+///
+/// The error is still returned, so the alternative fails as it always did.
+/// Only the recording is suppressed, and only while the lookahead runs.
+#[inline]
+pub fn lookahead<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+    mut p: P,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>>
+where
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+{
+    move |input| {
+        let outer = input.state.in_lookahead;
+        input.state.in_lookahead = true;
+        let r = p.parse_next(input);
+        input.state.in_lookahead = outer;
+        // The flag covers what is recorded *inside*; the mark covers the error
+        // that comes back out, which an enclosing alternative would otherwise
+        // record on its way past.
+        match r {
+            Err(ErrMode::Backtrack(e)) => Err(ErrMode::Backtrack(e.in_lookahead())),
+            r => r,
+        }
+    }
+}
+
 /// One alternative of a rule, with its failure kept when it had **begun**.
 ///
 /// `alt` keeps the first alternative that matches and throws away what the ones
