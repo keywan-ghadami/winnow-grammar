@@ -715,12 +715,15 @@ fn builtin_may_consume(name: &str, c: char) -> bool {
         "space0" | "space1" => c == ' ' || c == '\t',
         "multispace0" | "multispace1" => c.is_whitespace(),
         "line_ending" => c == '\n' || c == '\r',
-        // `intern(p)` consumes exactly what `p` consumes and nothing besides:
-        // it is a map over its argument, and the argument is checked on its
-        // own in the `RuleCall` arm above. Judging it opaque would reject
-        // `intern(until(";" | frame_end))`, whose inner scan does stop at the
-        // boundary.
-        "intern" => false,
+        // `intern(p)`, `text(p)` and `dec[T](p)` consume exactly what `p`
+        // consumes and nothing besides: each is a map over its argument, and
+        // the argument is checked on its own in the `RuleCall` arm above.
+        // `text` is a `.take()` over the run its argument makes and `dec` a
+        // `try_map` over the same; neither can reach a byte the argument did
+        // not. Judging them opaque rejects the grammar the frame check exists
+        // for - `whole:dec<i32>(digit{1,2})` in a line-framed record, whose
+        // `digit` cannot match a newline in the first place.
+        "intern" | "text" | "dec" => false,
         // `string`, `char`, `any`, and anything not listed.
         _ => true,
     }

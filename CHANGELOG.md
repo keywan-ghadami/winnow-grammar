@@ -88,6 +88,25 @@
 
 ### Fixed
 
+- **`text(p)` and `dec<T>(p)` could not appear inside a `#[frame]`.** The
+  frame check had no arm for either in `builtin_may_consume`, so `_ => true`
+  said they consume anything and the walk rejected the grammar the check
+  exists for:
+
+  ```text
+  error: the built-in `dec` in rule `TENTHS` can consume the boundary "\n" of
+  frame `MEASUREMENT`
+  ```
+
+  `intern(p)` was already excepted, with the reasoning that fits all three:
+  each is a map over its argument - `text` a `.take()` over the run, `dec` a
+  `try_map` over the same text - and consumes exactly what the argument
+  consumes, which the `RuleCall` arm checks on its own. Transparent, not
+  opaque: `text(any{3})` in a line-framed rule is still rejected, and the
+  message now points at the `any` (`tests/ui/frames.rs`). Found by Nikaia's
+  1BRC example, which had to be written `#[frame(…, unchecked)]` to measure at
+  all.
+
 - **An expectation was discarded for having fewer alternatives than the one
   beside it.** `merge` promoted an error carrying two or more expectations to
   `PRIO_AGGREGATED` and, at equal offset, *returned that side and dropped the

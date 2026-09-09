@@ -750,7 +750,9 @@ of two cases:
 
 - **Safe:** a literal without the boundary in it; a built-in whose alphabet
   cannot include it (`digit1`, `ident`, …); lookahead, which consumes nothing;
-  an `until(…)` whose terminator **covers** the boundary — one of its
+  a wrapper that is a map over its argument — `intern(p)`, `text(p)`,
+  `dec<T>(p)` — which is judged by that argument, checked on its own, and not
+  by itself; an `until(…)` whose terminator **covers** the boundary — one of its
   alternatives is `frame_end`, the boundary literal itself (or a prefix of
   it), or `line_ending` for a newline boundary.
 - **Rejected**, with the rule and pattern named: a literal that contains the
