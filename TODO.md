@@ -65,18 +65,6 @@ whether a byte grammar is a second, narrower set of built-ins over a fixed
 built: it decides how much of the language a byte grammar shares with a text
 one.
 
-## 4. Release readiness for 0.1.0
-
-`CHANGELOG.md` has collected real breaking changes under *Unreleased* -
-`parse_<rule>_pieces` taking a context, `Diagnostics` gaining a method,
-`ParseContext` gaining fields. Before a release: check that every one carries a
-migration note, that the examples in `README.md` and `SYNTAX.md` still compile
-as written, and that nothing in them describes a version that no longer exists.
-Twice in one week a stale sentence sent someone down the wrong path - an
-attribute that never existed, and a return type that had changed - so this is a
-pass over the documents, not over the code. **Not before §1-§3**: there is
-still language missing.
-
 ## 4. `count(p)` pays for keeping its count
 
 Three loops over 200_000 digits, element for element identical and differing
@@ -91,3 +79,15 @@ The obvious answer for a character class is to count from the slice it matched:
 of a live counter. **Unmeasured**, and worth measuring before building - the
 second pass is not free either, and `count(p)` over anything but a character
 class cannot use it.
+
+## 5. Release readiness for 0.1.0
+
+`CHANGELOG.md` has collected real breaking changes under *Unreleased* -
+`parse_<rule>_pieces` taking a context, `Diagnostics` gaining a method,
+`ParseContext` gaining fields. Before a release: check that every one carries a
+migration note, that the examples in `README.md` and `SYNTAX.md` still compile
+as written, and that nothing in them describes a version that no longer exists.
+Twice in one week a stale sentence sent someone down the wrong path - an
+attribute that never existed, and a return type that had changed - so this is a
+pass over the documents, not over the code. **Not before §1-§4**: there is
+still language missing.
