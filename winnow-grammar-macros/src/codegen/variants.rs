@@ -10,9 +10,18 @@ impl<'a> Codegen<'a> {
         ret_type: &syn::Type,
         is_lexical: bool,
         is_rule_start: bool,
+        label: Option<&str>,
     ) -> TokenStream {
         let span = Span::mixed_site();
         let input = &self.input_ident;
+
+        // A rule-level `# "…"` substitutes for the expectations of *every*
+        // alternative, and only when the rule failed where it began. So the
+        // whitespace a syntactic rule skips at its start has to happen outside
+        // the label: skipped inside, the failure sits past the blank, the
+        // offsets no longer match and the label never substitutes. Hoisted, it
+        // is also done once instead of once per alternative.
+        let skip_inside = is_rule_start && label.is_none();
 
         let variant_parsers = variants.iter().map(|v| {
             let mut steps_code = TokenStream::new();
@@ -20,7 +29,7 @@ impl<'a> Codegen<'a> {
             let is_explicit = v.is_explicit;
 
             // 1. Optional Leading WS
-            if is_rule_start && !is_lexical {
+            if skip_inside && !is_lexical {
                 steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
             }
 
@@ -85,7 +94,7 @@ impl<'a> Codegen<'a> {
             let use_with_span = v.with_span;
             let is_explicit = v.is_explicit;
 
-            if is_rule_start && !is_lexical {
+            if skip_inside && !is_lexical {
                 steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
             }
 
@@ -140,7 +149,7 @@ impl<'a> Codegen<'a> {
             };
             // A single-variant rule may be labelled too (`# "…"`): if it fails
             // at its starting position, its name is the expectation.
-            match &v.label {
+            let body = match &v.label {
                 Some(label) => quote_spanned! {span=>
                     {
                         let mut __labelled = ::winnow_grammar::rt::labelled(
@@ -151,12 +160,52 @@ impl<'a> Codegen<'a> {
                     }
                 },
                 None => body,
-            }
+            };
+            self.wrap_in_rule_label(body, label, is_rule_start, is_lexical)
         } else {
-            quote_spanned! {span=>
+            let body = quote_spanned! {span=>
                 alt((
                     #(#variant_parsers),*
                 )).parse_next(#input)
+            };
+            self.wrap_in_rule_label(body, label, is_rule_start, is_lexical)
+        }
+    }
+
+    /// `rule primary_expr -> Expr # "expression" = a | b | …`
+    ///
+    /// The rule's own name for itself, reported when it fails at the position
+    /// it started at - the case where listing what each alternative could have
+    /// begun with says the least. If it got further, whatever it was in the
+    /// middle of is the more informative message and stays.
+    ///
+    /// The leading whitespace skip is emitted here, outside the label, for the
+    /// reason `skip_inside` gives.
+    fn wrap_in_rule_label(
+        &self,
+        body: TokenStream,
+        label: Option<&str>,
+        is_rule_start: bool,
+        is_lexical: bool,
+    ) -> TokenStream {
+        let Some(label) = label else {
+            return body;
+        };
+        let span = Span::mixed_site();
+        let input = &self.input_ident;
+        let lead = if is_rule_start && !is_lexical {
+            quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
+        } else {
+            quote! {}
+        };
+        quote_spanned! {span=>
+            {
+                #lead
+                let mut __rule_labelled = ::winnow_grammar::rt::labelled(
+                    #label,
+                    |#input: &mut ::winnow_grammar::ParseInput<'a, S>| { #body },
+                );
+                ::winnow::Parser::parse_next(&mut __rule_labelled, #input)
             }
         }
     }

@@ -318,6 +318,9 @@ pub struct Rule {
     pub generics: Generics,
     pub params: Vec<RuleParameter>,
     pub return_type: Type,
+    /// `# "…"` between the return type and the `=`: what this rule is, in the
+    /// words a message should use when it fails at its own starting position.
+    pub label: Option<String>,
     pub variants: Vec<RuleVariant>,
 }
 
@@ -360,6 +363,19 @@ impl Parse for Rule {
             syn::parse_quote!(())
         };
 
+        // `# "…"` here labels the whole rule, where the same syntax after an
+        // alternative labels only that one. A rule with several alternatives
+        // had nowhere to hang a label before, which is exactly the case that
+        // needs one: twelve token spellings where the word "expression"
+        // belongs.
+        let label = if input.peek(Token![#]) && input.peek2(syn::LitStr) {
+            let _: Token![#] = input.parse()?;
+            let lit: syn::LitStr = input.parse()?;
+            Some(lit.value())
+        } else {
+            None
+        };
+
         let capture_span = if input.peek(Token![@]) && input.peek2(Token![=]) {
             let _ = input.parse::<Token![@]>()?;
             let _ = input.parse::<Token![=]>()?;
@@ -378,6 +394,7 @@ impl Parse for Rule {
             generics,
             params,
             return_type,
+            label,
             variants,
         })
     }
@@ -413,9 +430,14 @@ impl ToTokens for Rule {
         // If we want to support round-tripping or accurate ToTokens, we should store capture_span in Rule.
         // But for now, just emitting = is standard. If the variants use it, fine.
 
+        let label_tokens = match &self.label {
+            Some(l) => quote! { # #l },
+            None => quote! {},
+        };
+
         tokens.append_all(quote! {
             #(#attrs)*
-            #vis rule #name #generics #params_tokens -> #ret = #variants_tokens
+            #vis rule #name #generics #params_tokens -> #ret #label_tokens = #variants_tokens
         });
     }
 }

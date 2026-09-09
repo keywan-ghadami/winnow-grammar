@@ -291,6 +291,26 @@
 
 ### Added
 
+- **A rule may be labelled: `rule expr -> i64 # "expression" = …`.** The same
+  syntax after an alternative already named that alternative; between a rule's
+  return type and its `=` it names the rule, and stands in for every
+  alternative at once. That is the case the per-alternative form cannot reach -
+  a rule with a dozen alternatives has a dozen labels and still no word for
+  what it is, so `x` where an expression belongs reports a dozen token
+  spellings. It now reports `expected expression`.
+
+  As with the per-alternative form, it substitutes only where the rule failed
+  **at its own starting position**: `(1` gets past the `(`, so the message that
+  names the missing `)` is the more informative one and stays.
+
+  One thing had to move for it to work at all. A syntactic rule skips
+  whitespace at its start, and that skip used to be generated inside each
+  alternative - so a failure sat past the blanks, the offsets did not match and
+  a label could never substitute. For a labelled rule the skip is hoisted out
+  of the label, which is also once instead of once per alternative.
+  `tests/rule_label_test.rs` pins all four cases, the whitespace one included.
+
+
 - **A character class is scanned eight bytes at a time.** `digit1`, `alpha1`,
   `hex_digit*`, `oct_digit*`, `binary_digit*`, `space*`, `multispace*`,
   `raw_ident`/`ident` and the implicit whitespace skip go through

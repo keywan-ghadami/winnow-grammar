@@ -42,6 +42,10 @@ pub struct Rule {
     pub params: Vec<RuleParameter>,
     pub return_type: syn::Type,
     pub return_type_kind: analysis::ReturnTypeKind,
+    /// `# "…"` on the rule itself: the expectation a failure at the rule's own
+    /// starting position reports, instead of everything its alternatives could
+    /// have started with.
+    pub label: Option<String>,
     pub variants: Vec<RuleVariant>,
     pub is_pub: bool,
     pub is_lexical: bool,
@@ -230,6 +234,7 @@ impl From<parser::Rule> for Rule {
             params: p.params.into_iter().map(Into::into).collect(),
             return_type: p.return_type,
             return_type_kind,
+            label: p.label,
             variants: p.variants.into_iter().map(Into::into).collect(),
             is_pub: p.is_pub.is_some(),
             is_lexical,

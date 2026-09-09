@@ -651,11 +651,14 @@ impl<'a> Codegen<'a> {
 
                 let combined_lexical =
                     is_lexical || target_rule.is_lexical || target_rule.name == "WS";
+                // The inlined rule keeps its own label: what it is called is a
+                // property of the rule, not of where it was written out.
                 let body = self.generate_variants_body(
                     &inlined_variants,
                     &ret_type,
                     combined_lexical,
                     true,
+                    target_rule.label.as_deref(),
                 );
                 let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<E> };
                 let input_var = &self.input_ident; // <-- NEW: use the defined identifier

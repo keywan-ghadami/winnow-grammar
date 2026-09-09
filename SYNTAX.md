@@ -958,6 +958,26 @@ Tools you have:
 - `# "label"` after an alternative names it. If the alternative fails at its
   start, the label becomes the expectation (`expected one of: number, string`)
   instead of the internal token message.
+- **`# "label"` between a rule's return type and its `=` names the whole
+  rule** — every alternative at once:
+
+  ```rust,ignore
+  rule expr -> i64 # "expression" =
+        n:i64            -> { n }
+      | "(" e:expr ")"   -> { e }
+      | "-" e:expr       -> { -e }
+  ```
+
+  `x` where an expression belongs now reads `expected expression` instead of
+  the three spellings the alternatives could have started with. This is the
+  case the per-alternative form cannot reach: a rule with a dozen alternatives
+  has a dozen labels and still no name for itself.
+
+  It applies only where the rule failed **at its own starting position**. `(1`
+  gets past the `(`, so it was in the middle of a parenthesised expression and
+  the message that names the missing `)` is the better one — it stays. The
+  whitespace a syntactic rule skips at its start is skipped *outside* the
+  label, so a blank before the failure does not stop the label substituting.
 - `fail("…")` reports the text verbatim, with high priority.
 - `parse_next` returns the bare `ParseError` (use `e.render(source)` for the
   position); `.parse()` goes through winnow's own `ParseError`, which prints the

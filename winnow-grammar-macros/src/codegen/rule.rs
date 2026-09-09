@@ -56,7 +56,13 @@ impl<'a> Codegen<'a> {
         let is_lexical = rule.is_lexical || is_ws_rule;
 
         let body = if recursive_refs.is_empty() {
-            self.generate_variants_body(&rule.variants, ret_type, is_lexical, true)
+            self.generate_variants_body(
+                &rule.variants,
+                ret_type,
+                is_lexical,
+                true,
+                rule.label.as_deref(),
+            )
         // is_rule_start=true
         } else if base_refs.is_empty() {
             quote_spanned! {span=>
@@ -66,7 +72,13 @@ impl<'a> Codegen<'a> {
             let base_owned: Vec<RuleVariant> = base_refs.into_iter().cloned().collect();
             let recursive_owned: Vec<RuleVariant> = recursive_refs.into_iter().cloned().collect();
 
-            let base_parser = self.generate_variants_body(&base_owned, ret_type, is_lexical, true);
+            let base_parser = self.generate_variants_body(
+                &base_owned,
+                ret_type,
+                is_lexical,
+                true,
+                rule.label.as_deref(),
+            );
             let loop_body = self.generate_recursive_loop_body(
                 &recursive_owned,
                 ret_type,
