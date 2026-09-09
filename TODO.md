@@ -44,7 +44,28 @@ not two: whether a merge must remap is decided by *which interner* the context
 holds, along with whether it is shared and whether it must be thread-safe.
 Build them together, after that measurement.
 
-## 3. Release readiness for 0.1.0
+## 3. The byte driver
+
+`ParseInput<'a, S>` is `LocatingSlice<&'a str>`, so every generated parser
+takes `&str` and every built-in is written against it. A format that is not
+UTF-8 - a binary record, a length-prefixed field, a file whose encoding is the
+grammar's business rather than the reader's - has no way in.
+
+What already points that way: `rt::frames_bytes` cuts `&[u8]` and is what
+`rt::frames` is a `&str` view of (ADR 16 §4), so the piece machinery does not
+assume text. The error engine takes `I: Stream + Location + AsBStr`, which
+`&[u8]` satisfies. What does not: the `ParseInput` alias, the built-ins
+(`ident`, `digit1`, `string`, the character classes), `text(p)` and `intern(p)`
+yielding `&'a str`, and the whitespace rules.
+
+The shape of the question is whether the input type becomes a parameter of the
+generated code - which would put it in every signature beside `S` and `E` - or
+whether a byte grammar is a second, narrower set of built-ins over a fixed
+`&[u8]` input. That is an ADR, and it should be written before anything is
+built: it decides how much of the language a byte grammar shares with a text
+one.
+
+## 4. Release readiness for 0.1.0
 
 `CHANGELOG.md` has collected real breaking changes under *Unreleased* -
 `parse_<rule>_pieces` taking a context, `Diagnostics` gaining a method,
@@ -53,7 +74,8 @@ migration note, that the examples in `README.md` and `SYNTAX.md` still compile
 as written, and that nothing in them describes a version that no longer exists.
 Twice in one week a stale sentence sent someone down the wrong path - an
 attribute that never existed, and a return type that had changed - so this is a
-pass over the documents, not over the code.
+pass over the documents, not over the code. **Not before §1-§3**: there is
+still language missing.
 
 ## 4. `count(p)` pays for keeping its count
 
