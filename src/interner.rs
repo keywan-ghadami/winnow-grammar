@@ -7,7 +7,7 @@ type Hasher = ahash::RandomState;
 #[cfg(not(feature = "ahash"))]
 type Hasher = std::hash::RandomState;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -94,37 +94,52 @@ impl Symbol {
 /// numbers are the identity, say - does not replace this one: they declare a
 /// `state` and put it there (ADR 20). `ident` and `intern(…)` keep meaning
 /// this interner, which is what a built-in is for.
+///
+/// **The map behind it is built on first use, not on `new()`.** A
+/// `ThreadedRodeo` is sharded and allocates every shard: constructing one
+/// measured 1.4 µs, which is what building a `ParseContext` used to cost
+/// almost entirely (`benches/context.rs`). A grammar that never writes `ident`
+/// or `intern(…)` never interns, and should not pay for a map it will not
+/// read - so it does not. The check is one relaxed atomic load on the interner
+/// path, which is reached only when the context's lookup cache misses.
 #[derive(Debug, Clone)]
 pub struct InternerContext {
-    backend: Arc<ThreadedRodeo<Spur, Hasher>>,
+    backend: Arc<OnceLock<ThreadedRodeo<Spur, Hasher>>>,
 }
 
 impl InternerContext {
     pub fn new() -> Self {
         Self {
-            backend: Arc::new(ThreadedRodeo::with_hasher(Hasher::default())),
+            backend: Arc::new(OnceLock::new()),
         }
     }
 
+    /// The map, built if this is the first time anyone asked.
+    #[inline]
+    fn rodeo(&self) -> &ThreadedRodeo<Spur, Hasher> {
+        self.backend
+            .get_or_init(|| ThreadedRodeo::with_hasher(Hasher::default()))
+    }
+
     pub fn intern_string(&self, text: &str) -> Symbol {
-        let spur = self.backend.get_or_intern(text);
+        let spur = self.rodeo().get_or_intern(text);
         Symbol::from_spur(spur)
     }
 
     pub fn resolve(&self, symbol: Symbol) -> &str {
-        self.backend.resolve(&symbol.into_spur())
+        self.rodeo().resolve(&symbol.into_spur())
     }
 
     /// How many distinct strings the interner holds - which is also one past
     /// the largest [`Symbol::index`] it has handed out, so it is the size a
     /// caller's parallel `Vec` needs.
     pub fn len(&self) -> usize {
-        self.backend.len()
+        self.backend.get().map_or(0, |r| r.len())
     }
 
     /// Whether nothing has been interned yet.
     pub fn is_empty(&self) -> bool {
-        self.backend.is_empty()
+        self.backend.get().is_none_or(|r| r.is_empty())
     }
 
     /// Identifies the interner *behind* this handle: two clones of one

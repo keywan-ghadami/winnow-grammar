@@ -39,15 +39,15 @@ struct Slot {
 /// which callers build with a struct literal. It has no API and no
 /// guarantees; do not name it.
 pub struct InternCache {
-    /// Allocated with the context, not on first use. Filling it lazily was
-    /// tried and reverted: the `is_empty` check costs ~6% of the hit path,
-    /// and a parse that interns does so thousands of times, while the ~0.1 µs
-    /// it would save is paid once per context - and is already dwarfed by the
-    /// `InternerContext::new()` beside it, which measures 1.4 µs
-    /// (`benches/context.rs`). A grammar that never interns pays eight
-    /// kilobytes it never reads; that is the cache's price and it is charged
-    /// per context built, not per parse - a *cloned* context starts with an
-    /// empty one.
+    /// Empty until the first `intern`, so that a grammar which never interns
+    /// pays nothing for it - the same reason the interner behind it is built
+    /// on first use.
+    ///
+    /// The allocation is in an outlined `#[cold]` function on purpose. Written
+    /// inline it cost ~6% of the *hit* path, which a parse pays thousands of
+    /// times: a `vec![…]` in the hot function is enough to keep it from being
+    /// inlined. Out of line, the check is a length load that predicts
+    /// perfectly.
     slots: Vec<Slot>,
     /// Which interner the slots belong to. A context whose interner is
     /// replaced between parses gets an empty cache rather than another
@@ -72,7 +72,7 @@ impl InternCache {
 
     pub fn new() -> Self {
         Self {
-            slots: vec![Self::empty_slot(); Self::SLOTS],
+            slots: Vec::new(),
             interner: 0,
         }
     }
@@ -123,14 +123,24 @@ impl InternCache {
         let id = interner.id();
         if self.interner != id {
             self.interner = id;
-            self.slots.fill(Self::empty_slot());
+            self.slots.clear();
         }
     }
 
     /// The symbol for `text`, from the cache when it is there and from the
     /// interner otherwise.
+    /// Out of line and marked cold: it runs once per context that interns.
+    #[cold]
+    #[inline(never)]
+    fn fill(&mut self) {
+        self.slots = vec![Self::empty_slot(); Self::SLOTS];
+    }
+
     #[inline]
     pub(crate) fn intern(&mut self, interner: &InternerContext, text: &str) -> Symbol {
+        if self.slots.is_empty() {
+            self.fill();
+        }
         let tag = Self::tag(text);
         let len = text.len() as u32;
         let slot = &mut self.slots[Self::index(tag)];

@@ -55,10 +55,11 @@ otherwise and save the dependency.
 
 ### Build one context, clone it
 
-`ParseContext::default()` builds an interner, and an interner is a sharded map
-that allocates every shard: **1.4 µs**, against 50 ns for parsing a small input
-with a context you already have. A caller that builds a fresh context per input
-spends almost all of its time constructing interners it then throws away.
+A context is cheap to build - **46 ns** - because the interner behind it and
+the lookup cache in front of it are both created on first use, so a grammar
+that never interns pays for neither. Cloning one is cheaper still, and it is
+what you want anyway: a clone *shares the interner*, so symbols from two files
+mean the same thing, which is what ADR 14 is for.
 
 ```rust,ignore
 let context = ParseContext::<()>::default();      // once
@@ -69,9 +70,9 @@ for src in sources {
 }
 ```
 
-A clone is an `Arc` bump and a few empty vectors, and it *shares the interner* -
-so symbols from two files mean the same thing, which is what ADR 14 is for.
-`benches/context.rs` has the numbers.
+`benches/context.rs` has the numbers, including what this used to cost: a
+context was 1.35 µs before the interner was made lazy, almost all of it
+allocating a sharded map that a non-interning grammar never read.
 
 ## Quick Start
 

@@ -1,14 +1,15 @@
 //! What a `ParseContext` costs, and why it is worth keeping one.
 //!
-//! ADR 14 says the interner is long-lived and shared. This is that advice with
-//! a number: building a context is **1.4 µs**, essentially all of it
-//! `InternerContext::new()` - a `ThreadedRodeo` is a sharded map, and it
-//! allocates every shard. Parsing `42` with a fresh context takes 1.44 µs, of
-//! which the parse is 50 ns; the same parse with a *cloned* context is 50 ns
-//! flat, because a clone is an `Arc` bump and a few empty vectors.
+//! This benchmark is why the interner and the cache are built on first use.
+//! Before that, a `ParseContext` cost **1.35 µs**, essentially all of it
+//! `InternerContext::new()` - a `ThreadedRodeo` is a sharded map and allocates
+//! every shard - and a parse of `42` with a fresh context was 1.44 µs, of
+//! which the parse itself was 50 ns. **A grammar that never writes `ident` or
+//! `intern(…)` paid all of it.**
 //!
-//! So: build one context, clone it. A caller who builds one per small input
-//! spends 96% of the time constructing an interner they then throw away.
+//! Now: the interner alone is 32 ns, a context 46 ns, and that same parse
+//! 59 ns. Cloning a context is still the thing to do - it shares the interner,
+//! which is the point - but it is no longer 28x cheaper than building one.
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;

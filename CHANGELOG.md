@@ -324,12 +324,21 @@
     cost depend on its input, which ADR 17 promises it does not. The count is
     what would make it possible if the two-step proves clumsy.
 
-- **`benches/context.rs`, and the advice it makes concrete.** Building a
-  `ParseContext` costs 1.4 µs, essentially all of it `InternerContext::new()`:
-  a `ThreadedRodeo` is a sharded map and allocates every shard. Parsing a small
-  input with a *cloned* context is 50 ns. So build one context and clone it -
-  which also shares the interner, which is what ADR 14 wanted - and README now
-  says so where a reader starts.
+- **A grammar that never interns no longer pays for an interner.** Building a
+  `ParseContext` cost **1.35 µs**, essentially all of it
+  `InternerContext::new()` - a `ThreadedRodeo` is a sharded map and allocates
+  every shard - and every grammar paid it, whether or not it ever wrote `ident`
+  or `intern(…)`. The map and the lookup cache are both built on first use now:
+  **a context is 46 ns**, the interner alone 32 ns, and parsing `42` with a
+  fresh one went from 1.44 µs to 59 ns.
+  - The check on the interner is one relaxed atomic load, and it sits on the
+    path the cache already misses. The cache's own check is a length load with
+    the allocation outlined behind `#[cold]`: written inline it cost ~6% of the
+    hit path, because a `vec![…]` in the hot function keeps it from being
+    inlined.
+  - `benches/context.rs` measures it. Cloning a context is still what to do -
+    a clone shares the interner - but it is no longer 28x cheaper than
+    building one.
 
 - **The `ahash` cargo feature**, and the first documentation of any of them.
   With it the interner hashes with `ahash::RandomState` instead of std's; both
