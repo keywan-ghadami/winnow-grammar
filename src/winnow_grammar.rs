@@ -224,6 +224,36 @@ impl<S> ParseContext<S> {
         }
     }
 
+    /// Size the interning cache for a parse that will see about `keys`
+    /// distinct strings.
+    ///
+    /// The default is 512 slots, and it is sized for a compiler's identifier
+    /// stream: a few words are hot, the table is direct-mapped, and a displaced
+    /// entry is simply interned again. An aggregation over data is the other
+    /// shape. 1BRC has 413 distinct station names, so displacement is the
+    /// *common* case and every miss falls through to a shard lock and a hash -
+    /// measured at 617 instructions per row against 514 for a plain
+    /// fast-hashed map, which is the cache costing more than it saves.
+    ///
+    /// How many distinct keys a parse will see is the caller's knowledge, not
+    /// the library's, which is why this is a method and not a heuristic. The
+    /// table gets the next power of two at or above `2 * keys` - direct-mapped
+    /// with no collision handling, half empty is what keeps most keys in a slot
+    /// of their own - clamped to 64..=65 536 slots, 16 bytes each.
+    ///
+    /// ```
+    /// # use winnow_grammar::ParseContext;
+    /// let mut ctx = ParseContext::<()>::default();
+    /// ctx.expect_distinct_keys(413);   // 1024 slots, 16 KiB
+    /// ```
+    ///
+    /// Call it before the parse: the table is emptied rather than rehashed,
+    /// because a lost entry costs one interner call and rehashing would cost
+    /// more than that for every entry nobody looks up again.
+    pub fn expect_distinct_keys(&mut self, keys: usize) {
+        self.intern_cache.size_for(keys);
+    }
+
     /// The symbol for `text`, through this context's cache.
     ///
     /// What `ident` and `intern(…)` call, and what an action should call
