@@ -39,6 +39,11 @@ costs. **Proposed, not scheduled**: what decides it is a measurement of the
 shared table's lock against the per-piece table on more cores than the four
 this was written on.
 
+`docs/adr/adr22-the-interner-is-the-choice.md` says why this is one design and
+not two: whether a merge must remap is decided by *which interner* the context
+holds, along with whether it is shared and whether it must be thread-safe.
+Build them together, after that measurement.
+
 ## 3. Release readiness for 0.1.0
 
 `CHANGELOG.md` has collected real breaking changes under *Unreleased* -

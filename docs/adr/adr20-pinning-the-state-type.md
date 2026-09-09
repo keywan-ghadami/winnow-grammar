@@ -235,6 +235,16 @@ context — the same infection as `S` — for a strictly smaller result. If both
 are ever wanted, `state` is the one that subsumes the other: a grammar that can
 name its state can put whatever interner it likes in it.
 
+> **This rejection does not stand — see ADR 22.** The last clause is true and
+> answers a different question: a grammar can put an interner in its state and
+> reach it *from a hand-written parser*, but it cannot make `ident` and
+> `intern(…)` use it, since those compile to `ParseContext::intern`. And the
+> result is not smaller than it looked: which interner is in the context is
+> what decides whether it is shared, whether it must be thread-safe, and
+> whether a merge has to remap — three questions ADRs 14, 19 and 21 each
+> answered separately. A bound rather than a type parameter is what makes it
+> affordable, which is this ADR's own trick.
+
 **Leave it and let callers pre- and post-process.** What one does today: parse
 to `&str` or `Symbol`, aggregate afterwards. It works, it costs a second pass
 over the parsed values, and it is what `Symbol::index()` was just made to
