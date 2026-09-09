@@ -1,4 +1,4 @@
-//! A lookup cache in front of the interner - `TODO.md` §4.
+//! A lookup cache in front of the interner.
 //!
 //! `InternerContext::intern_string` costs ~21 ns on a hit: ~14 ns to hash the
 //! text and probe the map, ~6 ns for the dashmap shard lock, ~1.5 ns of

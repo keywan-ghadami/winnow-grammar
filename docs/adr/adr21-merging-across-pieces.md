@@ -15,7 +15,7 @@ and an hour apart in fact.
   can have two — silently (ADR 18 §3).
 * **Slots are per state.** A grammar that declares `state Table;` and assigns
   slot numbers in a hand-written parser has exactly the same problem, one
-  level up (ADR 20, `TODO.md` §6a).
+  level up (ADR 20).
 
 ADR 19 §2 settled the first: `parse_<rule>_pieces` clones one context into
 every piece, so the interner is shared by default and symbols mean the same
@@ -107,7 +107,7 @@ this decision is a plan rather than a schedule.
   section should show the shared-handle closure beside the fresh-state one,
   since the difference between them is exactly the difference between
   comparable and per-piece numbers.
-* If `finish` is built, `TODO.md` §6a's open note — that a `par_fold` merges
+* If `finish` is built, the open note that a `par_fold` merges
   counts and not identities — closes, and `benches/interning.rs` gains the
   case that would justify it.
 * The asymmetry that remains is worth naming: the interner is shared by

@@ -1,4 +1,4 @@
-//! What the cut operator `=>` commits to - `TODO.md` §1.
+//! What the cut operator `=>` commits to.
 //!
 //! The item asked for verification rather than a rewrite: the generator sets a
 //! flag at the cut and wraps every later step of the sequence in `cut_err`,

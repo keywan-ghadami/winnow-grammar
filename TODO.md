@@ -1,402 +1,51 @@
 # Remaining High-Priority Tasks
 
-This file tracks critical technical debt and optimization opportunities
-identified during development.
-
-An item is closed here only with what closed it: the change, the test that
-would fail without it, or - where the answer was that nothing should change -
-the measurement or the behaviour that says so. Three of the items below are
-closed that second way, and they are not lesser answers than the others.
-
-## 1. The cut operator — **verified, no change**
-
-The concern was that setting a flag at the cut and wrapping every later step of
-the sequence in `cut_err` might wrap too much or interact badly with groups,
-delimiters and repetitions. `tests/cut_test.rs` answers it by behaviour rather
-than by reading: a cut commits its alternative and no more; before it,
-backtracking still works; inside a called rule it commits within that rule's
-alternatives; as the element of a repetition it makes a half-matched element
-fatal rather than ending the loop; and before a call to a rule with
-alternatives it commits to the call while the alternatives still choose freely.
-All six pass. Wrapping each later step is behaviourally the same as committing
-the rest of the sequence, so there is nothing to scope more precisely.
-
-The one thing the item asked for that is *not* the implementation: it wanted
-the cut to commit "without bleeding into unrelated parsing paths". It does
-bleed, by design - a cut is winnow's `cut_err`, so the failure is fatal and
-propagates out of the rule that wrote it, and an alternative in a *calling*
-rule is not tried either. That is what makes the reported error the committed
-one's rather than a merge across everything that was attempted, and SYNTAX.md's
-guidance elsewhere (write to a state after a cut, which no enclosing
-alternative retries past) already relies on it. Changing it would mean catching
-`Cut` at every rule boundary and turning it back into a backtrack, which would
-defeat the operator. Documented instead: the Cut Operator section now says how
-far it reaches and what that means for a rule meant to be called from
-elsewhere.
-
-## 2. Error recovery (`recover`) — **the error is kept now**
-
-*   ~~**Performance:** consuming tokens one by one is O(N²).~~ Done for fixed
-    terminators, and §8 extended the scan to a terminator that is a rule of
-    your own.
-*   ~~**Correctness:** the recovered failure was discarded, so nothing could
-    report what had been wrong.~~ `rt::recover_recording` replaces the
-    `alt((body.map(Some), (skip, sync).map(|_| None)))` that threw the error
-    away where it was produced: `ParseContext::recoveries` counts them in both
-    passes and `recovered` holds the errors wherever the diagnosing engine ran.
-    `tests/recover_test.rs` covers a clean parse, the count surviving the fast
-    pass, the messages under `Diagnose::Eager`, and a reused context not
-    accumulating.
-
-    The shape of that answer is ADR 17's: a parse that recovers *succeeds*, so
-    the default `Replay` mode never runs the diagnosing engine and there is no
-    error object to keep - the count says *that* something was recovered,
-    `Eager` says *what*. Deliberately not done: replaying automatically when
-    the count is non-zero. It is ten lines in `rt::entry`, and it would make a
-    successful parse's cost depend on its input in a way ADR 17 promises it
-    does not. If the two-step proves clumsy in practice, that is the change to
-    make, and the count is what makes it possible.
-
-## 3. Spans — **byte offsets kept, the place made reachable**
-
-The item asked whether `@` should yield something richer than a
-`Range<usize>`, since users want line and column. It should not, and the reason
-is where the two things live: byte offsets are what `LocatingSlice` knows, they
-cost nothing to produce and they slice the source directly, while line and
-column **cannot be computed without the source** - computing them during the
-parse would mean scanning back for newlines once per span, for spans nobody
-looks at.
-
-So they are a presentation step, and that step now has a home:
-`winnow_grammar::span` with `line_column(source, offset)` and a `SpanExt` for
-`Range<usize>` (`text(source)`, `line_columns(source)`). The error engine's own
-`ErrorCore::line_column` calls it, so one implementation serves both and a span
-and a message cannot disagree about where something is -
-`tests/explicit_span_test.rs` asserts that, along with character-counted
-columns and clamping past the end.
-
-`winnow::stream::Location` is fully used as it is: `.with_span()` is what
-produces the offsets, and `LocatingSlice` has nothing beyond them to give.
-Making the span type *configurable* is what remains conceivable and is not
-proposed: it would put a type parameter in every rule that binds a span, for
-something a caller can compute from the offsets in one call.
-
-## 4. Interning: where the time goes — **cache built, hasher rejected**
-
-`benches/interning.rs` (interning in place) and `benches/where.rs` (the same
-call taken apart) exist so that this is decided on numbers. What they say
-today, on one machine, hot case - eight distinct short words, every call a hit:
-
-* One `intern_string` costs **~21 ns**: ~14 ns hashing and probing, ~6 ns the
-  dashmap shard lock, ~1.5 ns lasso's own bookkeeping. Our wrapper around
-  `ThreadedRodeo` costs nothing measurable.
-* In a parse, that is **not a rounding error**: `parse/idents` runs ~40 ns per
-  identifier end to end, so interning is more than half of what an identifier
-  costs. The `parse/rows` case (`intern(until(";"))`, the 1BRC shape) is ~52 ns
-  per row with one intern in it.
-* String length barely matters: 38-character words cost ~25 ns against ~22 ns
-  for seven-character ones. The per-call fixed cost dominates, not throughput.
-
-### Swapping the hasher: measured, and **rejected** as first move
-
-Three attempts, all slower than std's `RandomState`, all on `benches/where.rs`:
-
-| hasher | ns per lookup |
-|---|---|
-| std `RandomState` (SipHash-1-3) | ~14 |
-| FxHash-style (rotate, xor, multiply, no finalizer) | ~23 |
-| the same with an xor-shift-multiply finalizer | ~25 |
-| hand-written folded 128-bit multiply (wyhash-shaped) | ~30 |
-| `ahash` | **~6** |
-
-Two lessons. Speed here is **avalanche, not instruction count**: FxHash keeps
-its entropy in the low bits while both the shard index and hashbrown's control
-byte come from the top, so short keys collide and every lookup pays extra
-string comparisons. And a hand-written hasher loses on the tail: a
-variable-length `copy_from_slice` compiles to a real `memcpy` call, which costs
-more than the multiplies save. Only a mature implementation (`ahash`, ~6 ns)
-actually beats the default, and that is a dependency decision, not a
-performance one - `ThreadedRodeo::with_hasher(ahash::RandomState::new())` is
-the whole change if we ever want it.
-
-### The lookup cache in front of the interner — **built**
-
-`ParseContext` carries a direct-mapped table of 512 slots (8 KiB), and
-`ParseContext::intern` - what `ident` and `intern(…)` call - answers from it
-before it asks the interner. A miss falls through; the interner stays the only
-authority on what a `Symbol` is, so nothing here can make one wrong.
-
-Measured (`benches/interning.rs`, one machine):
-
-| | interner | through the cache | |
-|---|---|---|---|
-| a hit, eight-byte words | 22.9 ns | **9.4 ns** | 2.4x |
-| a hit, 38-byte words (verified) | 30.6 ns | **21.1 ns** | 1.5x |
-| in a parse - `parse/idents/2000` | 162 µs | **97 µs** | **-43%** |
-| in a parse - `parse/rows` (1BRC shape) | 258 µs | **190 µs** | **-26%** |
-
-Two things the design turned on, both found by measuring rather than by
-thinking:
-
-* **The tail must not be copied.** Building the eight-byte tag of a short word
-  with `copy_from_slice` compiles to a call to `memcpy`, which cost more than
-  the whole rest of a lookup: 13.2 ns against 8.1 for the same cache with the
-  bytes folded in a loop instead. The same trap ate two hand-written hashers
-  in §4's first attempt.
-* **The tag needs both ends.** With only the first eight bytes,
-  `identifier_0001` and `identifier_0002` share a tag, so every miss between
-  such words paid a resolve and a comparison before interning anyway - +30 ns
-  on a miss. Mixing in the *last* eight bytes removed it.
-
-What was hoped for and not reached: the miss path was to cost "no more than
-2-3 ns over today". Across five runs it measured between nothing and ~20 ns
-per miss on a ~150 ns insert - a few percent, with part of it the first touch
-of a freshly allocated table, which a real parse pays once rather than per
-batch. Left as it is: the case it costs is the one where the interner's own
-insert dominates, and the case it pays for is every parse that sees a word
-twice.
-
-Not done, and deliberately: the cache is not consulted by
-`InternerContext::intern_string`, which stays the direct path. An action that
-calls `_state.interner.intern_string(…)` gets the interner; `_state.intern(…)`
-gets the cache. Both return the same symbol, and SYNTAX.md says which is which.
-
-## 5. `fold.base` survived a parse — **fixed**
-
-`rt::entry` and `rt::entry_framed` now call `ParseContext::begin_parse`, which
-clears the diagnostics engine's working space (`fold`, `furthest`, `rules`)
-where a parse begins. Before that, a `par_fold` grammar parsed twice through
-one context numbered the second parse's items from the first one's total, and
-the offset grew with every failure: `in item 4`, then `7`, then `10`.
-
-The scope was narrower than it first looked, and `tests/context_reuse_test.rs`
-records all of it: only a `par_fold` rule (a plain `fold` runs untracked and
-never read the base), only after a *failed* parse (a successful one leaves the
-base at zero), and only in the diagnostic message - what a parse accepted and
-what it returned never depended on it. The three tests that cover the defect
-fail without the fix; that was checked by reverting it, not assumed.
-
-ADR 19 §2 - `parse_<rule>_pieces` taking a context rather than a factory - was
-blocked on this and is now open.
-
-## 6. The high-end path: a bespoke interner — **reachable now**
-
-A 1BRC-class solution does not want a general interner. It wants the slot
-number *itself*: one open-addressed table per thread, the first eight bytes as
-the probe key, and the number handed back used directly as the index into the
-accumulator array - no central map, no lock, no `resolve`, and no second
-lookup at aggregation time. `benches/where.rs` measures that shape against
-ours on the same workload: **~7 ns against ~21 ns**, and the ~7 ns includes
-the trick that makes it: a name of eight bytes or fewer is entirely inside the
-tag, length included, so a hit needs no string comparison at all.
-
-Three things stand between a grammar and that, in the order they bite.
-
-### 6a. The state type is the grammar's to declare — **done**
-
-`state T;` in a grammar block makes the state reachable: an action writes
-`_state.user()`, and a hand-written parser bounds itself with `StateOf<T>` and
-calls `.state()`. The declaration is a bound rather than a substitution, so
-rules stay generic, `parse_<rule>_pieces` keeps its signature, and one
-composite state serves several grammars at once. ADR 20 has the design and
-what each cost is met with; `tests/state_test.rs` has the high-end shape
-end to end - a parser assigning slots out of the declared state under a
-`#[frame]`/`par_fold` grammar.
-
-What remains open around it: slot numbers are per state, exactly as symbols
-are per interner, so a `par_fold` cut into pieces merges counts and not
-identities unless the merge is keyed by name - and a merge cannot key by name,
-because it sees two values and the piece's context is already dropped.
-`docs/adr/adr21-merging-across-pieces.md` lays out the four answers and what
-each costs. Two of them work today: symbols through the now-shared interner
-(~21 ns, correct by default), or the table itself shared through the state
-closure as `Arc<Mutex<_>>` (verified; costs a lock). The third - a table per
-piece merged by name, which is what a 1BRC-class solution does - needs a
-per-piece `finish` that sees its context before it is dropped, and is proposed
-rather than scheduled: what decides it is a measurement on more cores than this
-machine has.
-
-### 6b. `Symbol` hides the number it already has — **done**
-
-`Symbol::index()` and `InternerContext::len()`/`is_empty()` are public, with
-the contract written down: dense, zero-based, first-seen order, meaningful
-only against the interner that made it, not to be persisted. A caller
-aggregates into a plain `Vec` addressed by the index, with no second lookup -
-`tests/interning_test.rs` has the worked case. What this does *not* change is
-the cost of getting the number: ~21 ns per name, or whatever §4's cache makes
-of it.
-
-### 6c. The interner type is fixed — **answered by 6a, not by a type parameter**
-
-`ParseContext` names `InternerContext` concretely, and the question was whether
-to make it pluggable: a trait and a second type parameter on the context,
-landing in every generated signature - the same infection `S` already is.
-
-`state T;` answers it without any of that. A caller who has a better interner
-puts it *in the state* and reaches it from a hand-written parser, which is
-exactly the shape `tests/state_test.rs` already runs: a table whose slot
-numbers are the identity, assigned in an `extern rule`, aggregated by a fold.
-A bespoke interner is a bespoke table with `resolve` on it; nothing about it
-needs to live in the field `ident` reads.
-
-What stays fixed is what `ident` and `intern(…)` use, and that is right: they
-are the built-ins, they should mean one thing, and the grammar that wants
-something else says so by writing it. Closed - not by building the type
-parameter, but by the feature that made it unnecessary.
-
-## 7. The 1BRC temperature: where its time went — **closed**
-
-`benches/repetition.rs` takes `TENTHS` apart. Read differences, not absolutes -
-every case pays the same stream construction and context clone. One machine,
-`-12.3` parsed as a top-level rule:
-
-| case | ns |
-|---|---|
-| `FLOOR` - an empty rule | 20.9 |
-| `ONE_DIGIT` - `d:digit` | 23.9 |
-| `TWO_DIGITS` - `a:digit b:digit`, no repetition | 26.0 |
-| `BOUNDED_DISCARDED` - `digit{1,2}`, counted, not collected | 25.9 |
-| `BOUNDED_BOUND` - `digit{1,2}`, collected into a `Vec` | 45.5 |
-| `TENTHS` - the whole temperature | 60.6 |
-| `tenths/by_hand` - one scan and a fold, written in Rust | 35.2 |
-
-What that says:
-
-* **The repetition loop is free.** Collecting nothing (25.9) costs what two
-  separate `digit` parses cost (26.0). Checkpoints, the bound test and the
-  loop itself do not show up.
-* **One heap allocation for two `char`s costs ~20 ns** - the gap between
-  collecting and counting the same two digits (45.5 vs 25.9).
-* **The generated temperature is 1.7x the hand-written one** (60.6 vs 35.2),
-  and ~20 of those 25 ns are that one allocation. Closing it would land within
-  a few ns of hand-written **without** SIMD, SWAR or register arithmetic. The
-  1BRC-shaped win is not clever numerics; it is not putting two characters on
-  the heap.
-* In a real `par_fold` the floor is not paid per record - the fold calls
-  `parse_<rule>_inner`, not the public entry - so the allocation is a *larger*
-  share of the per-record cost than the table suggests.
-
-### Measured: what removing the allocation is worth
-
-`benches/repetition.rs` carries a stand-in for a text-capture operator - the
-digit run as a borrowed slice instead of a `Vec<char>`, which is winnow's
-`.take()` under another name:
-
-Three runs, because a single one said something that did not survive repeating:
-
-| case | run 1 | run 2 | run 3 |
-|---|---|---|---|
-| `TENTHS` with `digit{1,2}`, a `Vec<char>` | 60.8 | 60.1 | 67.1 |
-| `text(digit{1,2})`, folded in the action | 29.4 | 29.8 | 35.0 |
-| `dec<i32>(digit{1,2})` | 34.4 | 35.2 | 38.6 |
-| a `take_while` scan, folded in the action | 35.2 | 35.8 | 38.8 |
-| written by hand, one scan and a fold | 33.8 | 34.1 | 39.1 |
-
-(The third run is uniformly ~12% above the other two - machine drift. The
-ordering is identical in all three, which is what the table is for.)
-
-The allocation is ~23 ns and it is the whole story: not copying two characters
-onto the heap lands on hand-written, with no SIMD, no SWAR and no register
-arithmetic.
-
-`text` halves the rule and lands below hand-written: the generated repetition
-of `one_of` wrapped in `.take()` beats a `take_while` closure. `dec` costs
-about 5 ns more than `text` plus the same fold in an action - `str::parse`
-validates more than two bytes need - so it is bought for its two other
-properties (the fold written once, and an overflow that fails the parse),
-never for speed.
-
-Both numbers were wrong until the benchmark measured the *generated* code
-rather than a hand-written stand-in: the operators were generating their inner
-pattern as if its values were wanted, collecting a `Vec<char>` that `.take()`
-then dropped.
-
-### What that leaves open
-
-The allocation cannot be removed while the binding yields `Vec<char>`: the
-type is the contract with the action, and `for d in whole` / `d.iter()` rely
-on it. Two ways out, neither taken yet:
-
-* **A text-capture operator** - "give me what was matched, not the parsed
-  values", winnow's `.take()` under a DSL name, one entry in the fixed list in
-  `parser.rs` the way ADR 18 added `intern`. It yields `&'a str`, costs
-  nothing (it is a slice of the input), and works for any pattern. It also
-  closes an inconsistency that is already in the language: `digit1` yields
-  `&'a str` and `digit{1,2}` a `Vec<char>`, though both are a run of digits -
-  which is why `intern(until(";"))` works today and `intern(digit{1,2})`
-  cannot, a `Vec<char>` being no `AsRef<str>`. **This is where the ~23 ns are.**
-
-* **`dec(p)`** - the run accumulated into an integer by the parser. Measured
-  above: no time over the text operator plus a fold. Two arguments that are
-  *not* about speed remain, and they are the ones to decide it on: an action
-  no longer hand-rolls the same three-line fold at every numeric field, and
-  the declared bound proves the accumulator cannot overflow, which a fold
-  written in an action does not. Output type via the existing call generics:
-  `dec<i32>(digit{1,2})`.
-* **Inline storage for a small known bound** - `digit{1,2}` keeps its meaning
-  but yields a stack-backed type. No new syntax, but it *is* a type change:
-  actions that name `Vec<char>` break, and the binding type would differ
-  between `{1,2}` and `{2,}`.
-
-**Both are built.** `text(p)` and `dec<T>(p)` are in the language (SYNTAX.md,
-`tests/text_test.rs`, `tests/dec_test.rs`). The inline-storage idea is dropped
-with them: a borrowed slice beats a stack buffer and needs no container type
-at all.
-
-**The default changed too**, and this paragraph said otherwise for a day:
-`digit{1,2}` yields `&'a str`, not `Vec<char>`. A repetition whose element is
-a character *class* - `digit`, `any` - is the text it matched, bounded, exact,
-open-ended or unbounded alike, which is what `{n,m}` means everywhere else it
-is written. Every other repetition still yields its elements, because those are
-values the parser built rather than input it walked over; `char` is
-deliberately not a class, since it parses a character *literal* and `'\n'` is
-four characters of input and one of value. `tests/char_run_test.rs` draws that
-line, and `intern(digit{3})` works now, which is the inconsistency this section
-opened with.
-
-So nothing is open here. The three exits it listed - the text operator, `dec`,
-inline storage - ended as: both operators built, inline storage dropped
-(a borrowed slice beats a stack buffer), and the default fixed at the source
-rather than worked around.
-
-## 8. Scanning terminators: which ones, and the cliff between them — **done**
-
-`until(…)` and `recover(…)` skip either by **scanning** - `find_slice`, which
-is `memchr` with SIMD where the target has it - or by *trying* the terminator
-at every position, one parser call per character. A rule of one's own never
-qualified for the scan, even when its body was a single literal, which cost
-this on 2000 rows of `name;digits\n`:
-
-| | `until(";")` | `until(SEP)`, `SEP -> () = ";"` | |
-|---|---|---|---|
-| 8-character names | 29.6 µs | 81.0 µs | 2.7x |
-| 40-character names | 36.3 µs | 263.3 µs | **7.3x** |
-
-The scanned path barely moves with the field length; the tried path is linear
-in it, so the factor grows with the input rather than sitting still.
-
-**`analysis::literal_rules`** now resolves a rule that matches nothing but
-literals - directly, through alternatives, or through a chain of such rules -
-and **both** the code generator (§8a) and the frame check (§8b) read that one
-map, so they cannot disagree about what a terminator is. Under a `#[frame]`,
-`until(SEP | frame_end)` used to be *rejected* rather than slow, because the
-check could not see the boundary alternative it was handed; it compiles now.
-`tests/scan_terminator_test.rs` covers both, and asserts that the pieces of a
-`par_fold` still agree with the whole.
-
-The condition that keeps it correct, and that §8c wrote into SYNTAX.md: **only
-a lexical rule is its literal.** A syntactic rule skips whitespace before its
-elements, so `sep -> () = ";"` matches `  ;` and does not begin where its
-literal does - `until(sep)` and `until(";")` stop in different places, and the
-test pins both answers for the same input. Under a frame that whitespace could
-also swallow the boundary.
-
-### What is left, and it is a different question
-
-A frame may now *end* in a rule that is its boundary as far as `is_terminator`
-is concerned, but such a grammar still does not compile: the rule is also
-walked as an interior rule of its own, where its literal is the boundary and is
-flagged. Making it compile needs position-sensitive reachability - knowing that
-`NL` is reached only as the terminator, which is the one position the interior
-check already excludes. Pinned as a rejection in `tests/ui/frames.rs` so the
-message says what it is.
+What is actually open. An item leaves this file when it is closed - by the
+change and the test that would fail without it, or, where the answer was that
+nothing should change, by the measurement or behaviour that says so, written
+down where the next person will look rather than here. The history of what was
+decided lives in `CHANGELOG.md`, the reasoning in `docs/adr/`, the numbers in
+the benchmark headers, and the rules a grammar author needs in `SYNTAX.md`.
+
+## 1. A frame that ends in a rule which *is* its boundary
+
+`#[frame(boundary = "\n")] LINE -> &'a str = s:until(NL) NL` does not compile,
+with `NL -> () = "\n"`. The trailing element is accepted - `is_terminator`
+resolves a rule to its literals - but `NL` is then also walked as an interior
+rule of its own, where its literal is the boundary and is flagged.
+
+Making it compile needs **position-sensitive reachability**: knowing that `NL`
+is reached only as the terminator, which is the one position the interior check
+already excludes. Today the walk follows calls without caring where the call
+sat.
+
+Pinned as a rejection in `tests/ui/frames.rs`, so the message says what it is
+rather than the grammar merely failing. Small enough to be worth doing when
+someone hits it; not worth doing on speculation, since repeating the literal is
+a one-character workaround.
+
+## 2. Merging across the pieces of a `par_fold`
+
+A merge is `Fn(T, T) -> T`: it sees two values, and `rt::parse_piece` has
+already dropped the piece's context by then. So identity cannot cross a piece
+boundary unless the pieces shared what produced it. Symbols do share, since
+`parse_<rule>_pieces` clones one context into every piece; a table in
+`user_state` does not, unless the caller shares a handle and pays a lock.
+
+The fastest shape - a table per piece, merged by name - needs a per-piece
+`finish` that sees its own context before it is dropped.
+`docs/adr/adr21-merging-across-pieces.md` has the four options and what each
+costs. **Proposed, not scheduled**: what decides it is a measurement of the
+shared table's lock against the per-piece table on more cores than the four
+this was written on.
+
+## 3. Release readiness for 0.1.0
+
+`CHANGELOG.md` has collected real breaking changes under *Unreleased* -
+`parse_<rule>_pieces` taking a context, `Diagnostics` gaining a method,
+`ParseContext` gaining fields. Before a release: check that every one carries a
+migration note, that the examples in `README.md` and `SYNTAX.md` still compile
+as written, and that nothing in them describes a version that no longer exists.
+Twice in one week a stale sentence sent someone down the wrong path - an
+attribute that never existed, and a return type that had changed - so this is a
+pass over the documents, not over the code.

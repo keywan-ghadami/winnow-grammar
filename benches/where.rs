@@ -20,11 +20,29 @@
 //! The last row is the ceiling, not a proposal: a bespoke table that hands
 //! back the slot number as the identity, with no central map, no lock and
 //! nothing to resolve. It is three times faster than the general interner and
-//! it is a different data structure, not a tuned one - see `TODO.md` §6 for
-//! what it would take to let a grammar use one.
+//! it is a different data structure, not a tuned one. A grammar can have one:
+//! `state T;` puts it in the parse's own state - see ADR 20.
 //!
-//! Numbers are one machine's; the *shape* is the point, and it is what
-//! `TODO.md` reasons from. Re-measure before deciding, not after.
+//! **Replacing the hasher was tried and is rejected.** Three attempts, all
+//! measured here, all slower than std's `RandomState` on the hash-and-probe
+//! row above: an FxHash-style hasher ~23 ns, the same with an xor-shift
+//! finalizer ~25, a hand-written folded 128-bit multiply ~30, against ~14 for
+//! the default. Speed here is **avalanche, not instruction count** - FxHash
+//! keeps its entropy in the low bits while both the shard index and
+//! hashbrown's control byte come from the top, so short keys collide and every
+//! lookup pays extra string comparisons. And a hand-written hasher loses on
+//! the tail: a variable-length `copy_from_slice` compiles to a call to
+//! `memcpy`, which costs more than the multiplies save. Only `ahash` beat the
+//! default (~6 ns), and that is a dependency decision -
+//! `ThreadedRodeo::with_hasher(ahash::RandomState::new())` is the whole change
+//! if it is ever wanted.
+//!
+//! The lookup cache in `ParseContext` took the other route and took all of it,
+//! the lock included: ~9 ns a hit against ~23, and 43% off an
+//! identifier-heavy parse (`benches/interning.rs`).
+//!
+//! Numbers are one machine's; the *shape* is the point. Re-measure before
+//! deciding, not after.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use lasso::{Rodeo, ThreadedRodeo};

@@ -7,7 +7,7 @@ it, a declared state under `par_fold` pieces, and a grammar that declares
 nothing behaving as before), `tests/ui/state.rs` (the two rejections).
 **Depends on:** ADR 14 (the shared context), ADR 17 (the replay and its
 side-effect contract), ADR 18 §2 (`_state`), ADR 19 §2 (`_pieces_with`).
-**Motivates:** `TODO.md` §6.
+**Motivates:** the high-end path of ADR 21.
 
 ## Context
 
@@ -44,7 +44,7 @@ against our ~21 ns**, and the gap is structural, not tuning — no central map,
 no lock, nothing to resolve, and no second lookup when aggregating. That table
 belongs in `user_state`, so today it cannot be written.
 
-`Symbol::index()` (`TODO.md` §6b, since implemented) closes part of this
+`Symbol::index()` closes part of this
 without any of what follows: the built-in interner's number is dense, so a
 caller can aggregate into a `Vec` addressed by it. What it does not do is make
 the *lookup* cheaper or let a grammar bring its own.
@@ -229,7 +229,7 @@ statement. Rejected: the DSL has no generics on the grammar itself, and a
 default on the parameter does not give an action anything to call — the bound
 is what does that.
 
-**Make only the interner pluggable** (`TODO.md` §6c). It serves the
+**Make only the interner pluggable.** It serves the
 high-end interner and nothing else, and it costs a second type parameter on the
 context — the same infection as `S` — for a strictly smaller result. If both
 are ever wanted, `state` is the one that subsumes the other: a grammar that can

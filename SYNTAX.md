@@ -312,7 +312,8 @@ the call names; without one it is inferred from the action.
 
 Where this matters most: a bounded run of digits that becomes a number used to
 copy its characters onto the heap first. Not doing that is worth about 40% of
-a small numeric rule - see `benches/repetition.rs` and TODO.md §5.
+a small numeric rule - see `benches/repetition.rs`, whose header carries
+what the measurements established.
 
 ### Interning: `ident` and `intern(p)`
 

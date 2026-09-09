@@ -18,7 +18,7 @@ fn test_recovery() {
 }
 
 // -----------------------------------------------------------------------------
-// What a recovery swallowed - `TODO.md` §2.
+// What a recovery swallowed.
 //
 // `recover(rule, sync)` used to discard the failure entirely: the parse
 // carried on and nothing said what had been wrong. The count is now kept in

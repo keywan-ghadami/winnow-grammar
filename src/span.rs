@@ -1,4 +1,4 @@
-//! Turning a byte offset into a place a person can find - `TODO.md` §3.
+//! Turning a byte offset into a place a person can find.
 //!
 //! A `@` binding yields a `Range<usize>` of byte offsets, and that is what it
 //! should yield: it is what `LocatingSlice` knows, it costs nothing to produce,

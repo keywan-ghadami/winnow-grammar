@@ -103,7 +103,7 @@ fn indices_are_dense_and_in_first_seen_order() {
 #[test]
 fn the_index_addresses_a_parallel_vec() {
     // The aggregation shape: the symbol is the row in the caller's own table,
-    // so there is no second lookup - `TODO.md` §6b.
+    // so there is no second lookup.
     let interner = winnow_grammar::InternerContext::new();
     let mut totals: Vec<i64> = Vec::new();
 
@@ -152,7 +152,7 @@ fn a_parse_hands_out_indices_a_caller_can_aggregate_with() {
 }
 
 // -----------------------------------------------------------------------------
-// The lookup cache in front of the interner (`TODO.md` §4). It is an
+// The lookup cache in front of the interner. It is an
 // optimisation and must therefore be invisible: the same symbols, for every
 // input that could tell the two paths apart.
 // -----------------------------------------------------------------------------

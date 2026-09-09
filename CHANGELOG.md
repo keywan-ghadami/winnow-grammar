@@ -295,6 +295,10 @@
   parse succeeds on the fast pass alone, which has no error object to keep:
   the count says that something was recovered, `Diagnose::Eager` says what.
   A cut inside the recovered rule is still fatal, as it was.
+  - Replaying automatically when the count is non-zero is ten lines in
+    `rt::entry` and deliberately not taken: it would make a successful parse's
+    cost depend on its input, which ADR 17 promises it does not. The count is
+    what would make it possible if the two-step proves clumsy.
 
 - **A lookup cache in front of the interner.** `ParseContext` carries a
   direct-mapped table of 512 slots (8 KiB), and `ParseContext::intern` - what
@@ -343,15 +347,15 @@
   `index + 1`); only `#[doc(hidden)]` conversions could reach it. The contract
   is documented with it: the index means nothing outside the interner that
   produced it, it depends on the order strings were first seen, and it is not
-  to be persisted. See `TODO.md` §6.
+  to be persisted.
 
 - **Benchmarks.** `benches/interning.rs` measures interning where it happens -
   the interner alone, an identifier-heavy grammar, and the 1BRC shape with
   `intern`, sequential and cut into pieces. `benches/where.rs` takes a single
   `intern_string` apart: of ~21 ns, ~14 ns is hashing and probing, ~6 ns the
-  dashmap shard lock. `TODO.md` §4 reasons from those numbers - including
-  three hasher replacements that measured *slower* than the default, and the
-  lookup cache that is the thing worth trying next.
+  dashmap shard lock. Its header reasons from those numbers - including three
+  hasher replacements that measured *slower* than the default, and the lookup
+  cache that took all of it instead.
 
 - **`extern rule` is documented.** The declaration existed and worked - a
   hand-written parser reaches `i.state.interner` like any generated one - but
@@ -417,7 +421,7 @@
   `recover` skip **2.1 s → 2.0 ms**.
   - This is the skip in `recover` as well, which is the expensive half of error
     recovery and is reached exactly when a file has many errors (the
-    `TODO.md` item about the byte-by-byte skip).
+    open item about the byte-by-byte skip).
   - `line_ending` is two shapes rather than one literal, so the scan finds `\n`
     and then looks at the byte before it: `\r\n` is left whole, a bare `\r`
     stays ordinary text, and an earlier `\n` is not skipped past — which

@@ -88,7 +88,7 @@ pub struct ParseContext<S = ()> {
     ///
     /// An implementation detail that has to be visible because callers build
     /// this struct with a literal; `..Default::default()` fills it and nothing
-    /// else should touch it. See `TODO.md` §4.
+    /// else should touch it.
     #[doc(hidden)]
     pub intern_cache: intern_cache::InternCache,
     /// A placeholder for user-defined state.
@@ -112,7 +112,7 @@ pub struct ParseContext<S = ()> {
     /// running. The fast pass has no error to keep (its error type is
     /// zero-sized), so this is empty after a parse that only ran it: the count
     /// above says *that* something was recovered, `Diagnose::Eager` says
-    /// *what*. See `TODO.md` §2.
+    /// *what*.
     pub recovered: Vec<ParseError>,
     /// Where the fold of a `par_fold` rule stopped - see [`FoldProgress`].
     pub fold: FoldProgress,
@@ -205,7 +205,7 @@ impl<S> ParseContext<S> {
     /// What `ident` and `intern(…)` call, and what an action should call
     /// instead of `_state.interner.intern_string(…)`: the interner is correct
     /// either way, this one is faster on the words a parse sees more than once
-    /// (`TODO.md` §4).
+    /// (`src/intern_cache.rs`).
     #[inline]
     pub fn intern(&mut self, text: &str) -> Symbol {
         self.intern_cache.intern(&self.interner, text)

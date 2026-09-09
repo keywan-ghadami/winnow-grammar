@@ -154,7 +154,7 @@ fn bench_interner(c: &mut Criterion) {
     });
 
     // The same two cases through `ParseContext::intern`, which is what a parse
-    // calls: the cache in front of the interner (`TODO.md` §4). The pair above
+    // calls: the cache in front of the interner (`src/intern_cache.rs`). The pair above
     // is the control - it goes to the interner directly.
     g.throughput(Throughput::Elements(words.len() as u64));
     g.bench_function("cached_hot_set_1024_lookups_8_distinct", |b| {

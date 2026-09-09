@@ -5,6 +5,17 @@
 //! the grammar has already said so. These benchmarks are here to decide
 //! whether that distinction is worth generating, and to keep the bounded
 //! case (`digit{1,2}`, the 1BRC temperature) honest about what it costs.
+//!
+//! What they established, so that it is not re-derived: the repetition loop
+//! itself is free - collecting nothing costs what the same number of separate
+//! parses cost - and **one heap allocation for two `char`s cost ~23 ns**,
+//! which was the whole gap between the generated temperature and a
+//! hand-written one. Not putting two characters on the heap closed it; no
+//! SIMD, no SWAR, no register arithmetic. A run of a character class is
+//! therefore the text it matched, and `dec<T>(p)` accumulates it without a
+//! `Vec` in between - measured as no faster than the borrowed run plus a fold
+//! in an action, and kept for the overflow bound and the ergonomics rather
+//! than for time.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;

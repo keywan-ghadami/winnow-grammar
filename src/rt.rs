@@ -657,7 +657,7 @@ where
 /// `alt((body.map(Some), (skip, sync).map(|_| None)))` was the shape before,
 /// and it threw the body's error away where it was produced. Writing the two
 /// branches out keeps it: the count goes into the context in both passes, the
-/// error itself when the diagnosing engine is the one running (`TODO.md` §2).
+/// error itself when the diagnosing engine is the one running.
 ///
 /// A **cut** inside the body is not recovered from. That is what a cut is for -
 /// the input is wrong rather than merely unexpected here - and it was already

@@ -135,7 +135,7 @@ fn one_composite_state_serves_two_grammars() {
 
 // -----------------------------------------------------------------------------
 // The high-end shape: a hand-written parser that assigns slots out of the
-// declared state, and a fold that aggregates by slot - `TODO.md` §6.
+// declared state, and a fold that aggregates by slot - ADR 20.
 // -----------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Default)]

@@ -38,8 +38,8 @@ fn test_explicit_span_injection() {
 }
 
 // -----------------------------------------------------------------------------
-// A span is byte offsets, and where a person looks is a step away -
-// `TODO.md` §3.
+// A span is byte offsets, and where a person looks is a
+// step away.
 // -----------------------------------------------------------------------------
 
 mod places {

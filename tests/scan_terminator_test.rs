@@ -1,4 +1,4 @@
-//! A terminator that is a rule of your own - `TODO.md` §8.
+//! A terminator that is a rule of your own.
 //!
 //! `until(…)` and `recover(…)` scan for a terminator whose match is a fixed
 //! string and try any other one at every position. A rule that matches nothing
