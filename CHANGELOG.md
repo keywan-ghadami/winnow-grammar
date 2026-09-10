@@ -3,6 +3,37 @@
 
 ## [0.1.0] - Unreleased
 
+### Performance
+
+- **A rule with several alternatives skips its leading whitespace once, not once
+  per alternative.** `−19.8 %` of a whole compiler run, measured under callgrind
+  on Nikaia parsing 2000 functions (300 KB):
+
+  | | before | after | Δ |
+  | :--- | ---: | ---: | ---: |
+  | instructions | 1,025,494,823 | 822,239,436 | **−19.8 %** |
+  | branches | 129,633,498 | 104,035,212 | **−19.8 %** |
+  | mispredicts | 2,771,029 | 2,513,896 | **−9.5 %** |
+  | D1 misses | 1,144,537 | 1,149,150 | +0.4 % |
+  | LL misses | 351,771 | 352,265 | +0.1 % |
+
+  Every column that should move moves and the cache columns are flat, which is
+  what a change that removes *work* looks like - as opposed to one that buys a
+  mispredict with instructions (§2 of the findings that closed TODO §5).
+
+  **The mechanism.** A syntactic rule skips whitespace where it starts. That
+  skip was emitted *inside* each alternative, so a sixteen-way rule ran sixteen
+  skips at the same position to consume one blank, and every one of them but
+  the winner was thrown away. A rule with a `# "…"` label already hoisted it -
+  for an unrelated reason, so that the label's offsets line up - and that is
+  where the effect was first seen: adding a label to one Nikaia rule was worth
+  8.8 % on its own. Hoisting it for every multi-alternative rule is the general
+  form.
+
+  Nothing observable changes. Nikaia's 26-row error corpus - which exists to
+  catch a message that moved - is byte-identical, and its 183 tests and this
+  repository's 296 pass unchanged.
+
 ### Breaking Changes
 
 - **A repetition of a character class yields the text it matched**, not its
