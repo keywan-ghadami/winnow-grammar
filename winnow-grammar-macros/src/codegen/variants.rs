@@ -19,9 +19,17 @@ impl<'a> Codegen<'a> {
         // alternative, and only when the rule failed where it began. So the
         // whitespace a syntactic rule skips at its start has to happen outside
         // the label: skipped inside, the failure sits past the blank, the
-        // offsets no longer match and the label never substitutes. Hoisted, it
-        // is also done once instead of once per alternative.
-        let skip_inside = is_rule_start && label.is_none();
+        // offsets no longer match and the label never substitutes.
+        //
+        // **And a rule with several alternatives hoists it for a second
+        // reason, which turns out to be the larger one.** Left inside, every
+        // alternative skips the same whitespace again: a sixteen-way rule pays
+        // sixteen skips at one position to consume one blank. Hoisted, it is
+        // done once. Measured on Nikaia parsing 2000 functions, hoisting it out
+        // of one such rule was **8.8 % of the whole parse** - instructions,
+        // branches and mispredicts all moving together.
+        let hoist = is_rule_start && (label.is_some() || variants.len() > 1);
+        let skip_inside = is_rule_start && !hoist;
 
         let variant_parsers = variants.iter().map(|v| {
             let mut steps_code = TokenStream::new();
@@ -170,6 +178,19 @@ impl<'a> Codegen<'a> {
                 alt((
                     #(#variant_parsers),*
                 )).parse_next(#input)
+            };
+            // Hoisted without a label to wrap it: the skip still happens once,
+            // before the alternation, rather than once inside each of its
+            // arms.
+            let body = if hoist && label.is_none() && !is_lexical {
+                quote_spanned! {span=>
+                    {
+                        ::winnow_grammar::rt::skip_trivia(WS, #input)?;
+                        #body
+                    }
+                }
+            } else {
+                body
             };
             self.wrap_in_rule_label(body, label, is_rule_start, is_lexical)
         }
