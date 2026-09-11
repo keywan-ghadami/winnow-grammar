@@ -82,28 +82,6 @@ of a live counter. **Unmeasured**, and worth measuring before building - the
 second pass is not free either, and `count(p)` over anything but a character
 class cannot use it.
 
-## 6. Two things measured beside the whitespace hoist, and both lost — closed
-
-Recorded so they are not re-proposed. Same workload as the hoist: Nikaia parsing
-2000 functions, 300 KB, callgrind with `--branch-sim` and `--cache-sim`.
-
-**`rt::expected` guarded on `E::RECORDING`** — the wrapper reads
-`current_token_start()` before running its parser, and an expectation is worth
-nothing on the pass that discards messages. Skipping it there looked free and
-cost **+1.4 %** (1,025.5 M → 1,040.0 M): the position read is a field load, and
-the early return changed inlining for the worse. The idea is sound in shape and
-the wrapper is not where the money is.
-
-**Respelling `WS` as `multispace0 (COMMENT multispace0)*`** — in the *grammar*
-rather than here, so it is Nikaia's business, but the finding travels. It halves
-the class-scan attempts and trades in the other direction from everything else:
-**+0.7 % instructions, −7.7 % mispredicts** (2,509,073 → 2,315,826). The
-arithmetic favours it by roughly 2.6×, and it was still refused: it changes what
-a parse error says, and Nikaia's error corpus caught that. An uncertain
-performance trade bought with a certain regression in messages is not a trade.
-
----
-
 ## 5. The word-at-a-time class scan below its break-even — closed
 
 The estimate this item was opened with was wrong, and measuring it said
@@ -157,6 +135,30 @@ entirely by the per-byte loop is 119.4 M, so the guard recovers seven eighths of
 what the scan costs 1BRC while keeping everything it buys on long runs. The
 first row is the one that matters, and it is the shape ADR 23's +9% on
 identifier-heavy grammars was measured on.
+
+---
+
+## 7. Two things measured beside the whitespace hoist, and both lost — closed
+
+Recorded so they are not re-proposed. Same workload as the hoist: Nikaia parsing
+2000 functions, 300 KB, callgrind with `--branch-sim` and `--cache-sim`.
+
+**`rt::expected` guarded on `E::RECORDING`** — the wrapper reads
+`current_token_start()` before running its parser, and an expectation is worth
+nothing on the pass that discards messages. Skipping it there looked free and
+cost **+1.4 %** (1,025.5 M → 1,040.0 M): the position read is a field load, and
+the early return changed inlining for the worse. The idea is sound in shape and
+the wrapper is not where the money is.
+
+**Respelling `WS` as `multispace0 (COMMENT multispace0)*`** — in the *grammar*
+rather than here, so it is Nikaia's business, but the finding travels. It halves
+the class-scan attempts and trades in the other direction from everything else:
+**+0.7 % instructions, −7.7 % mispredicts** (2,509,073 → 2,315,826). The
+arithmetic favours it by roughly 2.6×, and it was still refused: it changes what
+a parse error says, and Nikaia's error corpus caught that. An uncertain
+performance trade bought with a certain regression in messages is not a trade.
+
+---
 
 ## 6. Release readiness for 0.1.0
 
