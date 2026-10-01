@@ -48,6 +48,12 @@
 //! Over 200_000 digits: a run taken as text 173 µs, a discarded run 174,
 //! collecting the elements of a rule 262, `count(p)` 483. The last is the one
 //! thing this file leaves open - see TODO.md §4.
+//!
+//! `char_loop`: a string body written as `(not("\"") not("\\") any)*`, which
+//! the code generator turns into `until`'s scan. Over 216 KB with no
+//! terminator: the scan 4.4 µs, `until` 4.4, the same loop by character 560.
+//! Over twelve characters: 35, 37 and 39 ns - the scan's fixed cost does not
+//! make the short case slower.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
@@ -165,6 +171,15 @@ grammar! {
         pub SHORT_COLLECTED -> usize = xs:ITEM* -> { xs.len() }
         pub SHORT_DISCARDED -> () = digit* -> { () }
         pub SHORT_COUNTED -> usize = n:count(digit) -> { n }
+
+        // A character loop, the way a string body is written: the code
+        // generator turns it into `until("\"" | "\\")`'s scan. `LOOP_BY_CHAR`
+        // is the same loop with `any` in parentheses, which the generator
+        // does not recognise - one parser call per lookahead and character,
+        // as every such loop was before.
+        pub LOOP -> usize = s:text((not("\"") not("\\") any)*) -> { s.len() }
+        pub LOOP_BY_CHAR -> usize = s:text((not("\"") not("\\") (any))*) -> { s.len() }
+        pub LOOP_UNTIL -> usize = s:until(("\"" | "\\")) -> { s.len() }
     }
 }
 
@@ -257,5 +272,30 @@ fn bench_bounded(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_repetition, bench_bounded);
+/// A character loop as a scan, against the same loop by character and
+/// against `until`, which it now is. Long, where the scan is the point, and
+/// as short as a typical string literal, where its fixed cost would show.
+fn bench_char_loop(c: &mut Criterion) {
+    let mut g = c.benchmark_group("char_loop");
+
+    let long: String = "lorem ipsum dolor sit amet ".repeat(8_000);
+    let short = "hello, world";
+    let ctx = ParseContext::<()>::default();
+    bench_cases!(
+        g,
+        ctx,
+        [
+            ("scan/200k", Rep::parse_LOOP(), long.as_str()),
+            ("by_char/200k", Rep::parse_LOOP_BY_CHAR(), long.as_str()),
+            ("until/200k", Rep::parse_LOOP_UNTIL(), long.as_str()),
+            ("scan/12", Rep::parse_LOOP(), short),
+            ("by_char/12", Rep::parse_LOOP_BY_CHAR(), short),
+            ("until/12", Rep::parse_LOOP_UNTIL(), short),
+        ]
+    );
+
+    g.finish();
+}
+
+criterion_group!(benches, bench_repetition, bench_bounded, bench_char_loop);
 criterion_main!(benches);
