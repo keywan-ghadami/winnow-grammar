@@ -468,6 +468,12 @@
   where the key count passes the default by an order of magnitude, and the
   documentation says so rather than leaving the reader to guess.
 
+  **A clone keeps the size.** `parse_<rule>_pieces` gives every piece a clone
+  of the context, and a clone of the cache came back at the default 512 slots -
+  so a context sized for 5 000 keys parsed every piece of a `par_fold` unsized,
+  without a word. A clone is still empty; it now has the size it was cloned
+  from.
+
 - **A rule may be labelled: `rule expr -> i64 # "expression" = …`.** The same
   syntax after an alternative already named that alternative; between a rule's
   return type and its `=` it names the rule, and stands in for every

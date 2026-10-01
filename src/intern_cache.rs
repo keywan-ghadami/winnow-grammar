@@ -210,12 +210,19 @@ impl Default for InternCache {
 }
 
 impl Clone for InternCache {
-    /// A clone is *empty*. `ParseContext` is cloned once per piece of a
-    /// `par_fold`, and copying eight kilobytes of cache into a piece that has
-    /// not parsed anything yet would cost more than the misses it saves. A
-    /// cache has no semantics to preserve.
+    /// A clone is *empty*, but the same size. `ParseContext` is cloned once
+    /// per piece of a `par_fold`, and copying eight kilobytes of cache into a
+    /// piece that has not parsed anything yet would cost more than the misses
+    /// it saves - a cache has no contents worth preserving. Its size is
+    /// another matter: that is what the caller said with
+    /// [`expect_distinct_keys`](crate::ParseContext::expect_distinct_keys),
+    /// and the pieces of a `par_fold` are where an aggregation over many keys
+    /// runs. A clone that forgot it would put every piece back at 512 slots.
     fn clone(&self) -> Self {
-        Self::new()
+        Self {
+            bits: self.bits,
+            ..Self::new()
+        }
     }
 }
 
@@ -267,6 +274,26 @@ mod tests {
             cache.size_for(keys);
             assert_eq!(cache.bits, bits, "{keys} keys");
         }
+    }
+
+    /// A clone starts empty and keeps the size it was given: `par_fold`
+    /// clones the context once per piece, and the pieces are where the keys
+    /// are.
+    #[test]
+    fn a_clone_is_empty_and_keeps_its_size() {
+        let interner = InternerContext::new();
+        let mut cache = InternCache::new();
+        cache.size_for(5_000);
+        cache.rebind(&interner);
+        cache.intern(&interner, "Hamburg");
+
+        let clone = cache.clone();
+        assert!(clone.slots.is_empty(), "a clone carries no entries");
+        assert_eq!(clone.bits, cache.bits, "a clone keeps the size");
+
+        let mut ctx = crate::ParseContext::<()>::default();
+        ctx.expect_distinct_keys(5_000);
+        assert_eq!(ctx.clone().intern_cache.bits, 14);
     }
 
     /// Resizing empties the table, and the emptied table refills itself.

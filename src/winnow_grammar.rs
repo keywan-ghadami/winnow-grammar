@@ -272,7 +272,9 @@ impl<S> ParseContext<S> {
     ///
     /// Call it before the parse: the table is emptied rather than rehashed,
     /// because a lost entry costs one interner call and rehashing would cost
-    /// more than that for every entry nobody looks up again.
+    /// more than that for every entry nobody looks up again. A clone of the
+    /// context keeps the size (and none of the entries), so a context sized
+    /// once and handed to `parse_<rule>_pieces` sizes every piece.
     pub fn expect_distinct_keys(&mut self, keys: usize) {
         self.intern_cache.size_for(keys);
     }
