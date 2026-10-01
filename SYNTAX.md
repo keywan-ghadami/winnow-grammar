@@ -391,11 +391,10 @@ input, between two interners over the same input, and - when the pieces of a
 `par_fold` share one interner - on how the threads interleaved. Do not persist
 it and do not read order into it. `resolve` is the way back to the text.
 
-**Which hasher the interner uses** is the `ahash` cargo feature, not a type
-parameter: on, it hashes with `ahash`; off, with std's `RandomState`. Both are
-seeded per process. It makes the interner itself 15-28% faster and does not
-measurably change a parse, because the context's lookup cache is what a parse
-actually hits - README's *Cargo features* has the numbers.
+**Which hasher the interner uses** is a cargo feature, not a type parameter:
+by default `ahash`, seeded per process; `ahash-compile-time-rng` for
+WebAssembly, seeded per build; with neither, std's `RandomState`. README's
+*Cargo features* has the numbers and the WebAssembly choice.
 
 **An interner of a different kind is `interner I;`.** Declared like `state`, it
 sends `ident` and `intern(…)` to an interner of your own instead of the one in

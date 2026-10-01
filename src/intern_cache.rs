@@ -412,7 +412,11 @@ mod tests {
         next.rebind(&interner);
         next.fill(&interner);
         let at = next.index(InternCache::key("Hamburg").0, 0);
-        assert_eq!(next.slots[at].sym, sym.index() + 1, "the table came back warm");
+        assert_eq!(
+            next.slots[at].sym,
+            sym.index() + 1,
+            "the table came back warm"
+        );
         assert_eq!(next.intern(&interner, "Hamburg"), sym);
     }
 

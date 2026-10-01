@@ -31,27 +31,45 @@ winnow = "0.6"
 
 ### Cargo features
 
-All are off by default; the crate is complete without them.
+`ahash` is on by default; the others are off. The crate is complete without
+any of them.
 
 | feature | what it does |
 |---|---|
 | `rayon` | `parse_<rule>_pieces` runs the pieces of a `par_fold` rule on rayon's global pool. Without it the same driver runs them in sequence - the same cut, the same answer - which is what lets a test check the split without threads. |
-| `ahash` | The interner hashes with [`ahash`](https://crates.io/crates/ahash) instead of std's `RandomState`. See below. |
+| `ahash` *(default)* | The interner hashes with [`ahash`](https://crates.io/crates/ahash) instead of std's `RandomState`, seeded per process. See below. |
+| `ahash-compile-time-rng` | The same hasher seeded once per build, for WebAssembly and other targets without a random source. See below. |
 | `trace` | Turns on `winnow/debug`, which traces every rule as it runs. |
 
 **About `ahash`.** Both hashers are seeded per process, so neither can be
 driven quadratic by chosen input; `ahash` is simply faster on the short keys an
-interner sees. Measured on `benches/interning.rs`, it makes **the interner
-itself 15-28% faster** - a lookup, an insert, and the cache's own fallbacks
-alike.
+interner sees - **15-28 % on the interner itself** (`benches/interning.rs`).
+Inside a parse the context's lookup cache hides most of that, but a program
+that looks names up *after* the parse does not go through the cache: Nikaia's
+compiler, which resolves names in its checker and its prover, is **2.5-3.6 %
+faster** as a whole with it. That is why it is the default.
 
-What it does *not* do is show up in a parse. A `ParseContext` keeps a lookup
-cache in front of the interner, so a parse that sees the same words repeatedly -
-which is what a parse does - rarely reaches the hasher at all; across repeated
-runs the parse benchmarks moved between -5% and +9%, which is this machine's
-noise and not a result. Turn it on if you call the interner directly, or if
-your input has many distinct strings so that inserts dominate; leave it off
-otherwise and save the dependency.
+**WebAssembly.** `ahash` gets its seed from `getrandom`, and `getrandom` does
+not compile for `wasm32-unknown-unknown` unless the final application chooses
+a backend. Two ways, pick one:
+
+- Keep the default and choose the backend in the application, as `getrandom`
+  intends: its `wasm_js` feature plus `--cfg getrandom_backend="wasm_js"` (see
+  the [getrandom documentation](https://docs.rs/getrandom/latest/getrandom/#webassembly-support)).
+- Or take the seed from the build instead:
+
+  ```toml
+  winnow-grammar = { version = "0.1", default-features = false, features = ["ahash-compile-time-rng"] }
+  ```
+
+  Every run of one binary then hashes alike, so someone who has the binary can
+  work out colliding keys, and two builds of the same source are not
+  byte-identical. For a parser that only reads its own user's input, neither
+  matters. With both features on, the per-process seed wins.
+
+`default-features = false` with neither gives std's `RandomState`, which builds
+everywhere (on `wasm32-unknown-unknown` with fixed keys) and is the slower
+hasher.
 
 ### Build one context, clone it
 

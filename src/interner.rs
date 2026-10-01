@@ -1,10 +1,11 @@
 use lasso::{Key, Spur, ThreadedRodeo};
 
-/// How the interner hashes. `ahash` under its feature, std's `RandomState`
-/// otherwise - see `InternerContext`.
-#[cfg(feature = "ahash")]
+/// How the interner hashes. `ahash` under either of its features - which
+/// differ only in where the seed comes from - std's `RandomState` otherwise.
+/// See `InternerContext`.
+#[cfg(any(feature = "ahash", feature = "ahash-compile-time-rng"))]
 type Hasher = ahash::RandomState;
-#[cfg(not(feature = "ahash"))]
+#[cfg(not(any(feature = "ahash", feature = "ahash-compile-time-rng")))]
 type Hasher = std::hash::RandomState;
 use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock};
@@ -88,9 +89,12 @@ impl Symbol {
 /// The interner a parse interns into: a shared `lasso::ThreadedRodeo` behind
 /// an `Arc`, which ADR 14 makes the caller's to own and to share.
 ///
-/// **The hash function is a cargo feature, not a type parameter.** With
-/// `ahash` on, it hashes with `ahash::RandomState`; otherwise with std's.
-/// Both are seeded per process. Making it a type parameter instead would put
+/// **The hash function is a cargo feature, not a type parameter.** By default
+/// (`ahash`) it hashes with `ahash::RandomState`, seeded per process from the
+/// operating system. `ahash-compile-time-rng` is the same hasher seeded once
+/// per build, for `wasm32-unknown-unknown` and other targets with no random
+/// source; with neither, it is std's `RandomState`, which on such a target
+/// falls back to fixed keys. Making it a type parameter instead would put
 /// one in `ParseContext` and from there in every generated signature, for a
 /// choice that has two sensible answers - so it is a feature, and the crate
 /// does not ask a grammar author about it.

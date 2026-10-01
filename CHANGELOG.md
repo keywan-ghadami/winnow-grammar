@@ -130,6 +130,19 @@
 
 ### Breaking Changes
 
+- **`ahash` is a default feature**, and `ahash-compile-time-rng` is new. The
+  interner's hasher was std's `RandomState` unless asked; Nikaia measured
+  `ahash` at **2.5-3.6 % of a whole compile** (1brc 55.66 M → 54.23 M
+  instructions, n-body 62.91 M → 60.55 M, k-nucleotide 57.17 M → 55.56 M),
+  from names it looks up after the parse, where the lookup cache does not
+  reach. Breaking for one kind of user: `ahash` seeds from `getrandom`, which
+  does not compile for `wasm32-unknown-unknown` unless the application picks a
+  backend. **Migration**: either pick `getrandom`'s `wasm_js` backend in the
+  application, or depend with `default-features = false, features =
+  ["ahash-compile-time-rng"]` - the same hasher seeded at build time, which
+  builds for wasm32 as it is. README's *Cargo features* says what each costs.
+  CI now builds both WebAssembly configurations, so the promise is checked.
+
 - **A repetition of a character class yields the text it matched**, not its
   elements: `digit{1,2}`, `digit*`, `digit+` and `any{n}` are now `&'a str`
   instead of `Vec<char>`. `{n,m}` is borrowed from regular expressions, where

@@ -14,13 +14,24 @@ repository = "https://github.com/keywan-ghadami/winnow-grammar"
 path = "src/winnow_grammar.rs"
 
 [features]
+default = ["ahash"]
 trace = ["winnow/debug"]
 # `parse_<rule>_pieces` on a `par_fold` rule runs the pieces on rayon's global
 # pool. Without it the same function runs them in sequence.
 rayon = ["dep:rayon"]
-# The interner hashes with `ahash` instead of std's `RandomState`. Both are
-# seeded per process; `ahash` is faster on the short keys an interner sees.
-ahash = ["dep:ahash"]
+# The interner hashes with `ahash` instead of std's `RandomState`, seeded per
+# process from the operating system (`getrandom`). On by default: it is 2.5-3.6 %
+# of a whole compile in Nikaia, where names are looked up after the parse too.
+ahash = ["dep:ahash", "ahash?/std", "ahash?/runtime-rng"]
+# The same hasher, seeded once per *build* instead of per process - for targets
+# with no random source to ask, `wasm32-unknown-unknown` above all, where
+# `getrandom` refuses to compile unless the final application picks a backend.
+# Use it instead of the default:
+#     winnow-grammar = { version = "…", default-features = false, features = ["ahash-compile-time-rng"] }
+# The cost: every run of one binary hashes alike, so someone who has the binary
+# can work out colliding keys, and two builds of one source differ. With both
+# features on, `ahash` wins and this one does nothing.
+ahash-compile-time-rng = ["dep:ahash", "ahash?/std", "ahash?/compile-time-rng"]
 
 [dependencies]
 # `simd` routes winnow's `find_slice` through `memchr` (SIMD where the target
@@ -36,7 +47,9 @@ lasso = { version = "0.7", features = ["multi-threaded"] }
 # available to users of the macro as well - not only to our own tests.
 paste = "1.0"
 rayon = { version = "1.10", optional = true }
-ahash = { version = "0.8.12", optional = true }
+# No default features: which seed source it gets is the choice between the
+# `ahash` and `ahash-compile-time-rng` features above.
+ahash = { version = "0.8.12", optional = true, default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
