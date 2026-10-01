@@ -62,6 +62,9 @@ pub struct Codegen<'a> {
     /// then it is scanned for like the literal it is. The frame check reads
     /// the same map, so the two cannot disagree about what a terminator is.
     pub literal_rules: HashMap<String, Vec<String>>,
+    /// The bytes each alternative can begin with, where that is known - the
+    /// fast pass's guard on a rule's alternatives (`rt::first_byte`).
+    pub first_bytes: winnow_grammar_model::first_bytes::FirstBytes<'a>,
 }
 
 impl Codegen<'_> {
@@ -92,6 +95,7 @@ impl<'a> Codegen<'a> {
             frames,
             current_boundary: RefCell::new(None),
             literal_rules: winnow_grammar_model::analysis::literal_rules(grammar),
+            first_bytes: winnow_grammar_model::first_bytes::FirstBytes::new(grammar),
         }
     }
 

@@ -27,6 +27,7 @@ use proc_macro2::TokenStream;
 use syn::Result;
 
 pub mod analysis;
+pub mod first_bytes;
 pub mod frame;
 pub mod model;
 pub mod parser;

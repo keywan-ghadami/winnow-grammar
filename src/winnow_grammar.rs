@@ -143,6 +143,31 @@ pub struct ParseContext<S = ()> {
     /// all, so the fast pass does not pay for it.
     #[doc(hidden)]
     pub last_trivia: (usize, usize),
+    /// The last implicit whitespace skip that succeeded: which skip it was,
+    /// where it began and where it ended. See [`crate::rt::skip_trivia`].
+    ///
+    /// What the skip consumes from a position depends on the input alone, so
+    /// a skip that starts where this one started ends where it ended, and one
+    /// that starts where it ended consumes nothing - the loop stopped there
+    /// because nothing more matched. A PEG tries alternatives one after the
+    /// other and each of them skips before its first element, so the same
+    /// position is skipped many times over: measured on Nikaia's own
+    /// grammar, 148 000 skips for 7 KB of source.
+    ///
+    /// Not running a skip again also means not running its actions again. A
+    /// trivia rule that writes user state already has to write the same thing
+    /// however often it runs - backtracking runs it again and again at the
+    /// same position - so skipping a repeat changes nothing for one that
+    /// does; the diagnosing pass, which may start from a restored user state,
+    /// starts without a memo.
+    #[doc(hidden)]
+    pub trivia_memo: (usize, usize, usize),
+    /// Whether an error made now will be read: `true` while the diagnosing
+    /// engine runs, `false` in the fast pass. The generated code sets it
+    /// around each call of a hand-written parser, which reads it through
+    /// [`ParseError::from_input`] and so builds an error only when one is
+    /// wanted. `true` outside a parse, where nothing has said otherwise.
+    pub diagnosing: bool,
 }
 
 impl<S: Default> Default for ParseContext<S> {
@@ -160,6 +185,8 @@ impl<S: Default> Default for ParseContext<S> {
             in_trivia: false,
             in_lookahead: false,
             last_trivia: (usize::MAX, usize::MAX),
+            trivia_memo: rt::TRIVIA_UNSEEN,
+            diagnosing: true,
         }
     }
 }
@@ -185,6 +212,8 @@ impl<S> ParseContext<S> {
             in_trivia: false,
             in_lookahead: false,
             last_trivia: (usize::MAX, usize::MAX),
+            trivia_memo: rt::TRIVIA_UNSEEN,
+            diagnosing: true,
         }
     }
 
@@ -222,6 +251,8 @@ impl<S> ParseContext<S> {
         self.recoveries = 0;
         self.recovered.clear();
         self.intern_cache.rebind(&self.interner);
+        // Offsets of another input mean nothing in this one.
+        self.trivia_memo = rt::TRIVIA_UNSEEN;
     }
 
     /// Records what a `recover(…)` swallowed: always the count, and the error

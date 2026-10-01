@@ -33,19 +33,44 @@ pub const PRIO_STRUCTURAL: u8 = 50;
 /// generated parser holds a `Result<_, ErrMode<ParseError>>` on the stack.
 /// With the content inline (around 130 bytes), a 500-fold nested rule ran
 /// into a stack overflow in the debug build.
+///
+/// **An error nobody will read has no content at all** (`None`): what a
+/// hand-written parser returns in the fast pass when it asks for its error
+/// with [`ParseError::from_input`]. That pass only needs to know *that* the
+/// parser failed, and a parser that is tried at every position and usually
+/// fails - a number literal, say - would otherwise build an error, with an
+/// allocation and the next word of the input, each time, to have it dropped
+/// one call later. Reading such an error sees [`NOTHING`]; changing one gives
+/// it content first.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError(Box<ErrorCore>);
+pub struct ParseError(Option<Box<ErrorCore>>);
+
+/// What an error without content reads as: undiagnosed, with nothing known.
+static NOTHING: ErrorCore = ErrorCore {
+    offset: 0,
+    expected: Vec::new(),
+    message: None,
+    found: None,
+    rule_stack: Vec::new(),
+    priority: PRIO_NORMAL,
+    undiagnosed: true,
+    also: Vec::new(),
+    optional: false,
+    trivia: false,
+    lookahead: false,
+    begun_at: None,
+};
 
 impl std::ops::Deref for ParseError {
     type Target = ErrorCore;
     fn deref(&self) -> &ErrorCore {
-        &self.0
+        self.0.as_deref().unwrap_or(&NOTHING)
     }
 }
 
 impl std::ops::DerefMut for ParseError {
     fn deref_mut(&mut self) -> &mut ErrorCore {
-        &mut self.0
+        self.0.get_or_insert_with(|| Box::new(NOTHING.clone()))
     }
 }
 
@@ -106,7 +131,7 @@ pub struct ErrorCore {
 impl ParseError {
     /// Error at the current position of the stream.
     pub fn from_stream<I: Stream + Location + AsBStr>(input: &I) -> Self {
-        ParseError(Box::new(ErrorCore {
+        ParseError(Some(Box::new(ErrorCore {
             offset: input.current_token_start(),
             expected: Vec::new(),
             message: None,
@@ -119,7 +144,29 @@ impl ParseError {
             trivia: false,
             lookahead: false,
             begun_at: None,
-        }))
+        })))
+    }
+
+    /// Error at the current position of a grammar's input, for a
+    /// hand-written parser: in full where it will be diagnosed, and without
+    /// content in the fast pass, which drops it - see [`ParseError`]. What is
+    /// added to one without content ([`add_expected`](Self::add_expected),
+    /// [`with_message`](Self::with_message), [`with_priority`](Self::with_priority))
+    /// is dropped with it.
+    pub fn from_input<S: Clone + std::fmt::Debug>(input: &crate::ParseInput<'_, S>) -> Self {
+        if input.state.diagnosing {
+            Self::from_stream(input)
+        } else {
+            ParseError(None)
+        }
+    }
+
+    /// The content, owned: an error without any reads as [`NOTHING`].
+    fn into_core(self) -> ErrorCore {
+        match self.0 {
+            Some(core) => *core,
+            None => NOTHING.clone(),
+        }
     }
 
     /// The error of a fast pass that was not diagnosed
@@ -127,7 +174,7 @@ impl ParseError {
     /// known. Carries no position; [`render`](Self::render) prints the
     /// message alone.
     pub fn undiagnosed() -> Self {
-        ParseError(Box::new(ErrorCore {
+        ParseError(Some(Box::new(ErrorCore {
             offset: 0,
             expected: Vec::new(),
             message: Some("parse failed; diagnostics are off".to_string()),
@@ -140,7 +187,7 @@ impl ParseError {
             trivia: false,
             lookahead: false,
             begun_at: None,
-        }))
+        })))
     }
 
     /// Whether this is an [`undiagnosed`](Self::undiagnosed) error.
@@ -150,6 +197,9 @@ impl ParseError {
 
     /// Appends an expectation unless it is already present.
     pub fn add_expected(mut self, what: impl Into<String>) -> Self {
+        if self.0.is_none() {
+            return self;
+        }
         let what = what.into();
         if !self.expected.contains(&what) {
             self.expected.push(what);
@@ -159,12 +209,18 @@ impl ParseError {
 
     /// Sets a verbatim message.
     pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        if self.0.is_none() {
+            return self;
+        }
         self.message = Some(message.into());
         self
     }
 
     /// Sets the priority.
     pub fn with_priority(mut self, prio: u8) -> Self {
+        if self.0.is_none() {
+            return self;
+        }
         self.priority = prio;
         self
     }
@@ -202,8 +258,8 @@ impl ParseError {
         // actually required at that position - which is how a missing `,`
         // came to be reported as `expected one of: "//", whitespace`.
         match (self.optional, other.optional) {
-            (true, false) => return other.absorbing(*self.0),
-            (false, true) => return self.absorbing(*other.0),
+            (true, false) => return other.absorbing(self.into_core()),
+            (false, true) => return self.absorbing(other.into_core()),
             _ => {}
         }
         // Then trivia, below every other optional continuation. The two are
@@ -212,8 +268,8 @@ impl ParseError {
         // is an optional continuation, so the first test cannot separate the
         // whitespace skip from the `}` the grammar was looking for.
         match (self.trivia, other.trivia) {
-            (true, false) => return other.absorbing(*self.0),
-            (false, true) => return self.absorbing(*other.0),
+            (true, false) => return other.absorbing(self.into_core()),
+            (false, true) => return self.absorbing(other.into_core()),
             _ => {}
         }
         // Then how long each has been open. Both are requirements at the same
@@ -223,16 +279,16 @@ impl ParseError {
         // have been a call or a struct literal - outranks the `}` an unclosed
         // block is missing, because two expectations beat one on priority.
         match (self.begun_at, other.begun_at) {
-            (Some(a), Some(b)) if a < b => return self.absorbing_also(*other.0),
-            (Some(a), Some(b)) if b < a => return other.absorbing_also(*self.0),
+            (Some(a), Some(b)) if a < b => return self.absorbing_also(other.into_core()),
+            (Some(a), Some(b)) if b < a => return other.absorbing_also(self.into_core()),
             _ => {}
         }
         match self.priority.cmp(&other.priority) {
-            Greater => return self.absorbing_also(*other.0),
-            Less => return other.absorbing_also(*self.0),
+            Greater => return self.absorbing_also(other.into_core()),
+            Less => return other.absorbing_also(self.into_core()),
             Equal => {}
         }
-        let other = *other.0;
+        let other = other.into_core();
         for e in other.also {
             if !self.also.contains(&e) {
                 self.also.push(e);

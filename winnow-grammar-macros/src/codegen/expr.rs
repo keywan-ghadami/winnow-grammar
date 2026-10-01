@@ -1087,13 +1087,25 @@ impl<'a> Codegen<'a> {
             _ => {
                 if args.is_empty() {
                     // A hand-written parser returns `ParseError` whatever the
-                    // grammar's error type is; the fast pass drops it.
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow::Parser::parse_next(&mut #rule_path, i).map_err(|e| ::winnow::error::ErrMode::Backtrack(<E as ::winnow_grammar::Diagnostics>::from_parse_error(e)))) }
+                    // grammar's error type is; the fast pass drops it, and
+                    // says so first, so that the parser need not build one
+                    // (`ParseError::from_input`).
+                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| {
+                        let outer = ::core::mem::replace(&mut i.state.diagnosing, <E as ::winnow_grammar::Diagnostics>::RECORDING);
+                        let r = ::winnow::Parser::parse_next(&mut #rule_path, i);
+                        i.state.diagnosing = outer;
+                        r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<E as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
+                    }) }
                 } else {
                     let arg_exprs = args
                         .iter()
                         .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #rule_path(i, #(#arg_exprs),*).map_err(|e| ::winnow::error::ErrMode::Backtrack(<E as ::winnow_grammar::Diagnostics>::from_parse_error(e)))) }
+                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| {
+                        let outer = ::core::mem::replace(&mut i.state.diagnosing, <E as ::winnow_grammar::Diagnostics>::RECORDING);
+                        let r = #rule_path(i, #(#arg_exprs),*);
+                        i.state.diagnosing = outer;
+                        r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<E as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
+                    }) }
                 }
             }
         };
