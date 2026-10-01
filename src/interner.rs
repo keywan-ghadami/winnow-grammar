@@ -110,12 +110,16 @@ impl Symbol {
 #[derive(Debug, Clone)]
 pub struct InternerContext {
     backend: Arc<OnceLock<ThreadedRodeo<Spur, Hasher>>>,
+    /// Lookup tables the contexts on this interner have finished with - see
+    /// `InternCache::fill`.
+    tables: Arc<crate::intern_cache::Stash>,
 }
 
 impl InternerContext {
     pub fn new() -> Self {
         Self {
             backend: Arc::new(OnceLock::new()),
+            tables: Arc::default(),
         }
     }
 
@@ -145,6 +149,11 @@ impl InternerContext {
     /// Whether nothing has been interned yet.
     pub fn is_empty(&self) -> bool {
         self.backend.get().is_none_or(|r| r.is_empty())
+    }
+
+    /// Where the contexts on this interner leave their lookup tables.
+    pub(crate) fn stash(&self) -> &Arc<crate::intern_cache::Stash> {
+        &self.tables
     }
 
     /// Identifies the interner *behind* this handle: two clones of one

@@ -22,8 +22,22 @@
   | the same stations, `intern(until(";"))` | −10.5 % | −4.7 % | −12.0 % |
 
   Wall clock in `benches/interning.rs`: `parse/rows` −20 %, in eight pieces
-  −12 %, `parse/idents` −3 %. No workload measured lost on any column, so
-  there is no setting for it.
+  −12 %, `parse/idents` −3 %.
+
+  **Measured downstream, that alone lost**: Nikaia's compiler went 67.06 M →
+  67.40 M instructions (+0.5 %). It builds ~870 short-lived contexts per
+  compile, and each paid for a fresh table - now 12 KiB instead of 8, every
+  slot written empty - while its short names never reached the check this
+  saves. The benchmarks above use one long-lived context and could not see it.
+
+- **A context's lookup table is handed on to the next context on the same
+  interner.** A dropped context returns its table to its `InternerContext`,
+  which keeps a few; the next context on that interner takes one instead of
+  allocating, and finds it warm - the symbols are that interner's, so they are
+  still right. A table never reaches another interner. One lock per context
+  lifetime, nothing on the lookup path. Callgrind, 870 contexts of 40 lookups
+  each on one interner (Nikaia's shape): **12.67 M → 4.78 M instructions
+  (−62 %)**, mispredicts 96 k → 51 k; one long-lived context is unchanged.
 
 - **`digit` tests a byte instead of decoding a character.** It was winnow's
   `one_of('0'..='9')`, which decodes UTF-8 and then tests the range; a digit is

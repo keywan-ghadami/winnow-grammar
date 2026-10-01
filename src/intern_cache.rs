@@ -12,6 +12,7 @@
 //! symbol wrong; the worst it can do is not help.
 
 use crate::{InternerContext, Symbol};
+use std::sync::{Arc, Mutex};
 
 /// One slot. 24 bytes, so the table below is 12 KiB.
 #[derive(Clone, Copy)]
@@ -28,6 +29,49 @@ struct Slot {
     len: u32,
     /// The symbol's index plus one; zero means the slot is empty.
     sym: u32,
+}
+
+/// A table a context no longer needs, kept by the interner its symbols
+/// belong to so that the next context on that interner starts with it.
+struct Table {
+    bits: u32,
+    slots: Vec<Slot>,
+}
+
+/// The tables an interner keeps for the contexts that use it - see
+/// [`InternCache::fill`]. Shared by every clone of one
+/// [`InternerContext`], and only by those: a table is handed only to a
+/// context interning into the interner that filled it, so every symbol in it
+/// is still that interner's.
+#[derive(Default)]
+pub(crate) struct Stash(Mutex<Vec<Table>>);
+
+impl Stash {
+    /// How many tables an interner keeps. One is the common case - one
+    /// context after another - and a `par_fold` returns one per piece at
+    /// once; keeping a few covers the next run of pieces without letting a
+    /// wide one pin megabytes.
+    const KEEP: usize = 4;
+
+    fn take(&self, bits: u32) -> Option<Vec<Slot>> {
+        let mut tables = self.0.lock().ok()?;
+        let at = tables.iter().rposition(|t| t.bits == bits)?;
+        Some(tables.swap_remove(at).slots)
+    }
+
+    fn put(&self, bits: u32, slots: Vec<Slot>) {
+        if let Ok(mut tables) = self.0.lock() {
+            if tables.len() < Self::KEEP {
+                tables.push(Table { bits, slots });
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for Stash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Stash")
+    }
 }
 
 /// Direct-mapped, fixed size, one slot per bucket: a miss or a mismatch
@@ -58,6 +102,9 @@ pub struct InternCache {
     /// replaced between parses gets an empty cache rather than another
     /// interner's numbers.
     interner: usize,
+    /// The stash of the interner the slots belong to, where they go when this
+    /// cache is dropped or rebound. `None` until the first `intern`.
+    home: Option<Arc<Stash>>,
     /// `1 << bits` slots. Settable per context, because how many distinct
     /// strings a parse will see is the caller's knowledge - see
     /// [`ParseContext::expect_distinct_keys`](crate::ParseContext::expect_distinct_keys).
@@ -90,6 +137,7 @@ impl InternCache {
         Self {
             slots: Vec::new(),
             interner: 0,
+            home: None,
             bits: Self::DEFAULT_BITS,
         }
     }
@@ -115,8 +163,8 @@ impl InternCache {
         let bits = (usize::BITS - 1 - wanted.leading_zeros().min(usize::BITS - 1))
             .clamp(Self::MIN_BITS, Self::MAX_BITS);
         if bits != self.bits {
+            self.give_back();
             self.bits = bits;
-            self.slots = Vec::new();
         }
     }
 
@@ -167,24 +215,45 @@ impl InternCache {
     pub(crate) fn rebind(&mut self, interner: &InternerContext) {
         let id = interner.id();
         if self.interner != id {
+            self.give_back();
             self.interner = id;
-            self.slots.clear();
+        }
+    }
+
+    /// Returns the table to the interner it was filled from, warm, for the
+    /// next context on that interner.
+    fn give_back(&mut self) {
+        let slots = std::mem::take(&mut self.slots);
+        if let (false, Some(home)) = (slots.is_empty(), &self.home) {
+            home.put(self.bits, slots);
         }
     }
 
     /// The symbol for `text`, from the cache when it is there and from the
     /// interner otherwise.
     /// Out of line and marked cold: it runs once per context that interns.
+    ///
+    /// The table comes from the interner when a context before this one left
+    /// one there, and is allocated only when none did. A compiler that builds
+    /// a context per short parse - Nikaia builds ~870 per compile - otherwise
+    /// pays for a fresh table every time: the allocation, writing every slot
+    /// empty, and then a miss on every name the previous context had already
+    /// cached. Handed on, the table is warm.
     #[cold]
     #[inline(never)]
-    fn fill(&mut self) {
-        self.slots = vec![Self::empty_slot(); 1 << self.bits];
+    fn fill(&mut self, interner: &InternerContext) {
+        let home = Arc::clone(interner.stash());
+        self.slots = home
+            .take(self.bits)
+            .unwrap_or_else(|| vec![Self::empty_slot(); 1 << self.bits]);
+        self.interner = interner.id();
+        self.home = Some(home);
     }
 
     #[inline]
     pub(crate) fn intern(&mut self, interner: &InternerContext, text: &str) -> Symbol {
         if self.slots.is_empty() {
-            self.fill();
+            self.fill(interner);
         }
         let (head, tail) = Self::key(text);
         let len = text.len() as u32;
@@ -227,10 +296,15 @@ impl Clone for InternCache {
     /// and the pieces of a `par_fold` are where an aggregation over many keys
     /// runs. A clone that forgot it would put every piece back at 512 slots.
     fn clone(&self) -> Self {
-        Self {
-            bits: self.bits,
-            ..Self::new()
-        }
+        let mut clone = Self::new();
+        clone.bits = self.bits;
+        clone
+    }
+}
+
+impl Drop for InternCache {
+    fn drop(&mut self) {
+        self.give_back();
     }
 }
 
@@ -322,6 +396,47 @@ mod tests {
         assert_ne!(sa, sb);
         assert_eq!(cache.intern(&interner, long_a), sa);
         assert_eq!(cache.intern(&interner, long_b), sb);
+    }
+
+    /// A cache dropped hands its table to its interner, and the next cache
+    /// on that interner starts with it - warm, so the first lookup is a hit.
+    #[test]
+    fn a_table_is_handed_on_to_the_next_cache_on_the_interner() {
+        let interner = InternerContext::new();
+        let sym = {
+            let mut first = InternCache::new();
+            first.rebind(&interner);
+            first.intern(&interner, "Hamburg")
+        };
+        let mut next = InternCache::new();
+        next.rebind(&interner);
+        next.fill(&interner);
+        let at = next.index(InternCache::key("Hamburg").0, 0);
+        assert_eq!(next.slots[at].sym, sym.index() + 1, "the table came back warm");
+        assert_eq!(next.intern(&interner, "Hamburg"), sym);
+    }
+
+    /// Never across interners: another interner's numbers would be wrong
+    /// symbols, not slow ones.
+    #[test]
+    fn a_table_never_reaches_another_interner() {
+        let a = InternerContext::new();
+        let b = InternerContext::new();
+        b.intern_string("padding, so that the numbers differ");
+        let in_a = {
+            let mut cache = InternCache::new();
+            cache.rebind(&a);
+            cache.intern(&a, "Hamburg")
+        };
+        let mut cache = InternCache::new();
+        cache.rebind(&b);
+        let in_b = cache.intern(&b, "Hamburg");
+        assert_eq!(in_b, b.intern_string("Hamburg"));
+        assert_ne!(in_a, in_b);
+
+        // Rebinding hands the table back to the interner it came from.
+        cache.rebind(&a);
+        assert_eq!(cache.intern(&a, "Hamburg"), in_a);
     }
 
     /// Resizing empties the table, and the emptied table refills itself.
