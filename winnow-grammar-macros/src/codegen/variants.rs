@@ -94,9 +94,25 @@ impl<'a> Codegen<'a> {
                 Some(label) => quote_spanned! {span=> ::winnow_grammar::rt::labelled(#label, #closure) },
                 None => closure,
             };
+            // An alternative that cannot begin with the next byte is not tried
+            // in the fast pass - see `first_bytes`. Only where the position is
+            // known: a lexical rule's own, or a syntactic rule's after its
+            // hoisted skip.
+            let guard = if is_lexical || hoist {
+                self.first_bytes.alternative(&v.pattern, !is_lexical)
+            } else {
+                None
+            };
+            let guarded = match guard {
+                Some(set) => {
+                    let [a, b, c, d] = set.0;
+                    quote_spanned! {span=> ::winnow_grammar::rt::first_byte(::winnow_grammar::rt::ByteSet([#a, #b, #c, #d]), #labelled) }
+                }
+                None => labelled,
+            };
             // What an alternative found is kept when it had begun - see
             // `rt::alternative`.
-            quote_spanned! {span=> ::winnow_grammar::rt::alternative(#labelled) }
+            quote_spanned! {span=> ::winnow_grammar::rt::alternative(#guarded) }
         });
 
         if variants.len() == 1 {
