@@ -98,16 +98,18 @@ pub fn scan_to_any<'a, S: Clone + std::fmt::Debug, E>(
     lits: &'static [&'static str],
     line_ending: bool,
 ) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, ErrMode<E>> {
-    let mut needles: Vec<&'static str> = lits.to_vec();
-    if line_ending {
-        needles.push("\n");
-    }
+    // The needles are matched on as they stand rather than gathered into a
+    // list with `\n` appended: that list was an allocation per call, and on
+    // a grammar that reads short lines it cost more than the scan.
     move |input| {
-        let hit = match needles.as_slice() {
-            [] => None,
-            [a] => input.find_slice(*a),
-            [a, b] => input.find_slice((*a, *b)),
-            [a, b, c] => input.find_slice((*a, *b, *c)),
+        let hit = match (lits, line_ending) {
+            ([], false) => None,
+            ([], true) => input.find_slice("\n"),
+            ([a], false) => input.find_slice(*a),
+            ([a], true) => input.find_slice((*a, "\n")),
+            ([a, b], false) => input.find_slice((*a, *b)),
+            ([a, b, c], false) => input.find_slice((*a, *b, *c)),
+            ([a, b], true) => input.find_slice((*a, *b, "\n")),
             _ => unreachable!("the code generator limits a scan set to three needles"),
         };
         let end = match hit {
@@ -381,6 +383,47 @@ where
             }
             r => r,
         }
+    }
+}
+
+/// A set of bytes, one bit each - what an alternative can begin with.
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct ByteSet(pub [u64; 4]);
+
+impl ByteSet {
+    #[inline]
+    pub fn contains(&self, b: u8) -> bool {
+        self.0[(b >> 6) as usize] & (1 << (b & 63)) != 0
+    }
+}
+
+/// An alternative that the **fast pass** does not try where the next byte is
+/// not one it can begin with. The code generator puts it only where every
+/// match of the alternative consumes a byte from `set` (see
+/// `winnow_grammar_model::first_bytes`), so not trying it changes nothing but
+/// the cost of finding out. The diagnosing pass tries it regardless: an
+/// alternative that was not tried would be missing from `expected one of: …`.
+#[doc(hidden)]
+#[inline]
+pub fn first_byte<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+    set: ByteSet,
+    mut p: P,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>>
+where
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+{
+    move |input| {
+        if !E::RECORDING {
+            let fits = match input.as_bstr().first() {
+                Some(&b) => set.contains(b),
+                None => false,
+            };
+            if !fits {
+                return Err(ErrMode::Backtrack(E::from_input(input)));
+            }
+        }
+        p.parse_next(input)
     }
 }
 
@@ -878,6 +921,11 @@ pub fn class_or_wide<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
     }
 }
 
+/// A [`ParseContext::trivia_memo`](crate::ParseContext::trivia_memo) that
+/// remembers no skip.
+#[doc(hidden)]
+pub const TRIVIA_UNSEEN: (usize, usize, usize) = (0, usize::MAX, usize::MAX);
+
 /// The implicit whitespace skip between the tokens of a syntactic rule.
 ///
 /// Only the code generator calls this, and that is the point: what the skip
@@ -891,11 +939,30 @@ where
     E: RtError<'a, S>,
     F: FnMut(&mut ParseInput<'a, S>) -> Result<(), ErrMode<E>>,
 {
-    let outer = input.state.in_trivia;
-    input.state.in_trivia = true;
     let from = input.current_token_start();
-    let r = ws(input);
-    input.state.in_trivia = outer;
+    // **A skip already made is not made again** - see
+    // `ParseContext::trivia_memo`. Where the last one ended there is nothing
+    // left to skip, and where it began it ends where it ended. Only the same
+    // skip, though: an inherited rule skips with its own grammar's `WS`, and
+    // this instance's address is what tells them apart. Two instances that
+    // a linker folded into one are the same code and skip the same.
+    let this = skip_trivia::<S, E, F> as fn(F, &mut ParseInput<'a, S>) -> _ as usize;
+    let (memo_skip, memo_from, memo_to) = input.state.trivia_memo;
+    let r = if memo_skip == this && from == memo_to {
+        Ok(())
+    } else if memo_skip == this && from == memo_from {
+        input.next_slice(memo_to - memo_from);
+        Ok(())
+    } else {
+        let outer = input.state.in_trivia;
+        input.state.in_trivia = true;
+        let r = ws(input);
+        input.state.in_trivia = outer;
+        if r.is_ok() {
+            input.state.trivia_memo = (this, from, input.current_token_start());
+        }
+        r
+    };
     // Where this skip ran, for `ParseContext::record`: an attempt that failed
     // inside the trivia its own rule skipped has not begun. Skips *chain* -
     // a rule skips at its start and the first element of its sequence skips
@@ -1105,6 +1172,10 @@ where
     D: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<ParseError>>,
 {
     input.state.furthest = None;
+    // The fast pass's skips ran the grammar's trivia actions against a user
+    // state that `Diagnose::Replay` has since put back: this pass runs them
+    // again rather than taking their ends on trust.
+    input.state.trivia_memo = TRIVIA_UNSEEN;
     let result = diagnose(input);
     finish(input, result)
 }

@@ -15,6 +15,43 @@
   200 000-digit run −39 %, `tenths` −14 %, `digit{1,2}` −26 %. Nothing
   observable changes: the value, the position and the error are the same.
 
+- **A whitespace skip already made is not made again.** A PEG tries one
+  alternative after another, and each begins with the implicit skip at the
+  same position: Nikaia's grammar made 148 000 skips for 7 KB of source.
+  `skip_trivia` now remembers the last skip that succeeded - which skip, where
+  it began, where it ended - and a skip from either end of it costs a
+  comparison. Measured under callgrind on Nikaia compiling `1brc.nika` (7 KB):
+  the parse **21.1 M → 15.2 M instructions (−28 %)**, the whole compiler run
+  97.7 M → 79.5 M. The memo is reset at the start of every parse and of every
+  diagnosing pass, whose user state `Diagnose::Replay` may have put back; a
+  trivia rule's actions already have to write the same thing however often
+  they run, since backtracking runs them again and again.
+
+- **An alternative that cannot begin with the next byte is not tried in the
+  fast pass.** The generator works out the bytes each of a rule's
+  alternatives can begin with (`winnow_grammar_model::first_bytes`) and puts a
+  one-bit test in front of it. Sound or nothing: an alternative that can match
+  nothing, begins with `any`, a hand-written parser, a rule with parameters, a
+  cycle or a cut gets no test. The diagnosing pass tries every alternative as
+  before, so `expected one of: …` is unchanged. On Nikaia a name was checked
+  against some thirty keywords a call at a time; now it is thirty bit tests.
+
+- **A hand-written parser need not build an error nobody reads.**
+  `ParseError::from_input(i)` is the full error in the diagnosing pass and,
+  in the fast pass, one without content - no allocation, no next word, and
+  `add_expected`/`with_message`/`with_priority` on it are free. The generated
+  call of an `extern rule` sets `ParseContext::diagnosing` for it. Nikaia's
+  number literal, tried at every operand and usually failing, built 2 070
+  errors to drop them for 7 KB of source.
+
+- **`until(a | b)` no longer allocates per call.** The needles were copied
+  into a list with `\n` appended each time; on short lines that cost more
+  than the scan.
+
+  These three together, after the skip memo, on the same measurement: the
+  parse **15.2 M → 12.4 M instructions**, the whole run 79.5 M → 73.8 M -
+  `1brc.nika` **21.1 M → 12.4 M (−41 %)** in all.
+
 - **A character loop is a scan.** `(not("\"") not("\\") any)*` - the usual
   string body - and every loop of that shape is generated as `until("\"" |
   "\\")`'s `memchr` scan instead of a parser call per lookahead and
