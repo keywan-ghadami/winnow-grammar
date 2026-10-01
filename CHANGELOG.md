@@ -5,6 +5,19 @@
 
 ### Performance
 
+- **A character loop is a scan.** `(not("\"") not("\\") any)*` - the usual
+  string body - and every loop of that shape is generated as `until("\"" |
+  "\\")`'s `memchr` scan instead of a parser call per lookahead and
+  character. On 216 KB without a terminator: **4.4 µs against 560**, the same
+  as `until`; on a twelve-character string 35 ns against 39, so the fixed cost
+  of the scan does not cost the short case anything (`benches/repetition.rs`,
+  `char_loop`). It applies to an element of one or more `not(t)` followed by
+  the built-in `any`, in a lexical rule, where every `t` is a terminator
+  `until` can scan for and the loop's value is not bound; `SYNTAX.md` has the
+  conditions. Nothing observable changes: the text, where the loop stops,
+  `+`'s failure and the message at the end of the input are the same
+  (`tests/char_loop_scan_test.rs`).
+
 - **A rule with several alternatives skips its leading whitespace once, not once
   per alternative.** `−19.8 %` of a whole compiler run, measured under callgrind
   on Nikaia parsing 2000 functions (300 KB):

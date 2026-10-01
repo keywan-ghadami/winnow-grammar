@@ -1093,6 +1093,19 @@ reasoning and the contract are in `docs/adr/adr17-lazy-diagnostics.md`.
 >   the fast path.
 > * A rule of your own named `line_ending` or `eof` is that rule, not the
 >   built-in; it qualifies only under the same conditions as any other rule.
+>
+> **A character loop is the same scan.** `(not(t) any)*` consumes characters
+> up to the first place `t` matches, or to the end — which is `until(t)`
+> written out, and the code generator treats it as that: `(not("\"")
+> not("\\") any)*` scans for either character instead of making three parser
+> calls per character (216 KB: 4.4 µs against 560). It applies where the
+> element is one or more `not(…)` followed by the built-in `any`, every `not`
+> holds a terminator of the kind above, there are at most three strings to look
+> for, the rule is lexical, and the loop's value is not bound — under
+> `text(…)` or `dec(…)`, or with nobody naming it. `+` and `{n,}` run their
+> first `n` elements as written, so they fail as before. Anything else stays a
+> loop and means the same, only slower; a bound loop still collects its
+> characters, because that is what its type says.
 
 ### Rule Arguments
 Rules can accept arguments to pass context or configuration.

@@ -451,12 +451,20 @@ impl<'a> Codegen<'a> {
     /// built-in - the same precedence `generate_rule_call_parser` gives it -
     /// and takes the slow path.
     fn scan_terminator(&self, pattern: &ModelPattern) -> Option<ScanSet> {
+        self.scan_set_of(std::slice::from_ref(pattern))
+    }
+
+    /// [`scan_terminator`](Self::scan_terminator) for a terminator given as
+    /// several alternatives: `not("\"") not("\\") any` stops at either.
+    fn scan_set_of(&self, alternatives: &[ModelPattern]) -> Option<ScanSet> {
         let mut set = ScanSet {
             lits: Vec::new(),
             line_ending: false,
         };
-        if !self.collect_scan_set(pattern, &mut set) {
-            return None;
+        for pattern in alternatives {
+            if !self.collect_scan_set(pattern, &mut set) {
+                return None;
+            }
         }
         if set.line_ending {
             set.lits.retain(|l| l != "\n");
@@ -547,19 +555,7 @@ impl<'a> Codegen<'a> {
             .scan_terminator(terminator)
             .filter(|s| s.needles() <= 3);
         match set {
-            Some(set) if set.needles() == 0 => quote_spanned! {span=> ::winnow::token::rest },
-            Some(set) if set.needles() == 1 && set.line_ending => {
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_line_ending() }
-            }
-            Some(set) if set.needles() == 1 => {
-                let lit = &set.lits[0];
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#lit) }
-            }
-            Some(set) => {
-                let lits = &set.lits;
-                let line_ending = set.line_ending;
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_any(&[#(#lits),*], #line_ending) }
-            }
+            Some(set) => self.generate_scan(&set),
             None => {
                 let p = self.generate_parser_expr(terminator, is_lexical, false);
                 quote_spanned! {span=>
@@ -569,6 +565,117 @@ impl<'a> Codegen<'a> {
                     )))
                 }
             }
+        }
+    }
+
+    /// The one-pass scan for a terminator of at most three needles: consumes
+    /// everything before it and yields that as `&'a str`.
+    fn generate_scan(&self, set: &ScanSet) -> TokenStream {
+        let span = Span::mixed_site();
+        match set.needles() {
+            0 => quote_spanned! {span=> ::winnow::token::rest },
+            1 if set.line_ending => {
+                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_line_ending() }
+            }
+            1 => {
+                let lit = &set.lits[0];
+                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#lit) }
+            }
+            _ => {
+                let lits = &set.lits;
+                let line_ending = set.line_ending;
+                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_any(&[#(#lits),*], #line_ending) }
+            }
+        }
+    }
+
+    /// The terminator of a *character loop*: an element that is one or more
+    /// `not(t)` followed by the built-in `any`, as in `(not("\"") any)*`.
+    /// Repeated, that element consumes characters up to the first position
+    /// where one of the `t` matches, or to the end - which is `until(t₁ | …)`
+    /// spelled out, and it can be the same scan instead of three parser calls
+    /// per character.
+    ///
+    /// Only where every `t` is something the scan can find (see
+    /// [`scan_terminator`](Self::scan_terminator)), in at most three needles,
+    /// and only in a lexical rule: in a syntactic one the element is preceded
+    /// by the whitespace skip, so the loop does not stop where the scan would.
+    /// A binding or a label anywhere in the element keeps it a loop.
+    fn char_loop_scan(&self, element: &ModelPattern, is_lexical: bool) -> Option<ScanSet> {
+        if !is_lexical {
+            return None;
+        }
+        let ModelPattern::Group {
+            binding: None,
+            alts,
+            ..
+        } = element
+        else {
+            return None;
+        };
+        let [(seq, None, None)] = alts.as_slice() else {
+            return None;
+        };
+        // `is_char_class` also settles that `any` is the built-in and not a
+        // rule of the grammar's own; `digit` is a class too, but only `any`
+        // is "everything else".
+        let (last, lookaheads) = seq.split_last()?;
+        let is_any = matches!(last, ModelPattern::RuleCall { rule_path, binding: None, .. } if rule_path.is_ident("any"));
+        if lookaheads.is_empty() || !is_any || !self.is_char_class(last) {
+            return None;
+        }
+        let mut terminators = Vec::with_capacity(lookaheads.len());
+        for p in lookaheads {
+            match p {
+                ModelPattern::Not(t, _) if get_inner_binding(t).is_none() => {
+                    terminators.push((**t).clone())
+                }
+                _ => return None,
+            }
+        }
+        self.scan_set_of(&terminators).filter(|s| s.needles() <= 3)
+    }
+
+    /// A character loop repeated at least `min` times with no upper bound, as
+    /// the text it matched - or `None` if `element` is not one (see
+    /// [`char_loop_scan`](Self::char_loop_scan)).
+    ///
+    /// The first `min` elements run as written, so that `+` fails exactly as
+    /// it did, with the same error; the rest is the scan.
+    fn char_loop_text(
+        &self,
+        element: &ModelPattern,
+        min: usize,
+        max: Option<usize>,
+        is_lexical: bool,
+    ) -> Option<TokenStream> {
+        if max.is_some() {
+            return None;
+        }
+        let set = self.char_loop_scan(element, is_lexical)?;
+        let span = Span::mixed_site();
+        let scan = self.generate_scan(&set);
+        if min == 0 {
+            return Some(scan);
+        }
+        let p = self.generate_parser_expr(element, is_lexical, true);
+        Some(quote_spanned! {span=>
+            ::winnow::Parser::take((
+                ::winnow_grammar::rt::repeat_counting_bounded(#min, ::core::option::Option::Some(#min), #p),
+                #scan,
+            ))
+        })
+    }
+
+    /// [`char_loop_text`](Self::char_loop_text) for a repetition pattern.
+    fn char_loop_run(&self, p: &ModelPattern, is_lexical: bool) -> Option<TokenStream> {
+        match p {
+            ModelPattern::Repeat(inner, _) => self.char_loop_text(inner, 0, None, is_lexical),
+            ModelPattern::Plus(inner, _) => self.char_loop_text(inner, 1, None, is_lexical),
+            ModelPattern::Bounded {
+                pattern, min, max, ..
+            } => self.char_loop_text(pattern, *min, *max, is_lexical),
+            _ => None,
         }
     }
 
@@ -740,6 +847,10 @@ impl<'a> Codegen<'a> {
                     if self.is_char_run(only) {
                         return self.generate_parser_expr(only, is_lexical, false);
                     }
+                    // So is a character loop, once it is a scan.
+                    if let Some(run) = self.char_loop_run(only, is_lexical) {
+                        return run;
+                    }
                 }
                 let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
                 quote_spanned! {span=> ::winnow::Parser::take(#inner) }
@@ -766,15 +877,17 @@ impl<'a> Codegen<'a> {
                     .collect();
                 // As in `text`: a run is its own text, so it is read as it
                 // stands rather than taken a second time.
-                let taken = match &seq[..] {
+                let run = match &seq[..] {
                     [only] if self.is_char_run(only) => {
-                        self.generate_parser_expr(only, is_lexical, false)
+                        Some(self.generate_parser_expr(only, is_lexical, false))
                     }
-                    _ => {
-                        let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
-                        quote_spanned! {span=> ::winnow::Parser::take(#inner) }
-                    }
+                    [only] => self.char_loop_run(only, is_lexical),
+                    _ => None,
                 };
+                let taken = run.unwrap_or_else(|| {
+                    let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
+                    quote_spanned! {span=> ::winnow::Parser::take(#inner) }
+                });
                 match call_generics.first() {
                     Some(ty) => quote_spanned! {span=>
                         ::winnow_grammar::rt::dec::<_, #ty, _, _>(#taken)
@@ -1063,6 +1176,14 @@ impl<'a> Codegen<'a> {
         is_discarded: bool,
     ) -> TokenStream {
         let span = Span::mixed_site();
+        // A character loop nobody looks at is a scan. One that is bound still
+        // collects its elements, which is what its type says it does; under
+        // `text(…)` it is taken as a scan there.
+        if is_discarded {
+            if let Some(run) = self.char_loop_text(inner, min, max, is_lexical) {
+                return quote_spanned! {span=> ::winnow::Parser::void(#run) };
+            }
+        }
         let p = self.generate_parser_expr(inner, is_lexical, false);
         let elem = if is_lexical {
             quote_spanned! {span=> #p }
