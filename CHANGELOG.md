@@ -5,6 +5,26 @@
 
 ### Performance
 
+- **A cached name up to sixteen bytes is not looked up again to be checked.**
+  The intern cache keyed a slot by the first eight bytes and verified every
+  longer hit with `resolve` - which in `ThreadedRodeo` is not an index but a
+  `DashMap` lookup by symbol, a hash and a shard lock. A slot now holds the
+  first and the last eight bytes, which together with the length *are* any
+  text of up to sixteen; only longer ones are verified. The slot grows from
+  16 to 24 bytes (512 slots: 8 → 12 KiB). Callgrind, net of input
+  construction, 200 000 lookups:
+
+  | | instructions | D1 misses | mispredicts |
+  | :--- | ---: | ---: | ---: |
+  | 40 identifiers, `ctx.intern` | −47.7 % | +0.2 % | −20.7 % |
+  | 413 station names, `ctx.intern` | −24.1 % | −11.7 % | −3.4 % |
+  | the same identifiers through a parse | −16.5 % | +0.3 % | −19.1 % |
+  | the same stations, `intern(until(";"))` | −10.5 % | −4.7 % | −12.0 % |
+
+  Wall clock in `benches/interning.rs`: `parse/rows` −20 %, in eight pieces
+  −12 %, `parse/idents` −3 %. No workload measured lost on any column, so
+  there is no setting for it.
+
 - **`digit` tests a byte instead of decoding a character.** It was winnow's
   `one_of('0'..='9')`, which decodes UTF-8 and then tests the range; a digit is
   one byte. Callgrind, per parse: `digit` 79 → 66 instructions, `digit{1,2}`

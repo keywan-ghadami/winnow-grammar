@@ -20,7 +20,7 @@
 //!
 //! Read differences, not absolutes: every case pays the same stream
 //! construction. And do not clone a `ParseContext` per iteration - it carries
-//! the interner's 8 KiB lookup cache, which costs ~98 ns to clone and as much
+//! the interner's 12 KiB lookup cache, which costs ~98 ns to clone and as much
 //! again to drop, so a harness that does it measures itself.
 //!
 //! One machine, `-12.3` parsed as a top-level rule, three runs in agreement:
@@ -195,7 +195,7 @@ fn digits(n: usize) -> String {
 }
 
 /// One stream, reused: a `ParseContext` is **not** cheap to clone since it
-/// carries the interner's 8 KiB lookup cache (`src/intern_cache.rs`), so
+/// carries the interner's 12 KiB lookup cache (`src/intern_cache.rs`), so
 /// cloning one per iteration measures the clone rather than the rule - ~98 ns
 /// to clone and as much again to drop, more than anything in this file costs.
 /// Reusing it measures repeated parsing, which is the case these rules are
