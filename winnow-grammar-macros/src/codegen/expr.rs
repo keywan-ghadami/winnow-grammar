@@ -951,8 +951,9 @@ impl<'a> Codegen<'a> {
             // A single digit, as opposed to `digit1`'s greedy run of them.
             // Fixed-width numeric formats are written with it and a bounded
             // repetition (`digit{1,2}`), which a greedy terminal cannot express.
+            // Tested as a byte rather than decoded as a `char` (`rt::digit`).
             "digit" => quote_spanned! {span=>
-                ::winnow::token::one_of::<#input_type, _, #inner_err_type>('0'..='9')
+                ::winnow_grammar::rt::digit::<S, E>()
             },
             "digit1" => quote_spanned! {span=>
                 ::winnow_grammar::rt::class::<S, E>(

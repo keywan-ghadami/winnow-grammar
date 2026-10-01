@@ -49,6 +49,11 @@
 //! collecting the elements of a rule 262, `count(p)` 483. The last is the one
 //! thing this file leaves open - see TODO.md §4.
 //!
+//! The table above predates `digit` testing a byte rather than decoding a
+//! `char` (`rt::digit`); since then the cases built on `digit` are faster -
+//! `tenths` ~14 %, `run` ~26 %, the 200_000-digit run ~39 % - and the
+//! comparison with `by_hand` only more so.
+//!
 //! `char_loop`: a string body written as `(not("\"") not("\\") any)*`, which
 //! the code generator turns into `until`'s scan. Over 216 KB with no
 //! terminator: the scan 4.4 µs, `until` 4.4, the same loop by character 560.
