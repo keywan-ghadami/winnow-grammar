@@ -40,7 +40,7 @@ pub const PRIO_STRUCTURAL: u8 = 50;
 /// parser failed, and a parser that is tried at every position and usually
 /// fails - a number literal, say - would otherwise build an error, with an
 /// allocation and the next word of the input, each time, to have it dropped
-/// one call later. Reading such an error sees [`NOTHING`]; changing one gives
+/// one call later. Reading such an error sees `NOTHING`; changing one gives
 /// it content first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError(Option<Box<ErrorCore>>);

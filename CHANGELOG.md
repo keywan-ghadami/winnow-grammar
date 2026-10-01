@@ -5,6 +5,16 @@
 
 ### Performance
 
+- **`digit` tests a byte instead of decoding a character.** It was winnow's
+  `one_of('0'..='9')`, which decodes UTF-8 and then tests the range; a digit is
+  one byte. Callgrind, per parse: `digit` 79 → 66 instructions, `digit{1,2}`
+  96 → 67, the 1BRC temperature `-12.3` 209 → 157, `digit*` 15 → 9 per
+  character. Branches fall with the instructions (the temperature 3.78 M →
+  3.18 M over 100 000 parses) and mispredicts are flat, so this removes work
+  rather than trading it. Wall clock in `benches/repetition.rs` agrees: the
+  200 000-digit run −39 %, `tenths` −14 %, `digit{1,2}` −26 %. Nothing
+  observable changes: the value, the position and the error are the same.
+
 - **A whitespace skip already made is not made again.** A PEG tries one
   alternative after another, and each begins with the implicit skip at the
   same position: Nikaia's grammar made 148 000 skips for 7 KB of source.

@@ -875,6 +875,30 @@ pub fn class<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
     }
 }
 
+/// `digit` - one ASCII digit, as the `char` it is.
+///
+/// Was winnow's `one_of('0'..='9')`, which decodes a UTF-8 character and then
+/// tests the range. A digit is one byte, so the byte is tested first and
+/// nothing is decoded unless it passes. Callgrind, per parse: `digit` 79 → 66
+/// instructions, `digit{1,2}` 96 → 67, the 1BRC temperature 209 → 157, and a
+/// run of `digit*` 15 → 9 per character; branches fall with them and
+/// mispredicts do not move.
+///
+/// The consuming half is `next_token`, not `next_slice(1)`: on a `&str` the
+/// latter checks that the cut lands on a character boundary, and that check
+/// made the long run *slower* than `one_of` (20 per character) while the short
+/// cases still won.
+pub fn digit<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<char, ErrMode<E>> {
+    move |input| match input.as_bstr().first() {
+        Some(&b) if b.is_ascii_digit() => {
+            input.next_token();
+            Ok(b as char)
+        }
+        _ => Err(ErrMode::Backtrack(E::from_input(input))),
+    }
+}
+
 /// `raw_ident` - [`class`] for the ASCII stretch, `wide` for a character that
 /// is not ASCII.
 ///
