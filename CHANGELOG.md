@@ -5,6 +5,40 @@
 
 ### Performance
 
+- **A cached name up to sixteen bytes is not looked up again to be checked.**
+  The intern cache keyed a slot by the first eight bytes and verified every
+  longer hit with `resolve` - which in `ThreadedRodeo` is not an index but a
+  `DashMap` lookup by symbol, a hash and a shard lock. A slot now holds the
+  first and the last eight bytes, which together with the length *are* any
+  text of up to sixteen; only longer ones are verified. The slot grows from
+  16 to 24 bytes (512 slots: 8 → 12 KiB). Callgrind, net of input
+  construction, 200 000 lookups:
+
+  | | instructions | D1 misses | mispredicts |
+  | :--- | ---: | ---: | ---: |
+  | 40 identifiers, `ctx.intern` | −47.7 % | +0.2 % | −20.7 % |
+  | 413 station names, `ctx.intern` | −24.1 % | −11.7 % | −3.4 % |
+  | the same identifiers through a parse | −16.5 % | +0.3 % | −19.1 % |
+  | the same stations, `intern(until(";"))` | −10.5 % | −4.7 % | −12.0 % |
+
+  Wall clock in `benches/interning.rs`: `parse/rows` −20 %, in eight pieces
+  −12 %, `parse/idents` −3 %.
+
+  **Measured downstream, that alone lost**: Nikaia's compiler went 67.06 M →
+  67.40 M instructions (+0.5 %). It builds ~870 short-lived contexts per
+  compile, and each paid for a fresh table - now 12 KiB instead of 8, every
+  slot written empty - while its short names never reached the check this
+  saves. The benchmarks above use one long-lived context and could not see it.
+
+- **A context's lookup table is handed on to the next context on the same
+  interner.** A dropped context returns its table to its `InternerContext`,
+  which keeps a few; the next context on that interner takes one instead of
+  allocating, and finds it warm - the symbols are that interner's, so they are
+  still right. A table never reaches another interner. One lock per context
+  lifetime, nothing on the lookup path. Callgrind, 870 contexts of 40 lookups
+  each on one interner (Nikaia's shape): **12.67 M → 4.78 M instructions
+  (−62 %)**, mispredicts 96 k → 51 k; one long-lived context is unchanged.
+
 - **`digit` tests a byte instead of decoding a character.** It was winnow's
   `one_of('0'..='9')`, which decodes UTF-8 and then tests the range; a digit is
   one byte. Callgrind, per parse: `digit` 79 → 66 instructions, `digit{1,2}`
@@ -95,6 +129,19 @@
   repository's 296 pass unchanged.
 
 ### Breaking Changes
+
+- **`ahash` is a default feature**, and `ahash-compile-time-rng` is new. The
+  interner's hasher was std's `RandomState` unless asked; Nikaia measured
+  `ahash` at **2.5-3.6 % of a whole compile** (1brc 55.66 M → 54.23 M
+  instructions, n-body 62.91 M → 60.55 M, k-nucleotide 57.17 M → 55.56 M),
+  from names it looks up after the parse, where the lookup cache does not
+  reach. Breaking for one kind of user: `ahash` seeds from `getrandom`, which
+  does not compile for `wasm32-unknown-unknown` unless the application picks a
+  backend. **Migration**: either pick `getrandom`'s `wasm_js` backend in the
+  application, or depend with `default-features = false, features =
+  ["ahash-compile-time-rng"]` - the same hasher seeded at build time, which
+  builds for wasm32 as it is. README's *Cargo features* says what each costs.
+  CI now builds both WebAssembly configurations, so the promise is checked.
 
 - **A repetition of a character class yields the text it matched**, not its
   elements: `digit{1,2}`, `digit*`, `digit+` and `any{n}` are now `&'a str`

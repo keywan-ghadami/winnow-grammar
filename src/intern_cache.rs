@@ -12,17 +12,66 @@
 //! symbol wrong; the worst it can do is not help.
 
 use crate::{InternerContext, Symbol};
+use std::sync::{Arc, Mutex};
 
-/// One slot. 16 bytes, so the table below is 8 KiB.
+/// One slot. 24 bytes, so the table below is 12 KiB.
 #[derive(Clone, Copy)]
 struct Slot {
     /// The first eight bytes of the text, zero-padded, little-endian.
-    tag: u64,
-    /// The text's length in bytes. With `tag` it *is* the key for anything
-    /// eight bytes or shorter, which is why those hits need no comparison.
+    head: u64,
+    /// The last eight bytes of a text longer than eight, zero for a shorter
+    /// one. For a text of nine to sixteen bytes the two words overlap and
+    /// between them hold every byte.
+    tail: u64,
+    /// The text's length in bytes. With `head` and `tail` it *is* the key for
+    /// anything sixteen bytes or shorter, which is why those hits need no
+    /// comparison.
     len: u32,
     /// The symbol's index plus one; zero means the slot is empty.
     sym: u32,
+}
+
+/// A table a context no longer needs, kept by the interner its symbols
+/// belong to so that the next context on that interner starts with it.
+struct Table {
+    bits: u32,
+    slots: Vec<Slot>,
+}
+
+/// The tables an interner keeps for the contexts that use it - see
+/// [`InternCache::fill`]. Shared by every clone of one
+/// [`InternerContext`], and only by those: a table is handed only to a
+/// context interning into the interner that filled it, so every symbol in it
+/// is still that interner's.
+#[derive(Default)]
+pub(crate) struct Stash(Mutex<Vec<Table>>);
+
+impl Stash {
+    /// How many tables an interner keeps. One is the common case - one
+    /// context after another - and a `par_fold` returns one per piece at
+    /// once; keeping a few covers the next run of pieces without letting a
+    /// wide one pin megabytes.
+    const KEEP: usize = 4;
+
+    fn take(&self, bits: u32) -> Option<Vec<Slot>> {
+        let mut tables = self.0.lock().ok()?;
+        let at = tables.iter().rposition(|t| t.bits == bits)?;
+        Some(tables.swap_remove(at).slots)
+    }
+
+    fn put(&self, bits: u32, slots: Vec<Slot>) {
+        if let Ok(mut tables) = self.0.lock() {
+            if tables.len() < Self::KEEP {
+                tables.push(Table { bits, slots });
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for Stash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Stash")
+    }
 }
 
 /// Direct-mapped, fixed size, one slot per bucket: a miss or a mismatch
@@ -53,6 +102,9 @@ pub struct InternCache {
     /// replaced between parses gets an empty cache rather than another
     /// interner's numbers.
     interner: usize,
+    /// The stash of the interner the slots belong to, where they go when this
+    /// cache is dropped or rebound. `None` until the first `intern`.
+    home: Option<Arc<Stash>>,
     /// `1 << bits` slots. Settable per context, because how many distinct
     /// strings a parse will see is the caller's knowledge - see
     /// [`ParseContext::expect_distinct_keys`](crate::ParseContext::expect_distinct_keys).
@@ -60,7 +112,7 @@ pub struct InternCache {
 }
 
 impl InternCache {
-    /// 512 slots, 8 KiB. L1d is 32-48 KiB *in total* and the parse also wants
+    /// 512 slots, 12 KiB. L1d is 32-48 KiB *in total* and the parse also wants
     /// the input, the stack and its output in there, so the table is sized to
     /// leave room rather than to fill the cache. Right for a compiler's
     /// identifier stream, where a few words are hot; a caller whose parse sees
@@ -74,7 +126,8 @@ impl InternCache {
 
     fn empty_slot() -> Slot {
         Slot {
-            tag: 0,
+            head: 0,
+            tail: 0,
             len: 0,
             sym: 0,
         }
@@ -84,6 +137,7 @@ impl InternCache {
         Self {
             slots: Vec::new(),
             interner: 0,
+            home: None,
             bits: Self::DEFAULT_BITS,
         }
     }
@@ -109,45 +163,47 @@ impl InternCache {
         let bits = (usize::BITS - 1 - wanted.leading_zeros().min(usize::BITS - 1))
             .clamp(Self::MIN_BITS, Self::MAX_BITS);
         if bits != self.bits {
+            self.give_back();
             self.bits = bits;
-            self.slots = Vec::new();
         }
     }
 
-    /// The first eight bytes as a `u64`. Reading eight bytes unconditionally
-    /// would run past the end of the input - a `&str` from a caller carries no
-    /// padding - so a short text is copied into a zeroed buffer instead.
-    /// The key a slot is found and rejected by.
+    /// The key a slot is found and rejected by: the first eight bytes and,
+    /// for a longer text, the last eight.
     ///
-    /// Eight bytes or fewer: the bytes themselves, which together with the
-    /// length *are* the text - so a hit needs no comparison at all. Folded
-    /// byte by byte rather than copied, because `copy_from_slice` with a
-    /// length the compiler does not know becomes a call to `memcpy`, and that
-    /// call costs more than the whole rest of a lookup (measured: 13.2 ns a
-    /// lookup against 8.1).
+    /// Up to sixteen bytes the two words and the length *are* the text, so a
+    /// hit needs no comparison - which matters because the comparison is
+    /// `resolve`, and `ThreadedRodeo::resolve` is not an index but a lookup in
+    /// a `DashMap` keyed by the symbol: a hash and a shard lock, on every hit
+    /// of every name longer than the key. 1BRC's station names are mostly
+    /// between nine and sixteen bytes. Longer texts share a key now and then
+    /// and are verified as before.
     ///
-    /// Longer: the first eight bytes mixed with the *last* eight. Only the
-    /// first would make `identifier_0001` and `identifier_0002` share a tag,
-    /// and every miss between such words would then pay a resolve and a
-    /// comparison before interning anyway - which measured +30 ns on a miss,
-    /// against the ~3 ns a miss should cost.
+    /// Eight bytes or fewer are folded byte by byte rather than copied,
+    /// because `copy_from_slice` with a length the compiler does not know
+    /// becomes a call to `memcpy`, and that call costs more than the whole
+    /// rest of a lookup (measured: 13.2 ns a lookup against 8.1). Longer
+    /// texts are read as two unaligned words, overlapping below sixteen.
     #[inline]
-    fn tag(text: &str) -> u64 {
+    fn key(text: &str) -> (u64, u64) {
         let b = text.as_bytes();
         if b.len() > 8 {
-            let first = u64::from_le_bytes(b[..8].try_into().expect("eight bytes"));
-            let last = u64::from_le_bytes(b[b.len() - 8..].try_into().expect("eight bytes"));
-            return first ^ last.rotate_left(31);
+            let head = u64::from_le_bytes(b[..8].try_into().expect("eight bytes"));
+            let tail = u64::from_le_bytes(b[b.len() - 8..].try_into().expect("eight bytes"));
+            return (head, tail);
         }
-        let mut tag = 0u64;
+        let mut head = 0u64;
         for (i, &c) in b.iter().enumerate() {
-            tag |= (c as u64) << (i * 8);
+            head |= (c as u64) << (i * 8);
         }
-        tag
+        (head, 0)
     }
 
     #[inline]
-    fn index(&self, tag: u64) -> usize {
+    fn index(&self, head: u64, tail: u64) -> usize {
+        // Both words, so that `identifier_0001` and `identifier_0002` - one
+        // head, different tails - land in different buckets.
+        let tag = head ^ tail.rotate_left(31);
         // A multiply folds the low bits upward; the top `bits` are then the
         // bucket. Fixed constant: the cache is not adversary-facing - a
         // collision costs one interner call, not a quadratic blow-up.
@@ -159,43 +215,64 @@ impl InternCache {
     pub(crate) fn rebind(&mut self, interner: &InternerContext) {
         let id = interner.id();
         if self.interner != id {
+            self.give_back();
             self.interner = id;
-            self.slots.clear();
+        }
+    }
+
+    /// Returns the table to the interner it was filled from, warm, for the
+    /// next context on that interner.
+    fn give_back(&mut self) {
+        let slots = std::mem::take(&mut self.slots);
+        if let (false, Some(home)) = (slots.is_empty(), &self.home) {
+            home.put(self.bits, slots);
         }
     }
 
     /// The symbol for `text`, from the cache when it is there and from the
     /// interner otherwise.
     /// Out of line and marked cold: it runs once per context that interns.
+    ///
+    /// The table comes from the interner when a context before this one left
+    /// one there, and is allocated only when none did. A compiler that builds
+    /// a context per short parse - Nikaia builds ~870 per compile - otherwise
+    /// pays for a fresh table every time: the allocation, writing every slot
+    /// empty, and then a miss on every name the previous context had already
+    /// cached. Handed on, the table is warm.
     #[cold]
     #[inline(never)]
-    fn fill(&mut self) {
-        self.slots = vec![Self::empty_slot(); 1 << self.bits];
+    fn fill(&mut self, interner: &InternerContext) {
+        let home = Arc::clone(interner.stash());
+        self.slots = home
+            .take(self.bits)
+            .unwrap_or_else(|| vec![Self::empty_slot(); 1 << self.bits]);
+        self.interner = interner.id();
+        self.home = Some(home);
     }
 
     #[inline]
     pub(crate) fn intern(&mut self, interner: &InternerContext, text: &str) -> Symbol {
         if self.slots.is_empty() {
-            self.fill();
+            self.fill(interner);
         }
-        let tag = Self::tag(text);
+        let (head, tail) = Self::key(text);
         let len = text.len() as u32;
-        let at = self.index(tag);
+        let at = self.index(head, tail);
         let slot = &mut self.slots[at];
 
-        if slot.sym != 0 && slot.tag == tag && slot.len == len {
+        if slot.sym != 0 && slot.head == head && slot.tail == tail && slot.len == len {
             let sym = Symbol::from_index(slot.sym - 1);
-            // Eight bytes and the length *are* the text when the text is that
-            // short, so a hit needs no comparison. Longer texts share a tag
-            // (`customer_id` and `customer_name` do), and are verified.
-            if len <= 8 || interner.resolve(sym) == text {
+            // Up to sixteen bytes the key *is* the text, so a hit needs no
+            // comparison. Longer texts can share one, and are verified.
+            if len <= 16 || interner.resolve(sym) == text {
                 return sym;
             }
         }
 
         let sym = interner.intern_string(text);
         *slot = Slot {
-            tag,
+            head,
+            tail,
             len,
             sym: sym.index() + 1,
         };
@@ -211,7 +288,7 @@ impl Default for InternCache {
 
 impl Clone for InternCache {
     /// A clone is *empty*, but the same size. `ParseContext` is cloned once
-    /// per piece of a `par_fold`, and copying eight kilobytes of cache into a
+    /// per piece of a `par_fold`, and copying twelve kilobytes of cache into a
     /// piece that has not parsed anything yet would cost more than the misses
     /// it saves - a cache has no contents worth preserving. Its size is
     /// another matter: that is what the caller said with
@@ -219,10 +296,15 @@ impl Clone for InternCache {
     /// and the pieces of a `par_fold` are where an aggregation over many keys
     /// runs. A clone that forgot it would put every piece back at 512 slots.
     fn clone(&self) -> Self {
-        Self {
-            bits: self.bits,
-            ..Self::new()
-        }
+        let mut clone = Self::new();
+        clone.bits = self.bits;
+        clone
+    }
+}
+
+impl Drop for InternCache {
+    fn drop(&mut self) {
+        self.give_back();
     }
 }
 
@@ -294,6 +376,71 @@ mod tests {
         let mut ctx = crate::ParseContext::<()>::default();
         ctx.expect_distinct_keys(5_000);
         assert_eq!(ctx.clone().intern_cache.bits, 14);
+    }
+
+    /// Up to sixteen bytes the key is the text; beyond, two texts can share
+    /// a key - same first eight bytes, same last eight, same length - and the
+    /// one that finds the other's slot must not take its symbol.
+    #[test]
+    fn a_shared_key_is_verified() {
+        let interner = InternerContext::new();
+        let mut cache = InternCache::new();
+        cache.rebind(&interner);
+        let a = "stationX_station";
+        let b = "stationY_station";
+        assert_ne!(cache.intern(&interner, a), cache.intern(&interner, b));
+        let long_a = "station_X_station";
+        let long_b = "station_Y_station";
+        let sa = cache.intern(&interner, long_a);
+        let sb = cache.intern(&interner, long_b);
+        assert_ne!(sa, sb);
+        assert_eq!(cache.intern(&interner, long_a), sa);
+        assert_eq!(cache.intern(&interner, long_b), sb);
+    }
+
+    /// A cache dropped hands its table to its interner, and the next cache
+    /// on that interner starts with it - warm, so the first lookup is a hit.
+    #[test]
+    fn a_table_is_handed_on_to_the_next_cache_on_the_interner() {
+        let interner = InternerContext::new();
+        let sym = {
+            let mut first = InternCache::new();
+            first.rebind(&interner);
+            first.intern(&interner, "Hamburg")
+        };
+        let mut next = InternCache::new();
+        next.rebind(&interner);
+        next.fill(&interner);
+        let at = next.index(InternCache::key("Hamburg").0, 0);
+        assert_eq!(
+            next.slots[at].sym,
+            sym.index() + 1,
+            "the table came back warm"
+        );
+        assert_eq!(next.intern(&interner, "Hamburg"), sym);
+    }
+
+    /// Never across interners: another interner's numbers would be wrong
+    /// symbols, not slow ones.
+    #[test]
+    fn a_table_never_reaches_another_interner() {
+        let a = InternerContext::new();
+        let b = InternerContext::new();
+        b.intern_string("padding, so that the numbers differ");
+        let in_a = {
+            let mut cache = InternCache::new();
+            cache.rebind(&a);
+            cache.intern(&a, "Hamburg")
+        };
+        let mut cache = InternCache::new();
+        cache.rebind(&b);
+        let in_b = cache.intern(&b, "Hamburg");
+        assert_eq!(in_b, b.intern_string("Hamburg"));
+        assert_ne!(in_a, in_b);
+
+        // Rebinding hands the table back to the interner it came from.
+        cache.rebind(&a);
+        assert_eq!(cache.intern(&a, "Hamburg"), in_a);
     }
 
     /// Resizing empties the table, and the emptied table refills itself.

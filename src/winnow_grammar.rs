@@ -279,12 +279,12 @@ impl<S> ParseContext<S> {
     /// the library's, which is why this is a method and not a heuristic. The
     /// table gets the next power of two at or above `2 * keys` - direct-mapped
     /// with no collision handling, half empty is what keeps most keys in a slot
-    /// of their own - clamped to 64..=65 536 slots, 16 bytes each.
+    /// of their own - clamped to 64..=65 536 slots, 24 bytes each.
     ///
     /// ```
     /// # use winnow_grammar::ParseContext;
     /// let mut ctx = ParseContext::<()>::default();
-    /// ctx.expect_distinct_keys(5_000);   // 16 384 slots, 256 KiB
+    /// ctx.expect_distinct_keys(5_000);   // 16 384 slots, 384 KiB
     /// ```
     ///
     /// **When it is worth calling.** Measured with callgrind over

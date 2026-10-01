@@ -50,6 +50,33 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --document-private-items
 
+  wasm:
+    name: Build for wasm32
+    runs-on: ubuntu-latest
+    # The default `ahash` seeds from `getrandom`, which does not build for
+    # `wasm32-unknown-unknown` without a backend the application chooses -
+    # README, *Cargo features*. What a WebAssembly user is told to depend on
+    # has to keep building: the build-time seed, and no `ahash` at all.
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo Registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+
+      - name: Build with the build-time seed
+        run: cargo build --lib --target wasm32-unknown-unknown --no-default-features --features ahash-compile-time-rng
+
+      - name: Build without ahash
+        run: cargo build --lib --target wasm32-unknown-unknown --no-default-features
+
   lint-preview:
     name: Lint preview (stable, non-blocking)
     runs-on: ubuntu-latest
