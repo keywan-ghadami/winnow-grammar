@@ -792,11 +792,13 @@ escape hatch for the formats the check cannot see through yet (below).
 **How do two pieces combine?** `par_fold(rule, init, step, merge)` is `fold`
 plus the merge, and requires `rule` to be a frame. It must be the whole body of
 its rule: nothing before or after it, since a prefix or suffix would belong to
-no piece. For the same reason its parser skips **no whitespace at its entry**,
-unlike every other rule's: the parser runs once per piece, and whitespace
-skipped there would be skipped at every cut rather than once at the start of
-the input. A frame that begins with a space keeps the space; whitespace-only
-text between two frames is a failure, in pieces and in one go alike.
+no piece. For the same reason its rule skips **no whitespace at all** - not at
+its entry, not at its start, not between frames - unlike every other rule, and
+whether its name is upper- or lowercase: the parser runs once per piece, and
+whitespace skipped there would be skipped at every cut rather than once at the
+start of the input. A frame that begins with a space keeps the space;
+whitespace-only text between two frames is a failure, in pieces and in one go
+alike.
 
 **Where the check stops.** It reasons about what the grammar says. A parser it
 cannot see into — a hand-written one reached by path (`super::word`), an

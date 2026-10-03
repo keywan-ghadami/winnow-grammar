@@ -53,7 +53,14 @@ impl<'a> Codegen<'a> {
             analysis::split_left_recursive(&rule.name, &rule.variants);
 
         let lhs_ident = format_ident!("lhs", span = span);
-        let is_lexical = rule.is_lexical || is_ws_rule;
+        // **A `par_fold` rule skips nothing**, whatever its name says: not at
+        // its start, not between its items. A piece begins at a frame, so
+        // whitespace skipped there in one go would belong to a frame in
+        // pieces, and the chunk count would change the result - the same
+        // reason its entry point skips nothing (below). Its body is the fold
+        // and nothing else, so the rule is lexical in all but name.
+        let is_lexical =
+            rule.is_lexical || is_ws_rule || self.frames.par_folds.contains_key(&rule_name_str);
 
         let body = if recursive_refs.is_empty() {
             self.generate_variants_body(

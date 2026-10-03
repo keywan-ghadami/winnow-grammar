@@ -226,6 +226,23 @@
 
 ### Fixed
 
+- **A lowercase `par_fold` rule skips no whitespace either.** Its entry point
+  already skipped none, so that pieces and the whole input agree; but a
+  syntactic rule still skipped at its own start and before every item of the
+  fold. In one go a frame lost its leading blank and a blank line between
+  frames passed; in pieces a frame at a cut lost it as well, and which frames
+  those were depended on the chunk count - the one thing `par_fold` promises
+  it does not. A `par_fold` rule is now generated as lexical whatever its
+  name, which is what its body - the fold, and nothing else - already asks.
+  `a_syntactic_par_fold_rule_skips_nothing_between_frames` checks one go
+  against 1 to 8 pieces on the inputs that used to differ.
+
+  Found downstream by Nikaia's 1BRC example, which wrote `pub rule file`: a
+  station ` Hamburg` came out as `Hamburg` at one setting and ` Hamburg` at
+  the other. The skip that found nothing on every other line was 71 of its
+  658 instructions a row (callgrind, 1 000 000 rows, 413 stations); without
+  it, 587.
+
 - **What fails inside a `peek(…)` or `not(…)` is no longer an expectation.** A
   lookahead consumes nothing and demands nothing: an alternative whose
   lookahead says no simply does not apply, so its failure is a test that said
