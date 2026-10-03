@@ -343,6 +343,77 @@ fn pieces_agree_with_the_sequential_parse_on_awkward_input() {
     }
 }
 
+// The same, for a `par_fold` rule that is **syntactic** (lowercase), as
+// Nikaia's 1BRC example writes it. Its entry skipped nothing already, but the
+// rule skipped at its start and before every item of the fold, so that in one
+// go a frame lost its leading blank and a blank line between frames passed,
+// while in pieces a frame at a piece's start lost it too - the chunk count
+// changed the result. A `par_fold` rule is lexical in all but name now.
+grammar! {
+    grammar SyntacticLengths {
+        NAME -> &'a str = s:until(";" | frame_end) -> { s }
+        #[frame]
+        pub REC -> usize = n:NAME ";" "\n" -> { n.len() }
+        pub file -> usize =
+            s:par_fold(REC, || 0usize, |a: usize, v: usize| a + v, |a: usize, b: usize| a + b)
+            -> { s }
+    }
+}
+
+#[test]
+fn a_syntactic_par_fold_rule_skips_nothing_between_frames() {
+    let sequential = |input: &str| -> Result<usize, String> {
+        SyntacticLengths::parse_file()
+            .parse_test(input)
+            .inner
+            .map_err(|e| e.to_string())
+    };
+    let in_pieces = |input: &str, n: usize| -> Result<usize, String> {
+        let mut acc = Ok(0usize);
+        for r in SyntacticLengths::frames_file(input, n) {
+            let piece = SyntacticLengths::parse_file()
+                .parse_test(&input[r])
+                .inner
+                .map_err(|e| e.to_string());
+            acc = match (acc, piece) {
+                (Ok(a), Ok(b)) => Ok(SyntacticLengths::merge_file(a, b)),
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            };
+        }
+        acc
+    };
+    // A frame keeps its leading blank: " B" is two long, "  C" three.
+    assert_eq!(sequential("A;\n B;\n  C;\n"), Ok(6));
+    // Whitespace between frames is not a frame.
+    assert!(sequential("A;\n\nB;\n").is_err());
+    assert!(sequential("A;\n  \nB;\n").is_err());
+    let inputs = [
+        "A;\n B;\n  C;\n",
+        " A;\nB;\n",
+        "A;\n  \nB;\n",
+        "A;\n\nB;\n",
+        "A;\nB;\n\n",
+        "A;\nB;\n  ",
+        "A;\nB;",
+        "",
+        "\n",
+    ];
+    for input in inputs {
+        let expected = sequential(input);
+        for n in [1, 2, 3, 4, 8] {
+            let got = in_pieces(input, n);
+            assert_eq!(
+                got.is_ok(),
+                expected.is_ok(),
+                "{input:?} with n = {n}: sequential {expected:?}, pieces {got:?}"
+            );
+            if let (Ok(e), Ok(g)) = (&expected, &got) {
+                assert_eq!(e, g, "{input:?} with n = {n}");
+            }
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------
 // `#[frame]` after a rule without an action block
 // -----------------------------------------------------------------------------
