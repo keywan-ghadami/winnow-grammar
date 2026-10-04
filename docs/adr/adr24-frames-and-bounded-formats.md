@@ -447,6 +447,36 @@ zero-progress guard, the call into the step and the item count. The
 checkpoint that issue #22 suspected costs nothing on the success path - it is
 the stream's position, held in a register until a failure needs it.
 
+## 12. A cut of the text is made where it is needed, and seen to be safe
+
+Every cut of the input as `&str` is checked for a character boundary - by
+winnow's `next_slice`, by slicing, by `split_at` - and on 1BRC those checks
+were about 34 instructions a row. At most of these cuts the byte at the cut
+is ASCII, a separator or a digit, which is always a boundary; without
+`unsafe` the checks go away only where nothing needs the cut, or where LLVM
+can see that they hold (#23). Measured one at a time on Nikaia's 1BRC, 1 M
+rows, output the same, mispredictions 1.58 throughout:
+
+| step | instructions a row |
+|---|---:|
+| before | 337.1 |
+| an element of an indexed run (§8) that nothing binds is matched and not sliced | 335.1 |
+| `until(a | b)` without `line_ending` takes the hit as the end, instead of cutting twice for a `\r` it cannot have | 326.1 |
+| the cut at a scan's hit is made after a compare of the hit's byte for ASCII, which is the boundary check LLVM then removes | **319.1** |
+
+The compare is `rest.as_bytes().get(end).is_some_and(u8::is_ascii)`, with
+`next_slice(end)` on both sides of the branch: the branch decides nothing,
+it only puts the fact where the boundary check is folded. Measured and not
+kept: the same compare in `rt::advance` after an indexed run, where the byte
+after the run is not read yet (no change); and `dec<T>(digit{m,n})` matched
+in the indexed run and read with `FromStr` from there, the variant §8b had
+not tried (385.9 and 2.07 mispredictions - the number's own checks inlined
+into the run, and the digit loop predicted worse than the repetition). What
+is left of the checks is about 15 instructions a row, most of it in
+`rt::advance` and `dec`'s `take`. `tests/scan_cut_test.rs` holds the scans
+with up to three alternatives to the position-by-position path on every
+string of up to six characters, `\r\n` and a multi-byte character included.
+
 ## Consequences
 
 - A grammar that says `#[frame]` either compiles and can be cut soundly, or

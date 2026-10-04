@@ -170,13 +170,23 @@ impl<'a> Codegen<'a> {
                 quote_spanned! {span=> _ }
             };
             let m = match f {
-                Fixed::Lit(bytes, _) => {
+                // An element nobody named is matched and not sliced: a cut
+                // of the text is two character-boundary checks (#23).
+                Fixed::Lit(bytes, b_) => {
+                    let n = bytes.len();
+                    let lit = syn::LitByteStr::new(bytes, span);
+                    let value = b_.map(|_| quote_spanned! {span=> let #v = &#s[#at..#at + #n]; });
+                    quote_spanned! {span=>
+                        if !#b[#at..].starts_with(#lit) { break 'fixed #fail; }
+                        #value
+                        #at += #n;
+                    }
+                }
+                Fixed::OptLit(bytes, b_) if b_.is_none() => {
                     let n = bytes.len();
                     let lit = syn::LitByteStr::new(bytes, span);
                     quote_spanned! {span=>
-                        if !#b[#at..].starts_with(#lit) { break 'fixed #fail; }
-                        let #v_pat = &#s[#at..#at + #n];
-                        #at += #n;
+                        if #b[#at..].starts_with(#lit) { #at += #n; }
                     }
                 }
                 Fixed::OptLit(bytes, _) => {
@@ -204,14 +214,17 @@ impl<'a> Codegen<'a> {
                         _ => ::core::option::Option::None,
                     };
                 },
-                Fixed::Digits(min, max, _) => quote_spanned! {span=>
-                    let start = #at;
-                    while #at - start < #max && #b.get(#at).is_some_and(u8::is_ascii_digit) {
-                        #at += 1;
+                Fixed::Digits(min, max, b_) => {
+                    let value = b_.map(|_| quote_spanned! {span=> let #v = &#s[start..#at]; });
+                    quote_spanned! {span=>
+                        let start = #at;
+                        while #at - start < #max && #b.get(#at).is_some_and(u8::is_ascii_digit) {
+                            #at += 1;
+                        }
+                        if #at - start < #min { break 'fixed #fail; }
+                        #value
                     }
-                    if #at - start < #min { break 'fixed #fail; }
-                    let #v_pat = &#s[start..#at];
-                },
+                }
             };
             matches.extend(m);
             if let Some(name) = f.binding() {

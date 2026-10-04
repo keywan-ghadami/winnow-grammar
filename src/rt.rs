@@ -47,7 +47,6 @@ pub fn rest<'a, S: Clone + std::fmt::Debug>(input: &ParseInput<'a, S>) -> &'a st
 pub fn advance<S: Clone + std::fmt::Debug>(input: &mut ParseInput<'_, S>, n: usize) {
     input.next_slice(n);
 }
-
 /// A literal of one ASCII byte - `";"`, `"\n"`, a `frame_end` whose boundary is
 /// one - in the fast pass: one byte compared, one consumed (ADR 24 §8a).
 ///
@@ -111,7 +110,7 @@ pub fn scan_to_literal<'a, S: Clone + std::fmt::Debug, E>(
             Some(range) => range.start,
             None => input.eof_offset(),
         };
-        Ok(input.next_slice(end))
+        Ok(take_to_hit(input, end))
     }
 }
 
@@ -140,8 +139,23 @@ pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug, E>(
             }
             None => input.eof_offset(),
         };
-        Ok(input.next_slice(end))
+        Ok(take_to_hit(input, end))
     }
+}
+
+/// The text up to a scan's hit, consumed. A hit is the first byte of an ASCII
+/// needle, so the cut is on a character boundary; said where LLVM can see it,
+/// the boundary check `next_slice` makes folds away, and where the scan found
+/// nothing (`end` is the end) the same cut is made unseen (#23).
+#[inline]
+fn take_to_hit<'a, S: Clone + std::fmt::Debug>(
+    input: &mut ParseInput<'a, S>,
+    end: usize,
+) -> &'a str {
+    if rest(input).as_bytes().get(end).is_some_and(u8::is_ascii) {
+        return input.next_slice(end);
+    }
+    input.next_slice(end)
 }
 
 /// `until(";" | "\n")` / `until(";" | line_ending)` - a terminator with two
@@ -172,11 +186,15 @@ pub fn scan_to_any<'a, S: Clone + std::fmt::Debug, E>(
             _ => unreachable!("the code generator limits a scan set to three needles"),
         };
         let end = match hit {
+            // The look back for `\r` cuts the input twice, each cut checked for
+            // a character boundary; without `line_ending` it has nothing to
+            // find, and the hit is the end (#23).
+            Some(range) if !line_ending => range.start,
             Some(range) => {
                 let n = range.start;
                 let before = input.peek_slice(n);
                 let at_newline = input.peek_slice(range.end).ends_with('\n') && range.len() == 1;
-                if line_ending && at_newline && before.ends_with('\r') {
+                if at_newline && before.ends_with('\r') {
                     n - 1
                 } else {
                     n
@@ -184,7 +202,7 @@ pub fn scan_to_any<'a, S: Clone + std::fmt::Debug, E>(
             }
             None => input.eof_offset(),
         };
-        Ok(input.next_slice(end))
+        Ok(take_to_hit(input, end))
     }
 }
 

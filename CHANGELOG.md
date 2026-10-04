@@ -5,6 +5,14 @@
 
 ### Performance
 
+- **Fewer cuts of the text, and the rest seen to be safe** (ADR 24 §12, #23):
+  an unbound element of an indexed run is not sliced; `until(a | b)` without
+  `line_ending` no longer cuts twice to look back for a `\r`; the cut at a
+  scan's hit follows a compare of the hit's byte, which lets LLVM remove the
+  character-boundary check. No `unsafe`. Nikaia's `examples/1brc.nika`,
+  callgrind over 1 M rows: 337.1 → 319.1 instructions per row.
+  `tests/scan_cut_test.rs` holds the scans to the position-by-position path.
+
 - **A fold's step may change the accumulator in place** (ADR 24 §11, #22):
   a step whose first parameter is written `&mut` - `|acc: &mut Acc, item| …`,
   or `&mut _` - is run as `rt::fold_in_place_recording` /
