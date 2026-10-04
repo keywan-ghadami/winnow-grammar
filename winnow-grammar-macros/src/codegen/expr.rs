@@ -1374,10 +1374,26 @@ impl<'a> Codegen<'a> {
                 let p = self.generate_parser_expr(pattern, is_lexical, false);
                 // The fold of a `par_fold` rule leaves a trail for the replay
                 // of a failed fast pass (`rt::entry_framed`).
-                let fold = if merge.is_some() {
-                    quote_spanned! {span=> ::winnow_grammar::rt::par_fold_recording }
-                } else {
-                    quote_spanned! {span=> ::winnow_grammar::rt::fold_recording }
+                // A step whose accumulator is written `&mut` changes it in
+                // place (ADR 24 §11); any other step takes and returns it.
+                let in_place = matches!(
+                    &**step,
+                    syn::Expr::Closure(c) if matches!(
+                        c.inputs.first(),
+                        Some(syn::Pat::Type(t)) if matches!(&*t.ty, syn::Type::Reference(r) if r.mutability.is_some())
+                    )
+                );
+                let fold = match (merge.is_some(), in_place) {
+                    (true, false) => {
+                        quote_spanned! {span=> ::winnow_grammar::rt::par_fold_recording }
+                    }
+                    (false, false) => quote_spanned! {span=> ::winnow_grammar::rt::fold_recording },
+                    (true, true) => {
+                        quote_spanned! {span=> ::winnow_grammar::rt::par_fold_in_place_recording }
+                    }
+                    (false, true) => {
+                        quote_spanned! {span=> ::winnow_grammar::rt::fold_in_place_recording }
+                    }
                 };
                 if !is_lexical {
                     quote_spanned! {span=> #fold(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i), #p), #init, #step) }

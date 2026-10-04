@@ -742,6 +742,97 @@ where
     fold_impl(min, p, init, step, true)
 }
 
+/// [`fold_recording`] whose step changes the accumulator in place,
+/// `|acc: &mut Acc, item| …`, the form the macro picks for a step whose first
+/// parameter is written `&mut` (ADR 24 §11). A step that takes the
+/// accumulator and hands it back moves it in and out once per item, which for
+/// an accumulator that holds a table is a copy each way the optimiser does not
+/// remove; this one never moves it.
+pub fn fold_in_place_recording<'a, S, O, Acc, P, I, F, E>(
+    min: usize,
+    p: P,
+    init: I,
+    step: F,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    I: FnMut() -> Acc,
+    F: FnMut(&mut Acc, O),
+    E: RtError<'a, S>,
+{
+    fold_in_place_impl(min, p, init, step, false)
+}
+
+/// [`par_fold_recording`] with an in-place step, as [`fold_in_place_recording`].
+pub fn par_fold_in_place_recording<'a, S, O, Acc, P, I, F, E>(
+    min: usize,
+    p: P,
+    init: I,
+    step: F,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    I: FnMut() -> Acc,
+    F: FnMut(&mut Acc, O),
+    E: RtError<'a, S>,
+{
+    fold_in_place_impl(min, p, init, step, true)
+}
+
+/// The loop of every fold, around one line that differs: how an accepted item
+/// reaches the accumulator. A macro rather than a function generic over the
+/// step, because the by-value step cannot be expressed through an in-place
+/// one without moving the accumulator - the very cost the in-place form is
+/// there to avoid.
+macro_rules! fold_loop {
+    ($input:ident, $min:ident, $p:ident, $init:ident, $tracked:ident, |$acc:ident, $v:ident| $step:expr) => {{
+        let mut $acc = $init();
+        let mut seen = 0usize;
+        let base = if $tracked { $input.state.fold.base } else { 0 };
+        // Where the fold stopped, for the replay - see `FoldProgress`.
+        let stopped = |input: &mut ParseInput<'a, S>, seen: usize, at: usize| {
+            if $tracked {
+                input.state.fold.seen = seen;
+                input.state.fold.at = at;
+            }
+        };
+        loop {
+            let cp = $input.checkpoint();
+            let start = $input.current_token_start();
+            match $p.parse_next($input) {
+                Ok($v) => {
+                    // Zero-progress guard: otherwise the loop spins forever
+                    // when the element matches without consuming anything.
+                    if $input.current_token_start() == start {
+                        $input.reset(&cp);
+                        stopped($input, seen, start);
+                        break;
+                    }
+                    $step;
+                    seen += 1;
+                }
+                Err(ErrMode::Backtrack(e)) => {
+                    let e = e.item(base + seen + 1);
+                    stopped($input, seen, start);
+                    if seen < $min {
+                        return Err(ErrMode::Backtrack(e));
+                    }
+                    e.record(&mut $input.state, start);
+                    $input.reset(&cp);
+                    break;
+                }
+                Err(e) => {
+                    stopped($input, seen, start);
+                    return Err(e);
+                }
+            }
+        }
+        Ok($acc)
+    }};
+}
+
 fn fold_impl<'a, S, O, Acc, P, I, F, E>(
     min: usize,
     mut p: P,
@@ -756,50 +847,24 @@ where
     F: FnMut(Acc, O) -> Acc,
     E: RtError<'a, S>,
 {
-    move |input| {
-        let mut acc = init();
-        let mut seen = 0usize;
-        let base = if tracked { input.state.fold.base } else { 0 };
-        // Where the fold stopped, for the replay - see `FoldProgress`.
-        let stopped = |input: &mut ParseInput<'a, S>, seen: usize, at: usize| {
-            if tracked {
-                input.state.fold.seen = seen;
-                input.state.fold.at = at;
-            }
-        };
-        loop {
-            let cp = input.checkpoint();
-            let start = input.current_token_start();
-            match p.parse_next(input) {
-                Ok(v) => {
-                    // Zero-progress guard: otherwise the loop spins forever
-                    // when the element matches without consuming anything.
-                    if input.current_token_start() == start {
-                        input.reset(&cp);
-                        stopped(input, seen, start);
-                        break;
-                    }
-                    acc = step(acc, v);
-                    seen += 1;
-                }
-                Err(ErrMode::Backtrack(e)) => {
-                    let e = e.item(base + seen + 1);
-                    stopped(input, seen, start);
-                    if seen < min {
-                        return Err(ErrMode::Backtrack(e));
-                    }
-                    e.record(&mut input.state, start);
-                    input.reset(&cp);
-                    break;
-                }
-                Err(e) => {
-                    stopped(input, seen, start);
-                    return Err(e);
-                }
-            }
-        }
-        Ok(acc)
-    }
+    move |input| fold_loop!(input, min, p, init, tracked, |acc, v| acc = step(acc, v))
+}
+
+fn fold_in_place_impl<'a, S, O, Acc, P, I, F, E>(
+    min: usize,
+    mut p: P,
+    mut init: I,
+    mut step: F,
+    tracked: bool,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    I: FnMut() -> Acc,
+    F: FnMut(&mut Acc, O),
+    E: RtError<'a, S>,
+{
+    move |input| fold_loop!(input, min, p, init, tracked, |acc, v| step(&mut acc, v))
 }
 
 /// A labelled alternative (`# "…"`). If it fails at its starting position,

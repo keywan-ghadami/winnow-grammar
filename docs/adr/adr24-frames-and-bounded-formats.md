@@ -419,6 +419,34 @@ because it added a second data-dependent search per row, and with it 1.6
 mispredictions. What would move the
 clock now is fewer unpredictable branches per row, not fewer instructions.
 
+## 11. A fold's step may change the accumulator in place
+
+`fold(p, init, step)` and `par_fold(p, init, step, merge)` take a step that
+takes the accumulator and hands it back, `|acc: Acc, item| -> Acc`. For an
+accumulator that holds a table, that is a move in and a move out per item,
+and the optimiser does not remove them: the step calls a method that takes
+`&mut self`, so the accumulator has to be in memory, and it is copied between
+the loop's slot and the step's on the way in and on the way out. On 1BRC that
+was 7 of the fold's 11 instructions a row, and as many again in the step.
+
+A step whose first parameter is written `&mut` - `|acc: &mut Acc, item| …`,
+or `&mut _` where the type is inferred - now changes the accumulator in
+place: the macro picks `rt::fold_in_place_recording` or
+`rt::par_fold_in_place_recording` from the closure's syntax, and nothing
+else changes. The loop is one macro in `rt.rs` with the one line that
+differs, so the two forms cannot drift apart on progress, backtracking, the
+item number of an error or the trail the replay reads.
+`tests/fold_in_place_test.rs` runs both forms of a `par_fold` and of a
+`fold` on every string of up to six characters, in the fast pass with its
+replay and eagerly, and they agree on value, consumption and message.
+
+Measured on Nikaia's 1BRC with the generated code built against this crate
+by path, 1 M rows: 344.1 → 337.1 instructions a row, mispredictions the same
+(1.58). What is left of the loop per item is 8 instructions: the loop, the
+zero-progress guard, the call into the step and the item count. The
+checkpoint that issue #22 suspected costs nothing on the success path - it is
+the stream's position, held in a register until a failure needs it.
+
 ## Consequences
 
 - A grammar that says `#[frame]` either compiles and can be cut soundly, or

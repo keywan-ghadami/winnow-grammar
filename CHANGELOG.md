@@ -5,6 +5,15 @@
 
 ### Performance
 
+- **A fold's step may change the accumulator in place** (ADR 24 §11, #22):
+  a step whose first parameter is written `&mut` - `|acc: &mut Acc, item| …`,
+  or `&mut _` - is run as `rt::fold_in_place_recording` /
+  `rt::par_fold_in_place_recording` and never moves the accumulator, where a
+  step that hands it back copies it in and out per item. One loop serves both
+  forms; `tests/fold_in_place_test.rs` holds them to each other on every
+  string up to six characters. Nikaia's `examples/1brc.nika`, callgrind over
+  1 M rows: 344.1 → 337.1 instructions per row.
+
 - **A one-byte literal is compared as a byte in the fast pass** (ADR 24 §8a):
   `";"`, `','` and a `frame_end` whose boundary is one byte are
   `rt::lit_byte`, one compare and one `next_token`, where winnow's `literal`
