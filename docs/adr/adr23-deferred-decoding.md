@@ -6,7 +6,7 @@ definition, for every byte value at every offset in a word; short inputs
 through the tail; the boundary claim; and `raw_ident`'s Unicode continuation
 against a character walk.
 **Benchmarks:** `benches/deferred.rs`, `benches/interning.rs` (`parse/`).
-**Related:** ADR 16 §4 (why cutting a `&str` at an ASCII match is safe),
+**Related:** ADR 24 §4 (why cutting a `&str` at an ASCII match is safe),
 ADR 21 (`par_fold` pieces), the byte driver (TODO §3), which this is *not*.
 
 ## Context
@@ -46,7 +46,7 @@ Three claims hold it up.
 every byte of a multi-byte character is `>= 0x80`. An ASCII class contains no
 such byte, so the scan stops at or before the character's first byte, never
 between its bytes. The slice it cuts is valid UTF-8 by construction - there is
-nothing to validate and nothing to decode. This is ADR 16 §4's argument for
+nothing to validate and nothing to decode. This is ADR 24 §4's argument for
 cutting frames, applied one level down.
 
 **2. What actually needs a `char` gets one, there.** `raw_ident` matches

@@ -67,7 +67,7 @@ now run through the replay and prove it.
 
 ### 3. Frames narrow the replay to the failing item
 
-A `par_fold` rule promises (ADR 16) that its items are independent of one
+A `par_fold` rule promises (ADR 24 §2, formerly ADR 16) that its items are independent of one
 another and of any accumulated state — that is what lets pieces of the
 input parse on separate cores. The same promise lets the replay skip what
 the fast pass accepted. The fold in the body of a `par_fold` rule
@@ -126,7 +126,7 @@ This is the one thing this ADR asks of a grammar that ADR 15 did not:
   `ParseError` and is called in both passes; its error is converted through
   `Diagnostics::from_parse_error` (dropped in the fast pass). It does not
   get the fast path — it does what it does — but it does not break it.
-* **Items of a `par_fold` rule are independent** — ADR 16 already required
+* **Items of a `par_fold` rule are independent** — ADR 16 (now ADR 24 §2) already required
   it for the pieces; the framed replay relies on it in the sequential parse
   too.
 

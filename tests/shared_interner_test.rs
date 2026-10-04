@@ -27,7 +27,7 @@ grammar! {
 }
 
 /// The worked example: the caller owns the interner and the closure clones it
-/// into every piece, as ADR 16 §3 describes. Symbols are then comparable
+/// into every piece, as ADR 24 §3 describes. Symbols are then comparable
 /// across pieces and resolve against the interner the caller kept.
 #[test]
 fn one_interner_shared_by_every_piece() {

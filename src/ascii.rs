@@ -5,7 +5,7 @@
 //! high bit set. An ASCII class therefore **cannot match a continuation
 //! byte**, so the position where such a scan stops is always a character
 //! boundary and the slice it cuts is valid UTF-8 by construction - the same
-//! argument ADR 16 §4 makes for cutting frames.
+//! argument ADR 24 §4 makes for cutting frames.
 //!
 //! That is what lets the scan work on bytes and leave decoding to whoever
 //! actually needs a `char`. Measured on `benches/deferred.rs`, a run of digits

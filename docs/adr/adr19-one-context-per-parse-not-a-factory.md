@@ -5,7 +5,7 @@
 matter fail without the fix (checked by reverting it);
 `tests/shared_interner_test.rs` for §2, including the one that says the
 shortest call which compiles is now the safe one.
-**Depends on:** ADR 14 (the shared context), ADR 16 (frames and `par_fold`),
+**Depends on:** ADR 14 (the shared context), ADR 24 (frames and `par_fold`; formerly ADR 16),
 ADR 17 (the diagnosing replay), ADR 18 §3 and §4.
 
 ## Context

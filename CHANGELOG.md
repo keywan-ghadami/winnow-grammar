@@ -5,6 +5,31 @@
 
 ### Performance
 
+- **A run of fixed-shape elements in a lexical rule is matched by index**
+  (ADR 24 §8). `"-"? digit{1,2} "." digit` was four parser calls, one of
+  them a repetition with a checkpoint per digit; in the fast pass it is now a
+  few byte comparisons and one advance. A failed match, and the diagnosing
+  pass throughout, run the elements as before, so errors are unchanged
+  (`tests/fixed_run_test.rs` checks both spellings on every string up to six
+  characters). Nikaia's `examples/1brc.nika`, callgrind over 1 M rows:
+  676 → 608 instructions per row (−10 %), mispredicts 4.56 → 4.21 per row;
+  on the clock, one core, no difference outside noise.
+
+  **Measured and not kept**: one `memchr_iter` per input handing each frame
+  its end, instead of a `memchr2` per frame - 706 per row and +17 % time,
+  because a fifteen-byte line was searched twice instead of once. The
+  backward walk to the separator that a hand-tuned 1BRC loop uses would
+  accept `a;b;1.0` where `until(";" | frame_end)` rejects it, and measured
+  649 anyway. ADR 24 §9.
+
+### Documentation
+
+- **ADR 16 is withdrawn; ADR 24 carries frames forward** with what had
+  drifted brought up to date - a `par_fold` rule skips nothing anywhere, and
+  its driver is `parse_<rule>_pieces(input, &context, how)` plus
+  `parse_<rule>_pieces_with` - and adds Part II, what a bounded format buys
+  the parser.
+
 - **A cached name up to sixteen bytes is not looked up again to be checked.**
   The intern cache keyed a slot by the first eight bytes and verified every
   longer hit with `resolve` - which in `ThreadedRodeo` is not an index but a

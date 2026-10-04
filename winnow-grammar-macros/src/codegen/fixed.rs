@@ -1,4 +1,4 @@
-//! A run of fixed-shape elements in a lexical rule, matched by index - ADR 24 §2.
+//! A run of fixed-shape elements in a lexical rule, matched by index - ADR 24 §8.
 //!
 //! `"-"? digit{1,2} "." digit` is four parser calls, one of them a repetition
 //! with a checkpoint per element. Its width is bounded (three to five bytes)

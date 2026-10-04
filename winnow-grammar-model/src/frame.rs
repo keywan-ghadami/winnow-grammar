@@ -1,5 +1,5 @@
 //! Frames: rules a parser can resynchronize on, and what that asks of the
-//! rest of the grammar. The decision record is `docs/adr/adr16-frames.md`.
+//! rest of the grammar. The decision record is `docs/adr/adr24-frames-and-bounded-formats.md`.
 //!
 //! A rule marked `#[frame]` claims that an occurrence of it can be found from
 //! an arbitrary offset in the input by scanning to the next **boundary** — the

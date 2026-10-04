@@ -52,7 +52,7 @@ UTF-8 - a binary record, a length-prefixed field, a file whose encoding is the
 grammar's business rather than the reader's - has no way in.
 
 What already points that way: `rt::frames_bytes` cuts `&[u8]` and is what
-`rt::frames` is a `&str` view of (ADR 16 §4), so the piece machinery does not
+`rt::frames` is a `&str` view of (ADR 24 §4), so the piece machinery does not
 assume text. The character classes now match on bytes as well (ADR 23):
 `AsciiClass::run` takes a `&[u8]` and would carry over unchanged - only
 `raw_ident`'s decoded tail is about text at all. The error engine takes `I: Stream + Location + AsBStr`, which

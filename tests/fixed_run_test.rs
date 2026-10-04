@@ -1,5 +1,5 @@
 //! A run of fixed-shape elements in a lexical rule is matched by index
-//! (ADR 24 §2). The claim is that nothing observable changes: every rule
+//! (ADR 24 §8). The claim is that nothing observable changes: every rule
 //! below exists twice, once as written and once with an empty literal between
 //! its elements, which matches everywhere and breaks every run - so the
 //! second is generated the way the first was before. Both are run on every

@@ -714,7 +714,7 @@ rule T = "bool"
 
 A parser reads its input front to back on one core. For a large input that is
 the whole cost. A grammar can say the two things that let the input be cut into
-pieces and parsed as pieces. The decision record is `docs/adr/adr16-frames.md`.
+pieces and parsed as pieces. The decision record is `docs/adr/adr24-frames-and-bounded-formats.md`.
 
 **Where may it be cut?** A rule marked `#[frame]` is one that can be found
 from any offset by scanning to the next **boundary** — the literal it ends in,

@@ -7,7 +7,7 @@ use syn::spanned::Spanned;
 
 /// What validation established, handed on to the code generator so that no
 /// analysis runs twice: one analysis, one result, one consumer each for
-/// diagnostics and generation (ADR 16 §6).
+/// diagnostics and generation (ADR 24 §7).
 #[derive(Debug, Clone)]
 pub struct Validated {
     /// Frame rules, their boundaries, what `frame_end` stands for where, and

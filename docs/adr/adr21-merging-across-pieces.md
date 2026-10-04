@@ -1,7 +1,7 @@
 # ADR 21: What a Merge Can See — Identity Across the Pieces of a `par_fold`
 
 **Status:** Proposed. **Date:** 2026-09-08.
-**Depends on:** ADR 16 (frames and `par_fold`), ADR 18 §3 (symbols are per
+**Depends on:** ADR 24 (frames and `par_fold`; formerly ADR 16), ADR 18 §3 (symbols are per
 interner), ADR 19 §2 (`_pieces` shares the context; `_pieces_with` builds one
 per piece), ADR 20 (`state T;`).
 

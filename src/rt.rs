@@ -34,7 +34,7 @@ where
 
 /// The input not yet consumed, as text. With [`advance`], what a run of
 /// fixed-shape elements is matched with: by index into this slice, then one
-/// step forward (ADR 24 §2).
+/// step forward (ADR 24 §8).
 #[inline]
 pub fn rest<'a, S: Clone + std::fmt::Debug>(input: &ParseInput<'a, S>) -> &'a str {
     input.peek_slice(input.eof_offset())
@@ -1112,7 +1112,7 @@ where
 ///
 /// The fold in the rule's body ([`par_fold_recording`]) leaves behind where it
 /// stopped and how many items it had accepted. Those items are independent of
-/// one another and of any state - that is what `par_fold` promises (ADR 16),
+/// one another and of any state - that is what `par_fold` promises (ADR 24 §2),
 /// and what lets pieces of the input be parsed on separate cores - so a
 /// diagnosing pass that skips them sees exactly what a pass over everything
 /// would see at that point: the same item, the same error, at the same
