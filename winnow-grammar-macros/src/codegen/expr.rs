@@ -249,6 +249,13 @@ impl<'a> Codegen<'a> {
         mut in_cut: bool,
         is_lexical: bool,
     ) -> TokenStream {
+        // A lexical sequence skips nothing between its elements, so a run of
+        // fixed-shape ones can be matched by index (ADR 24 §2).
+        if is_lexical {
+            if let Some(steps) = self.fixed_sequence_steps(patterns, in_cut) {
+                return steps;
+            }
+        }
         let mut steps = Vec::new();
         let input = &self.input_ident;
 

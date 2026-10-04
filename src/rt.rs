@@ -32,6 +32,22 @@ where
 {
 }
 
+/// The input not yet consumed, as text. With [`advance`], what a run of
+/// fixed-shape elements is matched with: by index into this slice, then one
+/// step forward (ADR 24 §2).
+#[inline]
+pub fn rest<'a, S: Clone + std::fmt::Debug>(input: &ParseInput<'a, S>) -> &'a str {
+    input.peek_slice(input.eof_offset())
+}
+
+/// Consume `n` bytes that [`rest`] showed to be matched. `n` lies on a
+/// character boundary because every element the indexed match accepts ends
+/// on one.
+#[inline]
+pub fn advance<S: Clone + std::fmt::Debug>(input: &mut ParseInput<'_, S>, n: usize) {
+    input.next_slice(n);
+}
+
 /// `until("lit")` - consume everything before the next occurrence of a literal
 /// terminator, without consuming the terminator itself.
 ///

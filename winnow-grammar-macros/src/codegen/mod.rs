@@ -1,4 +1,5 @@
 pub mod expr;
+pub mod fixed;
 pub mod rule;
 pub mod variants;
 
