@@ -1,7 +1,7 @@
 # ADR 24: Frames — Parsing an Input in Pieces, and What a Bounded Format Buys the Parser
 
-**Status:** Accepted. Part I is in force as implemented; Part II §8 is
-implemented, §9 was measured and rejected. **Date:** 2026-10-04.
+**Status:** Accepted. Part I is in force as implemented; Part II §8 and §8a
+are implemented, §8b and §9 were measured and rejected. **Date:** 2026-10-04.
 **Supersedes:** ADR 16, now withdrawn. Everything of it that still holds is
 here, brought up to date (§2 and §3 had drifted from the code). Its sections 1
 to 5 keep their numbers, so a reference to "ADR 16 §4" in the history reads as
@@ -9,8 +9,10 @@ to 5 keep their numbers, so a reference to "ADR 16 §4" in the history reads as
 **Tests:** `tests/frames_test.rs` (the split, split + parse + merge against the
 sequential parse, the driver), `tests/ui/frames.rs` (what the check rejects),
 `tests/fixed_run_test.rs` (§8: the indexed match against the element-by-element
-parse on every string up to six characters). Where the tests and this ADR
-disagree, this ADR wins.
+parse on every string up to six characters, `dec<T>` included),
+`tests/lit_byte_test.rs` (§8a: every rule run with and without the fast pass,
+on every string up to six characters). Where the tests and this ADR disagree,
+this ADR wins.
 **Measured on:** Nikaia's `examples/1brc.nika`, the workload that raised
 Part II ([Nikaia#392](https://github.com/Nikaia-Language/Nikaia/issues/392));
 §10 has the method.
@@ -292,22 +294,50 @@ pinned to one core, best of 25 over 8 million rows. §10 says why.
 **Measured again downstream**, when Nikaia moved its pin to this commit
 (Nikaia 0.0.415, both sides built by its own compiler, no `[patch]`): 587 →
 **566** instructions per row (−3.6 %), 0.395 s → 0.390 s on one core, inside
-the noise. The baseline is lower than above because Nikaia's own code had
-moved on between the two measurements, and the share §8 removes is smaller
-with it. Mispredictions went *up* there, 4.22 → 5.22 per row, and the one
-that was added sits in Nikaia's action, `for d in whole.chars()`: whether a
-temperature has one whole digit or two is a coin toss per row, and the branch
-that pays for it moved from the repetition in the parser to the loop in the
-action rather than going away. A value computed while matching - an
-`int(digit{1,2})` capture - would be the way to remove it, and it is a
-question for the language, not for this crate. Nikaia's compiler itself, on
-its largest source file, is unchanged (382.54 M → 382.56 M instructions,
-the same Rust out): its grammar has few runs of this shape.
+the noise. Those two builds still carried `debug-assertions` from Cargo's
+`dev` profile, which Nikaia's generated profile inherited until 0.0.416, and
+with them the standard library's precondition checks in every inlined
+function; the numbers in §8a and §8b are taken without (§10).
 
 It stays because it costs nothing at run time that it does not repay, removes
 work rather than moving it, and the rule it applies is local — a run of
 elements in one sequence, decided from those elements alone. The generated
 parser of a rule still depends on nothing outside that rule.
+
+## 8a. A one-byte literal is compared as a byte
+
+**Decision.** A literal of one ASCII byte - `";"`, `','`, a `frame_end` whose
+boundary is one byte - is `rt::lit_byte` in the fast pass: the first byte
+compared, one byte consumed with `next_token`. winnow's `literal` compares a
+`&str` pair by pair in a loop and then cuts with a character-boundary check,
+which for one byte is most of the cost of a separator. The diagnosing pass runs
+`literal` with its expectation, as before, so every error and every message is
+the one it was. `tests/lit_byte_test.rs` runs each rule with and without the
+fast pass (`Diagnose::Eager`) on every string of up to six characters over
+`a ; , . \n ␠ é`, lexical and syntactic rules, optional and repeated
+separators, and `frame_end` under a `par_fold`, and requires the same value,
+the same length consumed and the same message.
+
+**Measured** (Nikaia's `examples/1brc.nika`, its 0.0.416 profile - §10): 438 →
+**418** instructions per row, mispredictions 4.55 → 4.35. With §8b's `dec`
+written in the grammar, 417 → **390**.
+
+## 8b. `dec<T>(digit{m,n})` is the value, and stays `rt::dec`
+
+`dec<T>(p)` reads the text `p` matched as a `T`, and a fixed-width numeric
+field is what it was made for. Written in the 1BRC grammar -
+`whole:dec<i32>(digit{1,2})` instead of the text and a `chars()` loop in the
+action - it is worth 439 → 418 instructions per row and 4.42 → 3.82
+mispredictions on plain Rust with Nikaia's profile, and in Nikaia with §8a,
+417 → 390.
+
+Folding it into §8's indexed match, the value accumulated while the digits are
+matched where `n` digits always fit in `T`, was built twice and measured: as a
+loop, 408 instructions and 4.09 mispredictions; unrolled with a select per
+digit, 422 and 3.85; against `rt::dec`'s 418 and 3.82. At fifteen to twenty
+cycles a mispredict the three are the same, and the fold is not kept: it is a
+second way to read a number, for nothing. `dec` breaks §8's run where it
+stands, and the elements on either side of it still form their own.
 
 ## 9. One search per input instead of one per frame — measured, rejected
 
@@ -371,9 +401,14 @@ are callgrind's `--branch-sim`. Times are best of 25, the variants interleaved,
 pinned to one core (`taskset -c 2`), over 8 million rows on a 4-core box.
 Unpinned, best of 5, the same binaries moved by up to ±10 % from one round to
 the next, so a time is read here only where it differs by more than that.
-The baseline here is 676 per row; Nikaia's `benches/brc/README.md` quotes 587
-for the same program, taken on another box and toolchain, and no figure here
-is comparable with that one, only with each other.
+The baseline in §8 and §9 is 676 per row, on an older Nikaia and with Cargo's
+`dev` profile as Nikaia then inherited it - `debug-assertions` on, and with
+them the standard library's precondition checks in every function inlined into
+the program. §8a and §8b are measured on Nikaia 0.0.416, whose generated
+profile turns them off (`incremental = false` and `optimization =
+"remove-bounds-checks:aggressive,remove-overflow-checks:aggressive"` as well;
+the last two change nothing in this program's Rust). A figure compares only
+with figures taken under the same profile.
 
 **Instructions are not the cost here.** Every variant runs about four and a
 half mispredicted branches per row — the hash table and the name length the
@@ -406,7 +441,12 @@ clock now is fewer unpredictable branches per row, not fewer instructions.
 - A fixed-width field in a lexical rule costs one comparison per byte and one
   advance in the fast pass (§8). A grammar that wants that has nothing to
   write: `digit{1,2}` already says it.
-- The remaining gap to `tuned` on this workload is not in the parser's
-  instruction count (§10). A "last separator in the frame" construct is the
-  one idea here that would change what is parsed; it is open, and needs a
-  case that is not this one.
+- A separator of one byte costs a compare and a step in the fast pass (§8a),
+  and a fixed-width number is `dec<T>(digit{m,n})` (§8b), with no new syntax.
+- What is left between the grammar and `tuned` on this workload - 390 against
+  307 instructions per row - is the rest of the parser (about 134 against 50:
+  `str` slicing with its boundary checks, the fold loop, the stream), the UTF-8
+  check `tuned` does not make (35), and the mispredictions of the hash of a
+  `&str` key. Nikaia's `benches/brc/README.md` has the breakdown. A "last
+  separator in the frame" construct is the one idea here that would change
+  what is parsed; it is open, and needs a case that is not this one.

@@ -48,6 +48,49 @@ pub fn advance<S: Clone + std::fmt::Debug>(input: &mut ParseInput<'_, S>, n: usi
     input.next_slice(n);
 }
 
+/// A literal of one ASCII byte - `";"`, `"\n"`, a `frame_end` whose boundary is
+/// one - in the fast pass: one byte compared, one consumed (ADR 24 §8a).
+///
+/// winnow's `literal` compares a `&str` pair by pair in a loop and then cuts at
+/// the end with a character-boundary check; for one byte that is most of the
+/// cost of matching a separator. Consumed with `next_token`, as [`digit`] is,
+/// which steps over the byte without the boundary check `next_slice(1)` makes;
+/// the value is the same one-byte slice, and a caller that discards it - the
+/// usual case for a separator - does not compute it.
+///
+/// The diagnosing pass runs `literal` with its expectation as before, so the
+/// error, and every message built from it, is unchanged.
+#[inline]
+pub fn lit_byte<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
+    byte: u8,
+    lit: &'static str,
+    char_lit: Option<char>,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, ErrMode<E>> {
+    move |input| {
+        if !E::RECORDING {
+            let rest = rest(input);
+            return if rest.as_bytes().first() == Some(&byte) {
+                input.next_token();
+                Ok(rest.get(..1).unwrap_or_default())
+            } else {
+                Err(ErrMode::Backtrack(E::from_input(input)))
+            };
+        }
+        match char_lit {
+            Some(c) => winnow::token::literal(c)
+                .context(StrContext::Expected(
+                    winnow::error::StrContextValue::CharLiteral(c),
+                ))
+                .parse_next(input),
+            None => winnow::token::literal(lit)
+                .context(StrContext::Expected(
+                    winnow::error::StrContextValue::StringLiteral(lit),
+                ))
+                .parse_next(input),
+        }
+    }
+}
+
 /// `until("lit")` - consume everything before the next occurrence of a literal
 /// terminator, without consuming the terminator itself.
 ///

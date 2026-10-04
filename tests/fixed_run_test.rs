@@ -39,6 +39,24 @@ grammar! {
             a:"-"? b:digit? c:raw_ident -> { (a, b, c) }
         pub EMPTY_REF -> (Option<&'a str>, Option<char>, &'a str) =
             a:"-"? "" b:digit? "" c:raw_ident -> { (a, b, c) }
+
+        // `dec<T>` over digits that always fit: the value is accumulated in
+        // the indexed match (ADR 24 §8). The 1BRC temperature in tenths.
+        pub DEC -> i32 =
+            neg:"-"? w:dec<i32>(digit{1,2}) "." f:dec<i32>(digit{1}) -> {
+                let v = w * 10 + f;
+                if neg.is_some() { -v } else { v }
+            }
+        pub DEC_REF -> i32 =
+            neg:"-"? "" w:dec<i32>(digit{1,2}) "" "." "" f:dec<i32>(digit{1}) -> {
+                let v = w * 10 + f;
+                if neg.is_some() { -v } else { v }
+            }
+
+        // Two digits always fit a `u8`; three do not, so `dec<u8>(digit{3})`
+        // keeps `rt::dec` and its overflow error ("999").
+        pub DEC_U8 -> (u8, u8) = a:dec<u8>(digit{2}) "-" b:dec<u8>(digit{1,3}) -> { (a, b) }
+        pub DEC_U8_REF -> (u8, u8) = a:dec<u8>(digit{2}) "" "-" "" b:dec<u8>(digit{1,3}) -> { (a, b) }
     }
 }
 
@@ -117,6 +135,28 @@ fn a_run_after_a_commit_point_agrees() {
 #[test]
 fn a_run_that_matches_nothing_agrees() {
     agree!(parse_EMPTY, parse_EMPTY_REF);
+}
+
+#[test]
+fn dec_of_digits_that_fit_agrees() {
+    agree!(parse_DEC, parse_DEC_REF);
+}
+
+#[test]
+fn dec_of_digits_that_may_not_fit_agrees() {
+    agree!(parse_DEC_U8, parse_DEC_U8_REF);
+}
+
+#[test]
+fn dec_yields_the_number() {
+    assert_eq!(run(Fixed::parse_DEC(), "-12.3").0, Ok(-123));
+    assert_eq!(run(Fixed::parse_DEC(), "07.5").0, Ok(75));
+    assert_eq!(run(Fixed::parse_DEC_U8(), "42-255").0, Ok((42, 255)));
+    let overflow = run(Fixed::parse_DEC_U8(), "42-999").0;
+    assert!(
+        overflow.as_ref().is_err_and(|e| e.contains("too large")),
+        "{overflow:?}"
+    );
 }
 
 #[test]

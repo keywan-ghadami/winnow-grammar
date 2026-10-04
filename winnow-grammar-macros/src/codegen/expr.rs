@@ -1038,6 +1038,11 @@ impl<'a> Codegen<'a> {
             // reaches, so the fallback only keeps the generator total.
             winnow_grammar_model::frame::FRAME_END => {
                 let b = self.current_boundary.borrow().clone().unwrap_or_default();
+                if let [byte] = b.as_bytes() {
+                    if byte.is_ascii() {
+                        return quote_spanned! {span=> ::winnow_grammar::rt::lit_byte(#byte, #b, ::core::option::Option::None) };
+                    }
+                }
                 quote_spanned! {span=>
                     literal(#b)
                         .context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::StringLiteral(#b)))
@@ -1250,6 +1255,28 @@ impl<'a> Codegen<'a> {
                 ..
             } => self.generate_rule_call_parser(rule_path, generics, args, is_lexical),
             ModelPattern::Lit { lit, .. } => {
+                // One ASCII byte: compared as a byte in the fast pass
+                // (ADR 24 §8a).
+                let one_byte = match lit {
+                    syn::Lit::Str(s) => {
+                        let v = s.value();
+                        (v.len() == 1 && v.as_bytes()[0].is_ascii())
+                            .then(|| (v.as_bytes()[0], None))
+                    }
+                    syn::Lit::Char(c) => c
+                        .value()
+                        .is_ascii()
+                        .then(|| (c.value() as u8, Some(c.value()))),
+                    _ => None,
+                };
+                if let Some((byte, char_lit)) = one_byte {
+                    let text = (byte as char).to_string();
+                    let char_lit = match char_lit {
+                        Some(c) => quote_spanned! {span=> ::core::option::Option::Some(#c) },
+                        None => quote_spanned! {span=> ::core::option::Option::None },
+                    };
+                    return quote_spanned! {span=> ::winnow_grammar::rt::lit_byte(#byte, #text, #char_lit) };
+                }
                 // Pure literal, no ws wrapping
                 match lit {
                     syn::Lit::Str(_) => {

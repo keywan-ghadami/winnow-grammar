@@ -5,6 +5,19 @@
 
 ### Performance
 
+- **A one-byte literal is compared as a byte in the fast pass** (ADR 24 §8a):
+  `";"`, `','` and a `frame_end` whose boundary is one byte are
+  `rt::lit_byte`, one compare and one `next_token`, where winnow's `literal`
+  looped over the pair and cut with a boundary check. The diagnosing pass is
+  unchanged, so are the messages (`tests/lit_byte_test.rs`). Nikaia's
+  `examples/1brc.nika`, callgrind over 1 M rows: 438 → 418 instructions per
+  row; with the temperature read as `dec<i32>(digit{1,2})`, 417 → 390.
+
+- **`dec<T>` over a fixed run, measured and left as it is** (ADR 24 §8b):
+  accumulating the value inside the indexed match came out even with
+  `rt::dec` once mispredictions are counted, and is not in. New tests hold
+  `dec` to the element-by-element parse, its overflow error included.
+
 - **A run of fixed-shape elements in a lexical rule is matched by index**
   (ADR 24 §8). `"-"? digit{1,2} "." digit` was four parser calls, one of
   them a repetition with a checkpoint per digit; in the fast pass it is now a
