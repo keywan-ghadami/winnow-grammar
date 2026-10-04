@@ -289,6 +289,21 @@ a character boundary, an ASCII digit or a whole literal.
 4.56 → 4.21 per row. On the clock it does not show: 0.426 s against 0.427 s,
 pinned to one core, best of 25 over 8 million rows. §10 says why.
 
+**Measured again downstream**, when Nikaia moved its pin to this commit
+(Nikaia 0.0.415, both sides built by its own compiler, no `[patch]`): 587 →
+**566** instructions per row (−3.6 %), 0.395 s → 0.390 s on one core, inside
+the noise. The baseline is lower than above because Nikaia's own code had
+moved on between the two measurements, and the share §8 removes is smaller
+with it. Mispredictions went *up* there, 4.22 → 5.22 per row, and the one
+that was added sits in Nikaia's action, `for d in whole.chars()`: whether a
+temperature has one whole digit or two is a coin toss per row, and the branch
+that pays for it moved from the repetition in the parser to the loop in the
+action rather than going away. A value computed while matching - an
+`int(digit{1,2})` capture - would be the way to remove it, and it is a
+question for the language, not for this crate. Nikaia's compiler itself, on
+its largest source file, is unchanged (382.54 M → 382.56 M instructions,
+the same Rust out): its grammar has few runs of this shape.
+
 It stays because it costs nothing at run time that it does not repay, removes
 work rather than moving it, and the rule it applies is local — a run of
 elements in one sequence, decided from those elements alone. The generated
