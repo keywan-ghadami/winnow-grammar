@@ -292,10 +292,10 @@ a character boundary, an ASCII digit or a whole literal.
 pinned to one core, best of 25 over 8 million rows. §10 says why.
 
 **Measured again downstream**, when Nikaia moved its pin to this commit
-(Nikaia 0.0.415, both sides built by its own compiler, no `[patch]`): 587 →
+(Nikaia 0.0.418, both sides built by its own compiler, no `[patch]`): 587 →
 **566** instructions per row (−3.6 %), 0.395 s → 0.390 s on one core, inside
 the noise. Those two builds still carried `debug-assertions` from Cargo's
-`dev` profile, which Nikaia's generated profile inherited until 0.0.416, and
+`dev` profile, which Nikaia's generated profile inherited until 0.0.419, and
 with them the standard library's precondition checks in every inlined
 function; the numbers in §8a and §8b are taken without (§10).
 
@@ -318,7 +318,7 @@ fast pass (`Diagnose::Eager`) on every string of up to six characters over
 separators, and `frame_end` under a `par_fold`, and requires the same value,
 the same length consumed and the same message.
 
-**Measured** (Nikaia's `examples/1brc.nika`, its 0.0.416 profile - §10): 438 →
+**Measured** (Nikaia's `examples/1brc.nika`, its 0.0.419 profile - §10): 438 →
 **418** instructions per row, mispredictions 4.55 → 4.35. With §8b's `dec`
 written in the grammar, 417 → **390**.
 
@@ -404,7 +404,7 @@ the next, so a time is read here only where it differs by more than that.
 The baseline in §8 and §9 is 676 per row, on an older Nikaia and with Cargo's
 `dev` profile as Nikaia then inherited it - `debug-assertions` on, and with
 them the standard library's precondition checks in every function inlined into
-the program. §8a and §8b are measured on Nikaia 0.0.416, whose generated
+the program. §8a and §8b are measured on Nikaia 0.0.419, whose generated
 profile turns them off (`incremental = false` and `optimization =
 "remove-bounds-checks:aggressive,remove-overflow-checks:aggressive"` as well;
 the last two change nothing in this program's Rust). A figure compares only
