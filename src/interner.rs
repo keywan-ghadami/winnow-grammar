@@ -10,7 +10,14 @@ type Hasher = std::hash::RandomState;
 use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+/// An interned string: a `u32` handle into the interner that produced it.
+///
+/// `Ord` exists so a `Symbol` can key a `BTreeMap` or `BTreeSet`. The order is
+/// the order in which the interner first saw the strings - **not**
+/// alphabetical, and not stable across interners or runs (see
+/// [`index`](Self::index)). Use it where the iteration order is not observable;
+/// to sort for output, sort by [`InternerContext::resolve`]d text.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct Symbol(NonZeroU32);
 
