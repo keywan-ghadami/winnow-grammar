@@ -903,6 +903,7 @@ dependencies = [
  "ahash",
  "criterion",
  "lasso",
+ "memchr",
  "paste",
  "proc-macro2",
  "quote",

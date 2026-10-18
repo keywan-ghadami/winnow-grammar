@@ -21,6 +21,9 @@ use winnow::stream::{AsBStr, FindSlice, Location, Offset, Stream, StreamIsPartia
 use winnow::Parser;
 
 pub mod bytes;
+mod find;
+
+pub use find::{FindBytes, FindBytes2, FindBytes3};
 
 /// What a grammar reads: `&'a str` ([`ParseInput`]) or, with `input bytes;`,
 /// `&'a [u8]` ([`ParseBytes`](crate::ParseBytes)) - ADR 25. Sealed: the two
@@ -297,6 +300,27 @@ pub fn scan_to_any<'a, S: Clone + std::fmt::Debug, E>(
     }
 }
 
+/// `until(";" | "\n")` and its kin when every needle is one byte (so ASCII):
+/// [`scan_to_any`] with the search a [`FindBytes`] the generated code keeps in
+/// a `static` per scan site, built on first use (ADR 24 §12b). `line_ending`
+/// is one of the bytes, `\n`, and adds the look back for `\r`.
+#[inline]
+pub fn scan_to_bytes<'a, S: Clone + std::fmt::Debug, E, F: FindBytes>(
+    find: &'static F,
+    line_ending: bool,
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, ErrMode<E>> {
+    move |input| {
+        let hay = rest(input).as_bytes();
+        let end = match find.find(hay) {
+            Some(n) if line_ending && n > 0 && hay[n] == b'\n' && hay[n - 1] == b'\r' => n - 1,
+            Some(n) => n,
+            None => hay.len(),
+        };
+        // SAFETY: `hay[end]` is one of the searcher's bytes, all ASCII, or the
+        // `\r` before a `\n`; or `end` is the end of the input.
+        Ok(unsafe { take_to_hit(input, end) })
+    }
+}
 /// How `parse_<rule>_pieces` runs the pieces of a `par_fold` rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Parallelism {

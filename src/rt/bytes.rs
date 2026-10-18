@@ -239,6 +239,25 @@ pub fn scan_to_any<'a, S: Clone + std::fmt::Debug, E>(
     }
 }
 
+/// [`super::scan_to_bytes`] over bytes: the static searcher of a scan site
+/// whose needles are all single bytes (ADR 24 §12b).
+#[inline]
+pub fn scan_to_bytes<'a, S: Clone + std::fmt::Debug, E, F: super::FindBytes>(
+    find: &'static F,
+    line_ending: bool,
+) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<&'a [u8], ErrMode<E>> {
+    move |input| {
+        let hay = rest(input);
+        let end = match find.find(hay) {
+            Some(n) if line_ending && n > 0 && hay[n] == b'\n' && hay[n - 1] == b'\r' => n - 1,
+            Some(n) => n,
+            None => hay.len(),
+        };
+        // SAFETY: a hit lies inside the input, and the end is its length.
+        Ok(unsafe { take_in_bounds(input, end) })
+    }
+}
+
 /// [`super::class`] over bytes: a run of an ASCII class, yielding `&'a str`
 /// as it does in a text grammar - by construction, not by a check (D2).
 pub fn class<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(

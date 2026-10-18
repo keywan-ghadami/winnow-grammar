@@ -599,6 +599,26 @@ impl<'a> Codegen<'a> {
                 let lit = &set.lits[0];
                 quote_spanned! {span=> #rts::scan_to_literal(#lit) }
             }
+            // Every needle one byte: memchr's searcher for them, built once
+            // and kept in a `static` of this scan site (ADR 24 §12b).
+            n @ (2 | 3) if set.lits.iter().all(|l| l.len() == 1) => {
+                let mut bytes: Vec<u8> = set.lits.iter().map(|l| l.as_bytes()[0]).collect();
+                if set.line_ending {
+                    bytes.push(b'\n');
+                }
+                let line_ending = set.line_ending;
+                let find = if n == 2 {
+                    quote_spanned! {span=> ::winnow_grammar::rt::FindBytes2 }
+                } else {
+                    quote_spanned! {span=> ::winnow_grammar::rt::FindBytes3 }
+                };
+                quote_spanned! {span=>
+                    {
+                        static FIND: #find = #find::new(#(#bytes),*);
+                        #rts::scan_to_bytes(&FIND, #line_ending)
+                    }
+                }
+            }
             _ => {
                 let lits = &set.lits;
                 let line_ending = set.line_ending;

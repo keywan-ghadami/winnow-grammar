@@ -39,6 +39,10 @@ ahash-compile-time-rng = ["dep:ahash", "ahash?/std", "ahash?/compile-time-rng"]
 # Without it the scans behind `until(…)` and `recover(…)` fall back to a
 # byte-at-a-time `position` and a naive substring search - see `rt::scan_to_*`.
 winnow = { version = "0.7", features = ["simd"] }
+# The scans for two or three single bytes keep memchr's AVX2 searcher in a
+# `static` per scan site (`rt::FindBytes2`, ADR 24 §12b); winnow already
+# depends on it through `simd`.
+memchr = "2.7"
 winnow-grammar-macros = { path = "winnow-grammar-macros", version = "0.1.0" }
 proc-macro2 = "1.0"
 quote = "1.0"
