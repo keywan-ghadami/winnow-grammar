@@ -534,13 +534,14 @@ page; what differs is what some patterns yield:
 | Pattern | Text grammar | Byte grammar |
 | :--- | :--- | :--- |
 | a literal, `line_ending`, `frame_end` | `&'a str` | `&'a [u8]` |
-| `until(t)`, a character loop `(not(t) any)*` | `&'a str` | `&'a [u8]`, unchecked |
+| `until(t)` | `&'a str` | `&'a [u8]`, unchecked |
 | `bytes(p)` | rejected | `&'a [u8]`: what `p` consumed, unchecked |
+| `byte`, `byte*` | rejected | `u8`, one raw byte; a run is `&'a [u8]`, unchecked |
 | `text(p)` | `&'a str` | `&'a str`, **checked** as UTF-8 |
 | `intern(p)`, `ident` | `Symbol` | `Symbol`, checked on an interner miss |
 | `alpha1`, `digit1`, `space0`, …, `digit{n,m}` | `&'a str` | `&'a str`: ASCII, text by construction |
 | `raw_ident`, `string`, `char` | decoded | decoded **with validation** |
-| `any` | `char` | `u8`, one byte |
+| `any`, `any*` | `char`; a run is `&'a str` | `char` decoded **with validation**; a run is `&'a str`, checked |
 | `dec<T>(p)`, `u8` … `f64`, `bool`, `eof` | the value | the value |
 
 **What is compared is not checked.** A literal, an ASCII class, the whitespace

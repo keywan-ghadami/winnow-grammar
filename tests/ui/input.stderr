@@ -9,3 +9,9 @@ error: `bytes(p)` exists only in a grammar that declares `input bytes;`; a text 
    |
 17 |         pub r -> usize = b:bytes(digit1) -> { b.len() }
    |                            ^^^^^
+
+error: `byte` exists only in a grammar that declares `input bytes;`; a text grammar's input is characters, so `any` is what reads one
+  --> tests/ui/input.rs:24:25
+   |
+24 |         pub r -> u8 = b:byte -> { b }
+   |                         ^^^^

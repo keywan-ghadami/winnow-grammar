@@ -578,7 +578,9 @@
   Literals, ASCII classes, the whitespace skip, frame boundaries and `eof`
   compare bytes and are not checked; an ASCII class still yields `&'a str`.
   New: `bytes(p)` (byte grammars only), the unchecked `&'a [u8]` a pattern
-  consumed; `until(t)`, literals and `any` yield bytes there. A bad byte is a
+  consumed, and `byte` (byte grammars only), one raw `u8`; `until(t)` and
+  literals yield bytes there, while `any` decodes one character with
+  validation and yields `char` as in a text grammar (Nikaia ADR-366 D2). A bad byte is a
   cut at its absolute offset, `invalid UTF-8 at byte N: 0xXX`, also across the
   pieces of a `par_fold`; `ParseError::render` and `line_column` take text or
   bytes and show bytes that are not UTF-8 lossily. A grammar without the

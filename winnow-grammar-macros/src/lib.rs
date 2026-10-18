@@ -58,6 +58,12 @@ impl Backend for WinnowBackend {
                 name: "any",
                 return_type: "char",
             },
+            // One raw byte, unchecked. Only in a grammar that declares
+            // `input bytes;`, where `any` is a checked character (ADR 25 D3).
+            BuiltIn {
+                name: "byte",
+                return_type: "u8",
+            },
             BuiltIn {
                 name: "alpha1",
                 return_type: "&'a str",

@@ -79,10 +79,12 @@ grammar! {
 
         // What a literal, `until` and `bytes(p)` yield over bytes.
         pub RAW -> (&'a [u8], &'a [u8], &'a [u8]) =
-            a:"<" b:bytes(digit1 "-" any) c:until(">") ">" -> { (a, b, c) }
+            a:"<" b:bytes(digit1 "-" byte) c:until(">") ">" -> { (a, b, c) }
 
-        // `any` is a byte in a byte grammar.
-        pub BYTE -> u8 = "#" b:any -> { b }
+        // `byte` is one raw byte; `any` a character decoded with validation.
+        pub BYTE -> u8 = "#" b:byte -> { b }
+        pub ANY -> (char, char) = a:any b:any -> { (a, b) }
+        pub ANY_RUN -> &'a str = "#" t:any* -> { t }
     }
 }
 
@@ -597,4 +599,35 @@ fn a_declared_interner_without_lookup_bytes_still_works_and_still_checks() {
     // The same through `CountingNames`, whose own lookup misses first.
     let ctx = ParseContext::with_state(Counting::default());
     assert_cut_at(run_in(&mut CountingNames::parse_NAMES(), bad, ctx), 3, 0xff);
+}
+
+#[test]
+fn any_decodes_one_character_of_one_to_four_bytes() {
+    for c in ['a', 'ä', '€', '😀'] {
+        let mut input = c.to_string();
+        input.push('z');
+        assert_eq!(c.len_utf8(), input.len() - 1);
+        assert_eq!(
+            run(Records::parse_ANY(), input.as_bytes()).unwrap(),
+            (c, 'z')
+        );
+    }
+    assert_eq!(
+        run(Records::parse_ANY_RUN(), "#a€😀".as_bytes()).unwrap(),
+        "a€😀"
+    );
+}
+
+#[test]
+fn any_rejects_a_bad_byte_and_a_truncated_character() {
+    let mut p = Records::parse_ANY::<()>();
+    assert_cut_at(run_in(&mut p, b"a\xff", ParseContext::default()), 1, 0xff);
+    // `€` is three bytes; the end comes after two.
+    assert_cut_at(
+        run_in(&mut p, b"a\xe2\x82", ParseContext::default()),
+        1,
+        0xe2,
+    );
+    let mut r = Records::parse_ANY_RUN::<()>();
+    assert_cut_at(run_in(&mut r, b"#ab\xc3", ParseContext::default()), 3, 0xc3);
 }

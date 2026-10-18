@@ -107,6 +107,7 @@ fn builtin_expectation(name: &str) -> Option<&'static str> {
         "string" => "string literal",
         "char" => "character literal",
         "any" => "any character",
+        "byte" => "a byte",
         "alpha1" => "letters",
         "digit" => "a digit",
         "digit1" => "digits",
@@ -440,11 +441,11 @@ impl<'a> Codegen<'a> {
                 if let Some(rule) = self.grammar.rules.iter().find(|r| r.name == name) {
                     return Some(rule.return_type.clone());
                 }
-                // What differs in a byte grammar: `any` is a byte, and what a
-                // literal-like built-in matched is bytes (ADR 25).
+                // What differs in a byte grammar: what a literal-like
+                // built-in matched is bytes (ADR 25). `any` is a checked
+                // `char` there too, and `byte` the raw `u8`.
                 if self.is_bytes() {
                     match name.as_str() {
-                        "any" => return Some(syn::parse_quote!(u8)),
                         "line_ending" | "frame_end" => return Some(syn::parse_quote!(&'a [u8])),
                         _ => {}
                     }
@@ -637,7 +638,8 @@ impl<'a> Codegen<'a> {
         // rule of the grammar's own; `digit` is a class too, but only `any`
         // is "everything else".
         let (last, lookaheads) = seq.split_last()?;
-        let is_any = matches!(last, ModelPattern::RuleCall { rule_path, binding: None, .. } if rule_path.is_ident("any"));
+        let is_any = matches!(last, ModelPattern::RuleCall { rule_path, binding: None, .. }
+            if rule_path.is_ident("any") || (self.is_bytes() && rule_path.is_ident("byte")));
         if lookaheads.is_empty() || !is_any || !self.is_char_class(last) {
             return None;
         }
@@ -903,8 +905,10 @@ impl<'a> Codegen<'a> {
                     })
                     .collect();
                 if let [only] = &seq[..] {
-                    if let Some(run) = self.char_loop_run(only, is_lexical) {
-                        return run;
+                    if !self.loop_needs_check(only) {
+                        if let Some(run) = self.char_loop_run(only, is_lexical) {
+                            return run;
+                        }
                     }
                 }
                 let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
@@ -1034,6 +1038,13 @@ impl<'a> Codegen<'a> {
                     '\''.context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::CharLiteral('\'')))
                 )
             },
+            // ADR 25 D3: in a byte grammar `any` decodes one character with
+            // validation, so an action written for text reads a `char` over
+            // bytes too; `byte` is the raw one.
+            "any" if self.is_bytes() => quote_spanned! {span=> #rts::char_except(b"") },
+            "byte" if self.is_bytes() => {
+                quote_spanned! {span=> ::winnow::token::any::<#input_type, #inner_err_type> }
+            }
             "any" => quote_spanned! {span=> ::winnow::token::any::<#input_type, #inner_err_type> },
             "alpha1" => quote_spanned! {span=>
                 #rts::class::<S, E>(
@@ -1237,7 +1248,7 @@ impl<'a> Codegen<'a> {
     /// Shadowing counts: a grammar that defines its own `digit` means that
     /// one, and it is a rule like any other.
     fn is_char_class(&self, p: &ModelPattern) -> bool {
-        const CHAR_CLASSES: &[&str] = &["digit", "any"];
+        const CHAR_CLASSES: &[&str] = &["digit", "any", "byte"];
         let ModelPattern::RuleCall {
             rule_path, args, ..
         } = p
@@ -1261,6 +1272,36 @@ impl<'a> Codegen<'a> {
         matches!(p, ModelPattern::RuleCall { rule_path, .. } if rule_path.is_ident("any"))
     }
 
+    /// The built-in `byte` of a byte grammar.
+    fn is_byte(p: &ModelPattern) -> bool {
+        matches!(p, ModelPattern::RuleCall { rule_path, .. } if rule_path.is_ident("byte"))
+    }
+
+    /// Whether the scan of a character loop over `p` skips bytes that `any`
+    /// would have checked: a loop of `any` in a byte grammar, which has to
+    /// check what it scanned (ADR 25 D3).
+    fn loop_needs_check(&self, p: &ModelPattern) -> bool {
+        if !self.is_bytes() {
+            return false;
+        }
+        let elem = match p {
+            ModelPattern::Repeat(inner, _) | ModelPattern::Plus(inner, _) => inner,
+            ModelPattern::Bounded { pattern, .. } => pattern,
+            other => return Self::loop_element_ends_in_any(other),
+        };
+        Self::loop_element_ends_in_any(elem)
+    }
+
+    fn loop_element_ends_in_any(elem: &ModelPattern) -> bool {
+        match elem {
+            ModelPattern::Group { alts, .. } => alts
+                .first()
+                .and_then(|(seq, _, _)| seq.last())
+                .is_some_and(Self::is_any),
+            _ => false,
+        }
+    }
+
     /// A run that already is text: any character run in a text grammar, and
     /// in a byte grammar a run of digits - a run of `any` is bytes there.
     fn is_text_run(&self, p: &ModelPattern) -> bool {
@@ -1271,8 +1312,12 @@ impl<'a> Codegen<'a> {
             return true;
         }
         match p {
-            ModelPattern::Repeat(inner, _) | ModelPattern::Plus(inner, _) => !Self::is_any(inner),
-            ModelPattern::Bounded { pattern, .. } => !Self::is_any(pattern),
+            ModelPattern::Repeat(inner, _) | ModelPattern::Plus(inner, _) => {
+                !Self::is_any(inner) && !Self::is_byte(inner)
+            }
+            ModelPattern::Bounded { pattern, .. } => {
+                !Self::is_any(pattern) && !Self::is_byte(pattern)
+            }
             _ => false,
         }
     }
@@ -1314,6 +1359,9 @@ impl<'a> Codegen<'a> {
         // `text(…)` it is taken as a scan there.
         if is_discarded {
             if let Some(run) = self.char_loop_text(inner, min, max, is_lexical) {
+                if self.is_bytes() && Self::loop_element_ends_in_any(inner) {
+                    return quote_spanned! {span=> ::winnow::Parser::void(::winnow_grammar::rt::bytes::text(#run)) };
+                }
                 return quote_spanned! {span=> ::winnow::Parser::void(#run) };
             }
         }
@@ -1339,8 +1387,11 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=> ::winnow::Parser::void(::winnow::Parser::take(#counting)) }
         } else if self.is_char_class(inner) {
             // A run of digits is text in a byte grammar too (ADR 25 D2); a
-            // run of `any` there is bytes, as `any` is.
-            if self.is_bytes() && !Self::is_any(inner) {
+            // run of `any` there is checked text, as `any` is a checked
+            // character, and a run of `byte` is bytes.
+            if self.is_bytes() && Self::is_any(inner) {
+                quote_spanned! {span=> ::winnow_grammar::rt::bytes::text(::winnow::Parser::take(#counting)) }
+            } else if self.is_bytes() && !Self::is_byte(inner) {
                 quote_spanned! {span=> ::winnow_grammar::rt::bytes::ascii_run(::winnow::Parser::take(#counting)) }
             } else {
                 quote_spanned! {span=> ::winnow::Parser::take(#counting) }

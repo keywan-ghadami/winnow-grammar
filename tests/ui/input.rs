@@ -18,4 +18,11 @@ grammar! {
     }
 }
 
+// `byte` exists only in a byte grammar.
+grammar! {
+    grammar TextByte {
+        pub r -> u8 = b:byte -> { b }
+    }
+}
+
 fn main() {}

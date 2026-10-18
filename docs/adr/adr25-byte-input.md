@@ -86,8 +86,12 @@ In a byte grammar:
   `lit_*` family, `string`) checks what it decodes, in the stretch it decodes:
   `raw_ident` already scans ASCII by word and decodes only from a byte
   `>= 0x80` (ADR 23); there it decodes with validation instead.
+* `any` decodes one character with validation and yields `char`, as in a text
+  grammar, so an action written for text compiles over bytes too; a bad or
+  truncated sequence is the D5 cut. `byte` (byte grammars only) is the raw
+  one, a `u8`, unchecked.
 
-A text grammar keeps `until(t) -> &'a str` and has no `bytes(p)`; its `text(p)`
+A text grammar keeps `until(t) -> &'a str` and has no `bytes(p)` or `byte`; its `text(p)`
 does not check, because its input already was.
 
 ### D4 - A value the interner already holds is not checked again

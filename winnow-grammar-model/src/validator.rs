@@ -20,6 +20,9 @@ pub struct Validated {
 /// The built-in that yields bytes, and exists only in a byte grammar.
 const BYTES_BUILTIN: &str = "bytes";
 
+/// The built-in that yields one raw byte, and exists only in a byte grammar.
+const BYTE_BUILTIN: &str = "byte";
+
 pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<Validated> {
     let builtins = B::get_builtins();
     let mut builtin_names: HashSet<String> = builtins.iter().map(|b| b.name.to_string()).collect();
@@ -27,6 +30,7 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<Validate
     // grammar the name is free, as it always was.
     if grammar.input == InputKind::Text {
         builtin_names.remove(BYTES_BUILTIN);
+        builtin_names.remove(BYTE_BUILTIN);
     }
 
     let mut defined_rules = HashSet::new();
@@ -240,6 +244,13 @@ fn validate_pattern(
                             "`bytes(p)` exists only in a grammar that declares `input bytes;`; \
                              a text grammar's input is already text, so `text(p)` is what \
                              captures it",
+                        ));
+                    }
+                    if rule_name_str == BYTE_BUILTIN {
+                        return Err(syn::Error::new(
+                            rule_path.span(),
+                            "`byte` exists only in a grammar that declares `input bytes;`; \
+                             a text grammar's input is characters, so `any` is what reads one",
                         ));
                     }
                     return Err(syn::Error::new(
