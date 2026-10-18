@@ -1,7 +1,8 @@
 # ADR 24: Frames — Parsing an Input in Pieces, and What a Bounded Format Buys the Parser
 
-**Status:** Accepted. Part I is in force as implemented; Part II §8 and §8a
-are implemented, §8b and §9 were measured and rejected. **Date:** 2026-10-04.
+**Status:** Accepted. Part I is in force as implemented; Part II §8, §8a,
+§8c, §12, §12a and §12b are implemented, §9 was measured and rejected, and
+§8b's rejection is superseded by §8c. **Date:** 2026-10-18.
 **Supersedes:** ADR 16, now withdrawn. Everything of it that still holds is
 here, brought up to date (§2 and §3 had drifted from the code). Its sections 1
 to 5 keep their numbers, so a reference to "ADR 16 §4" in the history reads as
@@ -11,7 +12,10 @@ sequential parse, the driver), `tests/ui/frames.rs` (what the check rejects),
 `tests/fixed_run_test.rs` (§8: the indexed match against the element-by-element
 parse on every string up to six characters, `dec<T>` included),
 `tests/lit_byte_test.rs` (§8a: every rule run with and without the fast pass,
-on every string up to six characters). Where the tests and this ADR disagree,
+on every string up to six characters), `tests/scan_cut_test.rs` (§12-§12b:
+the scans against the position-by-position path, over text and bytes, short
+and long inputs), `src/rt/find.rs` (§12b: the static searcher against
+`memchr2`/`memchr3`). Where the tests and this ADR disagree,
 this ADR wins.
 **Measured on:** Nikaia's `examples/1brc.nika`, the workload that raised
 Part II ([Nikaia#392](https://github.com/Nikaia-Language/Nikaia/issues/392));
@@ -257,6 +261,7 @@ to each other —
 | the built-in `digit` | `char` |
 | `digit?` | `Option<char>` |
 | `digit{m,n}` with `n ≤ 16` | `&'a str` |
+| `dec<T>(digit{m,n})` where `n` digits always fit in `T` (§8c) | `T` |
 
 — the generator emits one indexed match over the unconsumed input's bytes
 (`rt::rest`) and, if it matches, a single advance (`rt::advance`). The values
@@ -338,6 +343,38 @@ digit, 422 and 3.85; against `rt::dec`'s 418 and 3.82. At fifteen to twenty
 cycles a mispredict the three are the same, and the fold is not kept: it is a
 second way to read a number, for nothing. `dec` breaks §8's run where it
 stands, and the elements on either side of it still form their own.
+
+*Superseded by §8c*: on today's runtime, with the digits written out and the
+sign taken without a branch, the fold does pay.
+
+## 8c. A bounded `dec<T>` is read in the indexed run
+
+**Decision.** `dec<T>(digit{m,n})` is an element of §8's run when `n` digits
+always fit in `T` - two for `u8`/`i8`, four for 16 bits, nine for 32, 18 for
+`i64`, 19 for `u64`, 38 for 128 bits; `usize` and `isize` not, since the
+target's width is not the macro's to know. The value is accumulated as the
+digits are matched, one test per digit written out, and is what `str::parse`
+gives. A wider bound, or `digit+`, keeps `rt::dec` and its overflow error. In
+the same run a literal of one ASCII byte is compared as a byte, and an
+optional one (`"-"?`) is taken without a branch on whether it is there.
+
+What §8 says of a run holds: a mismatch anywhere runs the elements as
+written, and the diagnosing pass never takes the run, so errors, their
+offsets and their messages are unchanged. `tests/fixed_run_test.rs` holds the
+1BRC tail `";" => "-"? dec<i32>(digit{1,2}) "." digit "x"` to the same rule
+with every run broken, on every string of up to six characters, and over
+bytes to the text grammar.
+
+§8b's loop lost on mispredictions; what decides it now is the sign. Its test
+as a branch mispredicted half the time (0.43 a row on 1BRC), taken without
+one it does not, and the written-out digits cost less than the loop.
+
+**Measured** (after §12a and §12b, below): 245.4 → **239.4** instructions per row,
+mispredictions 1.58 → **1.08**. Across §12a, §12b and §8c: 273.4 → 239.4
+(−12 %), 1.58 → 1.08. A hand-written variant that also took the `";"`
+before the temperature and the `"\n"` after it into one run - across the
+call of the `TENTHS` rule - came to 232.2; that would make a rule's generated
+parser depend on the rule it calls, which §8 rules out, and is not done.
 
 ## 9. One search per input instead of one per frame — measured, rejected
 
@@ -476,6 +513,54 @@ is left of the checks is about 15 instructions a row, most of it in
 `rt::advance` and `dec`'s `take`. `tests/scan_cut_test.rs` holds the scans
 with up to three alternatives to the position-by-position path on every
 string of up to six characters, `\r\n` and a multi-byte character included.
+
+## 12a. Where the boundary is known, the cut is not checked
+
+**Decision.** The cuts §12 could not remove without `unsafe` are made
+unchecked where UTF-8 itself says they are boundaries: the position just
+before an ASCII byte, the one just after it, and the end of the text. In
+`rt`: `rest()` (the end of the input); `lit_byte` and `digit` (one byte on,
+after the byte compared is ASCII); the cut at a scan's hit (the first byte of
+a `&str` needle, the `\r` before a `\n`, or the end); `advance` after an
+indexed run when the byte before the cut is ASCII, which the run's last
+compare has just shown and LLVM sees; and `rt::ascii_at`, the text of a
+one-byte literal the run binds. Every `unsafe` sits in one small helper -
+`take_on_boundary` in `rt`, `take_in_bounds` in `rt::bytes` - with a
+`debug_assert!` of the boundary, and each caller says in a `// SAFETY:`
+comment which of the three facts it relies on. Over bytes (ADR 25) the same
+helpers drop the bounds check where the length is known, and there is no
+boundary to keep.
+
+**The generated code stays free of `unsafe`.** Every helper it calls is safe
+for any argument: `advance` and `ascii_at` test the byte they rely on and
+take the checked cut when it is not ASCII; `lit_byte` checks that its byte is
+ASCII. A crate that writes `#![forbid(unsafe_code)]` - Nikaia's `std` does,
+and uses `grammar!` - still compiles; an `unsafe` block in the expansion
+would not.
+
+**Measured** with §12b and §8c, cumulative: Nikaia's 1BRC program as its
+compiler writes it (`grammar!` unexpanded), built against this crate with a
+Cargo `[patch]` and Nikaia's profile (`opt-level = 3`, overflow checks on,
+no debug assertions), callgrind over 1 M rows, the output the same byte for
+byte: 273.4 → **266.9** instructions per row, mispredictions 1.58 → 1.58.
+
+## 12b. A scan for single bytes keeps its searcher
+
+**Decision.** A scan whose needles are all one byte - two or three of them,
+`line_ending` counting as `\n` - is `rt::scan_to_bytes` with a `static`
+searcher the generated code declares at that scan site:
+`rt::FindBytes2` / `rt::FindBytes3`, which build memchr's AVX2 searcher on
+first use and keep it in a `OnceLock`. Without AVX2, and on targets other than
+x86-64, they call `memchr2` / `memchr3`. Everything else - one needle, a
+needle of more than one byte - is `scan_to_any` as before.
+
+`memchr2`, behind winnow's tuple `find_slice`, checks the CPU and builds its
+searcher on every call; for a field of a dozen bytes that is a large part of
+the scan. Measured and not kept: memchr's portable searcher built per call,
+and a plain byte loop - both cost more than `memchr2`.
+
+**Measured** (after §12a): 266.9 → **245.4** instructions per row,
+mispredictions 1.58 → 1.58.
 
 ## Consequences
 

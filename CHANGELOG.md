@@ -5,6 +5,30 @@
 
 ### Performance
 
+- **Cuts at a known boundary are not checked** (ADR 24 §12a): `rt::rest`,
+  `lit_byte`, `digit`, the cut at a scan's hit, `advance` after an indexed
+  run and the text of a one-byte literal it binds cut the input without the
+  character-boundary check where UTF-8 makes it one - just before or after an
+  ASCII byte, or at the end. The `unsafe` is in one helper per input kind with
+  a `debug_assert!`; every function the generated code calls stays safe for
+  any argument, so `#![forbid(unsafe_code)]` crates still compile. Over bytes
+  the same helpers drop the bounds check. Nikaia's `examples/1brc.nika`,
+  callgrind over 1 M rows: 273.4 → 266.9 instructions per row.
+
+- **A scan for two or three single bytes keeps its searcher** (ADR 24 §12b):
+  `until(";" | "\n")` and its kin are `rt::scan_to_bytes` with a `static`
+  `rt::FindBytes2` / `FindBytes3` per scan site, memchr's AVX2 searcher built
+  on first use; without AVX2 or off x86-64, `memchr2` / `memchr3`. New direct
+  dependency `memchr` (already in the tree through winnow). 266.9 → 245.4.
+
+- **A bounded `dec<T>` is read in the indexed run** (ADR 24 §8c, supersedes
+  §8b's rejection): `dec<T>(digit{m,n})` joins a run of fixed-shape elements
+  when `n` digits always fit in `T`, its value accumulated digit by digit;
+  one-byte literals in a run are compared as bytes and an optional one is
+  taken without a branch. Mismatches and the diagnosing pass run the elements
+  as written, so errors are unchanged. 245.4 → 239.4 instructions and
+  1.58 → 1.08 mispredictions per row.
+
 - **Fewer cuts of the text, and the rest seen to be safe** (ADR 24 §12, #23):
   an unbound element of an indexed run is not sliced; `until(a | b)` without
   `line_ending` no longer cuts twice to look back for a `\r`; the cut at a
