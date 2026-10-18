@@ -32,6 +32,21 @@ pub trait Interner {
     /// has, and for the same reason: an index into another interner's table is
     /// not a question with an answer.
     fn resolve(&self, symbol: Symbol) -> &str;
+
+    /// The symbol for `bytes` if this interner already holds them, read by
+    /// `intern(…)` in a grammar that declares `input bytes;` (ADR 25 D4).
+    ///
+    /// A hit means the bytes are held as a `&str` already, so they are valid
+    /// UTF-8 and the parse does not check them again; on `None` it checks
+    /// them, once, and calls [`intern`](Self::intern). The default checks and
+    /// interns - correct for every interner, and no faster than checking. An
+    /// interner that can look bytes up without the check overrides it, and
+    /// answers `None` for anything it does not hold.
+    fn lookup_bytes(&mut self, bytes: &[u8]) -> Option<Symbol> {
+        std::str::from_utf8(bytes)
+            .ok()
+            .map(|text| self.intern(text))
+    }
 }
 
 /// The bound `interner I;` puts on a grammar's state: "this parse's state

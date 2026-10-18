@@ -59,6 +59,7 @@ static NOTHING: ErrorCore = ErrorCore {
     trivia: false,
     lookahead: false,
     begun_at: None,
+    invalid_utf8: None,
 };
 
 impl std::ops::Deref for ParseError {
@@ -126,6 +127,11 @@ pub struct ErrorCore {
     /// at the beginning of the file. The one that has been open longest is the
     /// structure the reader is actually inside.
     pub begun_at: Option<usize>,
+    /// The byte at [`offset`](Self::offset) when the error is that it is
+    /// not UTF-8 where a byte grammar made text (ADR 25 D5). The message is
+    /// made from it and the offset when it is read, so it stays right when a
+    /// piece's error is moved to its place in the whole input.
+    pub invalid_utf8: Option<u8>,
 }
 
 impl ParseError {
@@ -144,6 +150,7 @@ impl ParseError {
             trivia: false,
             lookahead: false,
             begun_at: None,
+            invalid_utf8: None,
         })))
     }
 
@@ -153,7 +160,9 @@ impl ParseError {
     /// added to one without content ([`add_expected`](Self::add_expected),
     /// [`with_message`](Self::with_message), [`with_priority`](Self::with_priority))
     /// is dropped with it.
-    pub fn from_input<S: Clone + std::fmt::Debug>(input: &crate::ParseInput<'_, S>) -> Self {
+    pub fn from_input<S: Clone + std::fmt::Debug, B: crate::rt::Slice>(
+        input: &crate::rt::Input<B, S>,
+    ) -> Self {
         if input.state.diagnosing {
             Self::from_stream(input)
         } else {
@@ -187,6 +196,7 @@ impl ParseError {
             trivia: false,
             lookahead: false,
             begun_at: None,
+            invalid_utf8: None,
         })))
     }
 
@@ -375,6 +385,9 @@ impl ParseError {
 
     /// The first line of the message - without position and rule stack.
     pub fn headline(&self) -> String {
+        if let Some(b) = self.invalid_utf8 {
+            return format!("invalid UTF-8 at byte {}: 0x{b:02x}", self.offset);
+        }
         if let Some(m) = &self.message {
             return m.clone();
         }
@@ -404,8 +417,15 @@ impl ParseError {
     ///
     /// The same function a grammar's own spans use -
     /// [`span::line_column`](crate::span::line_column).
-    pub fn line_column(&self, source: &str) -> (usize, usize) {
-        crate::span::line_column(source, self.offset)
+    ///
+    /// `source` is the input as text or as bytes. Over bytes that are not
+    /// UTF-8 the line is counted in `\n` bytes and the column in characters of
+    /// the line shown lossily (ADR 25 D5).
+    pub fn line_column<T: AsRef<[u8]> + ?Sized>(&self, source: &T) -> (usize, usize) {
+        match Source::of(source.as_ref(), self.offset) {
+            Source::Text(text) => crate::span::line_column(text, self.offset),
+            Source::Lossy { line, at, shown } => (line, shown[..at].chars().count() + 1),
+        }
     }
 
     /// How wide the caret should be: the token that was actually found, when
@@ -443,10 +463,29 @@ impl ParseError {
     /// A position a reader still has to go and look up is half a diagnostic.
     /// This costs a backward scan for one newline, on the path where the parse
     /// has already failed.
-    pub fn render(&self, source: &str) -> String {
+    ///
+    /// `source` is the input as text or as bytes. Text renders as it always
+    /// has. Bytes that are not UTF-8 - a byte grammar's input (ADR 25 D5) -
+    /// count lines in `\n` bytes and show the line lossily, so a bad byte
+    /// appears as `U+FFFD` under the caret instead of breaking the rendering.
+    pub fn render<T: AsRef<[u8]> + ?Sized>(&self, source: &T) -> String {
         if self.undiagnosed {
             return self.headline();
         }
+        match Source::of(source.as_ref(), self.offset) {
+            Source::Text(text) => self.render_text(text),
+            Source::Lossy { line, at, shown } => {
+                let column = shown[..at].chars().count() + 1;
+                let mut s = format!("{} at line {}, column {}", self.headline(), line, column);
+                s.push('\n');
+                s.push_str(&crate::span::caret_line(&shown, line, at, 1));
+                self.push_notes(&mut s);
+                s
+            }
+        }
+    }
+
+    fn render_text(&self, source: &str) -> String {
         let (line, column) = self.line_column(source);
         let mut s = format!("{} at line {}, column {}", self.headline(), line, column);
         s.push('\n');
@@ -455,6 +494,12 @@ impl ParseError {
             self.offset,
             self.caret_width(source),
         ));
+        self.push_notes(&mut s);
+        s
+    }
+
+    /// What follows the excerpt: the alternatives, then the rule stack.
+    fn push_notes(&self, s: &mut String) {
         let also = self.also_possible();
         if !also.is_empty() {
             s.push_str(&format!("\nnote: also possible here: {}", also.join(", ")));
@@ -463,7 +508,52 @@ impl ParseError {
             s.push_str("\nin ");
             s.push_str(r);
         }
-        s
+    }
+}
+
+/// The input an error is rendered against: text as it is, or - for bytes
+/// that are not UTF-8 - the line the offset is on, lossily.
+enum Source<'s> {
+    Text(&'s str),
+    Lossy {
+        /// 1-based, counted in `\n` bytes.
+        line: usize,
+        /// Where the offset is in `shown`, on a character boundary.
+        at: usize,
+        /// The whole line, without its line ending.
+        shown: std::borrow::Cow<'s, str>,
+    },
+}
+
+impl<'s> Source<'s> {
+    fn of(bytes: &'s [u8], offset: usize) -> Self {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            return Source::Text(text);
+        }
+        let offset = offset.min(bytes.len());
+        let start = bytes[..offset]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map_or(0, |i| i + 1);
+        let end = bytes[offset..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(bytes.len(), |i| offset + i);
+        let line = bytes[..start].iter().filter(|&&b| b == b'\n').count() + 1;
+        let mut text = &bytes[start..end];
+        if let [rest @ .., b'\r'] = text {
+            text = rest;
+        }
+        let before = String::from_utf8_lossy(&bytes[start..offset.min(start + text.len())]);
+        let shown = String::from_utf8_lossy(text);
+        // A prefix shown lossily is the line's lossy prefix, except where it
+        // cuts a character the whole line holds; then the caret goes to the
+        // start of that character.
+        let mut at = before.len().min(shown.len());
+        while !shown.is_char_boundary(at) {
+            at -= 1;
+        }
+        Source::Lossy { line, at, shown }
     }
 }
 
@@ -607,6 +697,19 @@ pub trait Diagnostics: Sized {
     /// without naming every foreign error type in the bound, so the hook
     /// lives on this trait instead.
     fn external<I: Stream + Location + AsBStr, X: fmt::Display>(input: &I, e: X) -> Self;
+
+    /// `byte`, at the current position, is not UTF-8 where a byte grammar
+    /// makes text (ADR 25 D5). Returned as a cut; it outranks everything at
+    /// its position.
+    fn invalid_utf8<I: Stream + Location + AsBStr>(input: &I, byte: u8) -> Self {
+        Self::external(
+            input,
+            format_args!(
+                "invalid UTF-8 at byte {}: 0x{byte:02x}",
+                input.current_token_start()
+            ),
+        )
+    }
 }
 
 impl Diagnostics for ParseError {
@@ -666,6 +769,12 @@ impl Diagnostics for ParseError {
 
     fn external<I: Stream + Location + AsBStr, X: fmt::Display>(input: &I, e: X) -> Self {
         Self::from_stream(input).with_message(e.to_string())
+    }
+
+    fn invalid_utf8<I: Stream + Location + AsBStr>(input: &I, byte: u8) -> Self {
+        let mut e = Self::from_stream(input).with_priority(PRIO_STRUCTURAL);
+        e.invalid_utf8 = Some(byte);
+        e
     }
 }
 

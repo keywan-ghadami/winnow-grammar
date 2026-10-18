@@ -1,34 +1,83 @@
 //! Runtime helpers for the generated code - the places where the
 //! diagnostics engine ([`crate::ParseError`]) steps in.
 //!
-//! Everything here works concretely on [`ParseInput`] because it needs the
-//! state (`input.state`): that is where the furthest failure position lives,
-//! which a successful backtrack would otherwise discard. The error type is
-//! generic ([`RtError`](crate::rt::RtError)): the same helper serves the fast pass with
-//! `EmptyError` and the diagnosing pass with [`ParseError`] - see ADR 17.
+//! Everything here works on a grammar's input with its context
+//! ([`Input`]) because it needs the state (`input.state`): that is where the
+//! furthest failure position lives, which a successful backtrack would
+//! otherwise discard. The error type is generic
+//! ([`RtError`](crate::rt::RtError)): the same helper serves the fast pass
+//! with `EmptyError` and the diagnosing pass with [`ParseError`] - see ADR 17.
+//!
+//! A helper that only steps, records and decides is generic over the slice
+//! ([`Slice`]: `&str` or `&[u8]`), so text and byte grammars share it. One
+//! that hands back text is written here for [`ParseInput`] and again, over
+//! [`ParseBytes`](crate::ParseBytes), in [`bytes`] - ADR 25.
 
 use crate::ascii::AsciiClass;
 use crate::error::{Diagnostics, ParseError};
 use crate::{Diagnose, FoldProgress, ParseInput};
 use winnow::error::{AddContext, EmptyError, ErrMode, ParserError, StrContext};
-use winnow::stream::{AsBStr, FindSlice, Location, Stream};
+use winnow::stream::{AsBStr, FindSlice, Location, Offset, Stream, StreamIsPartial};
 use winnow::Parser;
+
+pub mod bytes;
+
+/// What a grammar reads: `&'a str` ([`ParseInput`]) or, with `input bytes;`,
+/// `&'a [u8]` ([`ParseBytes`](crate::ParseBytes)) - ADR 25. Sealed: the two
+/// are all there is.
+pub trait Slice:
+    Stream + StreamIsPartial + Offset + Clone + AsBStr + std::fmt::Debug + sealed::Sealed
+{
+    /// The bytes `range` covers, as this slice type. Only called with a range
+    /// [`frames_bytes`] produced, which for text lies on character
+    /// boundaries.
+    #[doc(hidden)]
+    fn piece(&self, range: std::ops::Range<usize>) -> Self;
+}
+
+impl Slice for &str {
+    #[inline]
+    fn piece(&self, range: std::ops::Range<usize>) -> Self {
+        &self[range]
+    }
+}
+
+impl Slice for &[u8] {
+    #[inline]
+    fn piece(&self, range: std::ops::Range<usize>) -> Self {
+        &self[range]
+    }
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for &str {}
+    impl Sealed for &[u8] {}
+}
+
+/// A grammar's input over the slice `B`, with its context: [`ParseInput`] for
+/// `B = &str`, [`ParseBytes`](crate::ParseBytes) for `B = &[u8]`.
+pub type Input<B, S = ()> =
+    winnow::stream::Stateful<winnow::stream::LocatingSlice<B>, crate::ParseContext<S>>;
 
 /// The bounds the generated code puts on its error type parameter `E`:
 /// winnow's own (`ParserError`; `AddContext` for `.context(..)`) and
 /// [`Diagnostics`] for the helpers here. A blanket impl: [`ParseError`] and
-/// winnow's `EmptyError` satisfy it, nothing implements it by hand.
-pub trait RtError<'a, S>:
-    ParserError<ParseInput<'a, S>> + AddContext<ParseInput<'a, S>, StrContext> + Diagnostics
+/// winnow's `EmptyError` satisfy it, nothing implements it by hand. `B` is
+/// the slice the grammar reads, text unless it says `input bytes;`.
+pub trait RtError<'a, S, B = &'a str>:
+    ParserError<Input<B, S>> + AddContext<Input<B, S>, StrContext> + Diagnostics
 where
     S: Clone + std::fmt::Debug,
+    B: Slice,
 {
 }
 
-impl<'a, S, E> RtError<'a, S> for E
+impl<'a, S, B, E> RtError<'a, S, B> for E
 where
     S: Clone + std::fmt::Debug,
-    E: ParserError<ParseInput<'a, S>> + AddContext<ParseInput<'a, S>, StrContext> + Diagnostics,
+    B: Slice,
+    E: ParserError<Input<B, S>> + AddContext<Input<B, S>, StrContext> + Diagnostics,
 {
 }
 
@@ -248,8 +297,8 @@ impl Parallelism {
 /// without it, in sequence - the same cut and the same answer, which is what
 /// lets a test check the split without threads.
 #[cfg(not(feature = "rayon"))]
-pub fn fold_pieces<'a, S, T, F, D, M, C>(
-    input: &'a str,
+pub fn fold_pieces<B, S, T, F, D, M, C>(
+    input: B,
     boundary: &str,
     how: Parallelism,
     new_context: C,
@@ -260,14 +309,15 @@ pub fn fold_pieces<'a, S, T, F, D, M, C>(
 where
     S: Clone + std::fmt::Debug,
     C: Fn() -> crate::ParseContext<S>,
-    F: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<EmptyError>>,
-    D: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<ParseError>>,
+    B: Slice,
+    F: Fn(&mut Input<B, S>) -> Result<T, ErrMode<EmptyError>>,
+    D: Fn(&mut Input<B, S>) -> Result<T, ErrMode<ParseError>>,
     M: Fn(T, T) -> T,
 {
-    let ranges = piece_ranges(input, boundary, how);
+    let ranges = piece_ranges(input.as_bstr(), boundary, how);
     let mut acc: Option<T> = None;
     for r in ranges {
-        let v = parse_piece(input, r, &new_context, &fast, &diagnose)?;
+        let v = parse_piece(input.clone(), r, &new_context, &fast, &diagnose)?;
         acc = Some(match acc {
             Some(a) => merge(a, v),
             None => v,
@@ -280,8 +330,8 @@ where
 /// global pool. Configure that pool (`rayon::ThreadPoolBuilder`) to bound
 /// the threads; `Parallelism` bounds the pieces.
 #[cfg(feature = "rayon")]
-pub fn fold_pieces<'a, S, T, F, D, M, C>(
-    input: &'a str,
+pub fn fold_pieces<B, S, T, F, D, M, C>(
+    input: B,
     boundary: &str,
     how: Parallelism,
     new_context: C,
@@ -293,15 +343,16 @@ where
     S: Clone + std::fmt::Debug,
     T: Send,
     C: Fn() -> crate::ParseContext<S> + Sync,
-    F: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<EmptyError>> + Sync,
-    D: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<ParseError>> + Sync,
+    B: Slice + Sync,
+    F: Fn(&mut Input<B, S>) -> Result<T, ErrMode<EmptyError>> + Sync,
+    D: Fn(&mut Input<B, S>) -> Result<T, ErrMode<ParseError>> + Sync,
     M: Fn(T, T) -> T,
 {
     use rayon::prelude::*;
-    let ranges = piece_ranges(input, boundary, how);
+    let ranges = piece_ranges(input.as_bstr(), boundary, how);
     let results: Vec<Result<T, ParseError>> = ranges
         .into_par_iter()
-        .map(|r| parse_piece(input, r, &new_context, &fast, &diagnose))
+        .map(|r| parse_piece(input.clone(), r, &new_context, &fast, &diagnose))
         .collect();
     let mut acc: Option<T> = None;
     for res in results {
@@ -314,15 +365,15 @@ where
     Ok(acc.expect("at least one piece"))
 }
 
-fn piece_ranges(input: &str, boundary: &str, how: Parallelism) -> Vec<std::ops::Range<usize>> {
+fn piece_ranges(input: &[u8], boundary: &str, how: Parallelism) -> Vec<std::ops::Range<usize>> {
     match how.pieces() {
         None => std::iter::once(0..input.len()).collect(),
-        Some(n) => frames(input, boundary, n),
+        Some(n) => frames_bytes(input, boundary.as_bytes(), n),
     }
 }
 
-fn parse_piece<'a, S, T, F, D, C>(
-    input: &'a str,
+fn parse_piece<B, S, T, F, D, C>(
+    input: B,
     range: std::ops::Range<usize>,
     new_context: &C,
     fast: &F,
@@ -331,12 +382,13 @@ fn parse_piece<'a, S, T, F, D, C>(
 where
     S: Clone + std::fmt::Debug,
     C: Fn() -> crate::ParseContext<S>,
-    F: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<EmptyError>>,
-    D: Fn(&mut ParseInput<'a, S>) -> Result<T, ErrMode<ParseError>>,
+    B: Slice,
+    F: Fn(&mut Input<B, S>) -> Result<T, ErrMode<EmptyError>>,
+    D: Fn(&mut Input<B, S>) -> Result<T, ErrMode<ParseError>>,
 {
     let start = range.start;
-    let mut piece = ParseInput {
-        input: winnow::stream::LocatingSlice::new(&input[range]),
+    let mut piece = Input {
+        input: winnow::stream::LocatingSlice::new(input.piece(range)),
         state: new_context(),
     };
     entry_framed(&mut piece, fast, diagnose).map_err(|mut e| {
@@ -371,9 +423,9 @@ pub fn frames(input: &str, boundary: &str, n: usize) -> Vec<std::ops::Range<usiz
     frames_bytes(input.as_bytes(), boundary.as_bytes(), n)
 }
 
-/// [`frames`] on bytes: the split itself, with no notion of characters. The
-/// generated parsers take `&str`, so [`frames`] is what they use; this is
-/// the primitive underneath, for a byte-oriented input type to build on.
+/// [`frames`] on bytes: the split itself, with no notion of characters. A
+/// text grammar cuts with [`frames`], a grammar that declares `input bytes;`
+/// with this ([`bytes::frames`]) - ADR 25 D6.
 pub fn frames_bytes(input: &[u8], boundary: &[u8], n: usize) -> Vec<std::ops::Range<usize>> {
     let n = n.max(1);
     let len = input.len();
@@ -409,11 +461,11 @@ pub fn frames_bytes(input: &[u8], boundary: &[u8], n: usize) -> Vec<std::ops::Ra
 /// The error is still returned, so the alternative fails as it always did.
 /// Only the recording is suppressed, and only while the lookahead runs.
 #[inline]
-pub fn lookahead<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+pub fn lookahead<'a, B: Slice, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S, B>>(
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<O, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
     move |input| {
         let outer = input.state.in_lookahead;
@@ -445,11 +497,11 @@ where
 /// Recording it is the treatment `x?` and `x*` already give a discarded error,
 /// and the ranking decides afterwards whether it was worth reporting.
 #[inline]
-pub fn alternative<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+pub fn alternative<'a, B: Slice, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S, B>>(
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<O, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
     move |input| {
         let start = input.current_token_start();
@@ -483,12 +535,12 @@ impl ByteSet {
 /// alternative that was not tried would be missing from `expected one of: …`.
 #[doc(hidden)]
 #[inline]
-pub fn first_byte<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+pub fn first_byte<'a, B: Slice, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S, B>>(
     set: ByteSet,
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<O, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
     move |input| {
         if !E::RECORDING {
@@ -507,11 +559,11 @@ where
 /// `x?` - at most once. A failed attempt is **recorded**, not thrown away:
 /// if the rule later fails at a shallower position or input is left over, it
 /// is the better message.
-pub fn opt_recording<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+pub fn opt_recording<'a, B: Slice, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S, B>>(
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Option<O>, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<Option<O>, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
     move |input| {
         let cp = input.checkpoint();
@@ -533,12 +585,12 @@ where
 /// (`in item 3`). Below the minimum count it is the error itself.
 ///
 /// The open-ended case of [`repeat_recording_bounded`].
-pub fn repeat_recording<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+pub fn repeat_recording<'a, B: Slice, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S, B>>(
     min: usize,
     p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Vec<O>, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<Vec<O>, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
     repeat_recording_bounded(min, None, p)
 }
@@ -556,13 +608,20 @@ where
 /// threading the accumulator through a closure so that one body could serve
 /// both cost the collecting form 35% (`benches/repetition.rs`), and this is
 /// the form every bound repetition in every grammar runs.
-pub fn repeat_recording_bounded<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+pub fn repeat_recording_bounded<
+    'a,
+    B: Slice,
+    S: Clone + std::fmt::Debug,
+    O,
+    P,
+    E: RtError<'a, S, B>,
+>(
     min: usize,
     max: Option<usize>,
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Vec<O>, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<Vec<O>, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
     // The bound as a plain number, tested once per element instead of an
     // `Option` unwrapped every time round.
@@ -623,24 +682,31 @@ where
 ///
 /// The loop is [`repeat_recording_bounded`]'s, with the `Vec` replaced by a
 /// counter - see the note there on why it is written out twice.
-pub fn repeat_counting<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+pub fn repeat_counting<'a, B: Slice, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S, B>>(
     min: usize,
     p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<usize, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<usize, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
     repeat_counting_bounded(min, None, p)
 }
 
 /// The bounded form of [`repeat_counting`].
-pub fn repeat_counting_bounded<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+pub fn repeat_counting_bounded<
+    'a,
+    B: Slice,
+    S: Clone + std::fmt::Debug,
+    O,
+    P,
+    E: RtError<'a, S, B>,
+>(
     min: usize,
     max: Option<usize>,
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<usize, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<usize, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
     // The bound as a plain number, tested once per element instead of an
     // `Option` unwrapped every time round.
@@ -723,18 +789,18 @@ where
 /// `Vec`. That matters when the number of items is large enough that the
 /// collection, not the parse, is the memory cost - a log or data file with
 /// millions of records is summarised in constant space.
-pub fn fold_recording<'a, S, O, Acc, P, I, F, E>(
+pub fn fold_recording<'a, B: Slice, S, O, Acc, P, I, F, E>(
     min: usize,
     p: P,
     init: I,
     step: F,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<Acc, ErrMode<E>>
 where
     S: Clone + std::fmt::Debug,
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
     I: FnMut() -> Acc,
     F: FnMut(Acc, O) -> Acc,
-    E: RtError<'a, S>,
+    E: RtError<'a, S, B>,
 {
     fold_impl(min, p, init, step, false)
 }
@@ -744,18 +810,18 @@ where
 /// items it had accepted into [`ParseContext::fold`](crate::ParseContext::fold),
 /// and it numbers its items from `fold.base` - so that a replay of the tail
 /// of an input (see [`entry_framed`]) reports `in item 4711`, not `item 1`.
-pub fn par_fold_recording<'a, S, O, Acc, P, I, F, E>(
+pub fn par_fold_recording<'a, B: Slice, S, O, Acc, P, I, F, E>(
     min: usize,
     p: P,
     init: I,
     step: F,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<Acc, ErrMode<E>>
 where
     S: Clone + std::fmt::Debug,
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
     I: FnMut() -> Acc,
     F: FnMut(Acc, O) -> Acc,
-    E: RtError<'a, S>,
+    E: RtError<'a, S, B>,
 {
     fold_impl(min, p, init, step, true)
 }
@@ -766,35 +832,35 @@ where
 /// accumulator and hands it back moves it in and out once per item, which for
 /// an accumulator that holds a table is a copy each way the optimiser does not
 /// remove; this one never moves it.
-pub fn fold_in_place_recording<'a, S, O, Acc, P, I, F, E>(
+pub fn fold_in_place_recording<'a, B: Slice, S, O, Acc, P, I, F, E>(
     min: usize,
     p: P,
     init: I,
     step: F,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<Acc, ErrMode<E>>
 where
     S: Clone + std::fmt::Debug,
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
     I: FnMut() -> Acc,
     F: FnMut(&mut Acc, O),
-    E: RtError<'a, S>,
+    E: RtError<'a, S, B>,
 {
     fold_in_place_impl(min, p, init, step, false)
 }
 
 /// [`par_fold_recording`] with an in-place step, as [`fold_in_place_recording`].
-pub fn par_fold_in_place_recording<'a, S, O, Acc, P, I, F, E>(
+pub fn par_fold_in_place_recording<'a, B: Slice, S, O, Acc, P, I, F, E>(
     min: usize,
     p: P,
     init: I,
     step: F,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<Acc, ErrMode<E>>
 where
     S: Clone + std::fmt::Debug,
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
     I: FnMut() -> Acc,
     F: FnMut(&mut Acc, O),
-    E: RtError<'a, S>,
+    E: RtError<'a, S, B>,
 {
     fold_in_place_impl(min, p, init, step, true)
 }
@@ -810,7 +876,7 @@ macro_rules! fold_loop {
         let mut seen = 0usize;
         let base = if $tracked { $input.state.fold.base } else { 0 };
         // Where the fold stopped, for the replay - see `FoldProgress`.
-        let stopped = |input: &mut ParseInput<'a, S>, seen: usize, at: usize| {
+        let stopped = |input: &mut Input<B, S>, seen: usize, at: usize| {
             if $tracked {
                 input.state.fold.seen = seen;
                 input.state.fold.at = at;
@@ -851,36 +917,36 @@ macro_rules! fold_loop {
     }};
 }
 
-fn fold_impl<'a, S, O, Acc, P, I, F, E>(
+fn fold_impl<'a, B: Slice, S, O, Acc, P, I, F, E>(
     min: usize,
     mut p: P,
     mut init: I,
     mut step: F,
     tracked: bool,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<Acc, ErrMode<E>>
 where
     S: Clone + std::fmt::Debug,
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
     I: FnMut() -> Acc,
     F: FnMut(Acc, O) -> Acc,
-    E: RtError<'a, S>,
+    E: RtError<'a, S, B>,
 {
     move |input| fold_loop!(input, min, p, init, tracked, |acc, v| acc = step(acc, v))
 }
 
-fn fold_in_place_impl<'a, S, O, Acc, P, I, F, E>(
+fn fold_in_place_impl<'a, B: Slice, S, O, Acc, P, I, F, E>(
     min: usize,
     mut p: P,
     mut init: I,
     mut step: F,
     tracked: bool,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Acc, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<Acc, ErrMode<E>>
 where
     S: Clone + std::fmt::Debug,
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
     I: FnMut() -> Acc,
     F: FnMut(&mut Acc, O),
-    E: RtError<'a, S>,
+    E: RtError<'a, S, B>,
 {
     move |input| fold_loop!(input, min, p, init, tracked, |acc, v| step(&mut acc, v))
 }
@@ -889,12 +955,12 @@ where
 /// its name counts as the expectation instead of the internal message:
 /// ``expected `(` `` becomes `expected function argument`. If it made
 /// progress, its own message is the more informative one and stays.
-pub fn labelled<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+pub fn labelled<'a, B: Slice, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S, B>>(
     label: &'static str,
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<O, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
     move |input| {
         let start = input.current_token_start();
@@ -939,17 +1005,17 @@ where
 /// A **cut** inside the body is not recovered from. That is what a cut is for -
 /// the input is wrong rather than merely unexpected here - and it was already
 /// so, `alt` not catching `ErrMode::Cut` either.
-pub fn recover_recording<'a, S, O, Skipped, Synced, B, K, Y, E>(
-    mut body: B,
+pub fn recover_recording<'a, B: Slice, S, O, Skipped, Synced, Bo, K, Y, E>(
+    mut body: Bo,
     mut skip: K,
     mut sync: Y,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<Option<O>, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<Option<O>, ErrMode<E>>
 where
     S: Clone + std::fmt::Debug,
-    B: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
-    K: Parser<ParseInput<'a, S>, Skipped, ErrMode<E>>,
-    Y: Parser<ParseInput<'a, S>, Synced, ErrMode<E>>,
-    E: RtError<'a, S>,
+    Bo: Parser<Input<B, S>, O, ErrMode<E>>,
+    K: Parser<Input<B, S>, Skipped, ErrMode<E>>,
+    Y: Parser<Input<B, S>, Synced, ErrMode<E>>,
+    E: RtError<'a, S, B>,
 {
     move |input| {
         let cp = input.checkpoint();
@@ -1075,11 +1141,14 @@ pub const TRIVIA_UNSEEN: (usize, usize, usize) = (0, usize::MAX, usize::MAX);
 /// grammar was actually looking for. A `WS` that a grammar calls itself goes
 /// through the ordinary path and is an ordinary rule.
 #[inline]
-pub fn skip_trivia<'a, S, E, F>(mut ws: F, input: &mut ParseInput<'a, S>) -> Result<(), ErrMode<E>>
+pub fn skip_trivia<'a, B: Slice, S, E, F>(
+    mut ws: F,
+    input: &mut Input<B, S>,
+) -> Result<(), ErrMode<E>>
 where
     S: Clone + std::fmt::Debug,
-    E: RtError<'a, S>,
-    F: FnMut(&mut ParseInput<'a, S>) -> Result<(), ErrMode<E>>,
+    E: RtError<'a, S, B>,
+    F: FnMut(&mut Input<B, S>) -> Result<(), ErrMode<E>>,
 {
     let from = input.current_token_start();
     // **A skip already made is not made again** - see
@@ -1088,7 +1157,7 @@ where
     // skip, though: an inherited rule skips with its own grammar's `WS`, and
     // this instance's address is what tells them apart. Two instances that
     // a linker folded into one are the same code and skip the same.
-    let this = skip_trivia::<S, E, F> as fn(F, &mut ParseInput<'a, S>) -> _ as usize;
+    let this = skip_trivia::<B, S, E, F> as fn(F, &mut Input<B, S>) -> _ as usize;
     let (memo_skip, memo_from, memo_to) = input.state.trivia_memo;
     let r = if memo_skip == this && from == memo_to {
         Ok(())
@@ -1127,12 +1196,12 @@ where
 
 /// Gives a builtin an expectation (`identifier`, `integer literal`) if it
 /// failed without one - winnow's own primitives only report the position.
-pub fn expected<'a, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S>>(
+pub fn expected<'a, B: Slice, S: Clone + std::fmt::Debug, O, P, E: RtError<'a, S, B>>(
     what: &'static str,
     mut p: P,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>>
+) -> impl FnMut(&mut Input<B, S>) -> Result<O, ErrMode<E>>
 where
-    P: Parser<ParseInput<'a, S>, O, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
     move |input| {
         let start = input.current_token_start();
@@ -1145,9 +1214,9 @@ where
 
 /// `fail("…")`: verbatim message, high priority - but not fatal. An error
 /// that got further still wins (progress before priority).
-pub fn fail<'a, S: Clone + std::fmt::Debug, O, E: RtError<'a, S>>(
+pub fn fail<'a, B: Slice, S: Clone + std::fmt::Debug, O, E: RtError<'a, S, B>>(
     message: &'static str,
-) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<O, ErrMode<E>> {
+) -> impl FnMut(&mut Input<B, S>) -> Result<O, ErrMode<E>> {
     move |input| Err(ErrMode::Backtrack(E::fail(input, message)))
 }
 
@@ -1157,8 +1226,8 @@ pub fn fail<'a, S: Clone + std::fmt::Debug, O, E: RtError<'a, S>>(
 /// got further may have been hidden along the way by a successful backtrack.
 /// And if the rule succeeded without consuming everything, the recorded
 /// reason is the answer - otherwise only "expected end of input" would remain.
-pub fn finish<'a, S: Clone + std::fmt::Debug, O>(
-    input: &mut ParseInput<'a, S>,
+pub fn finish<B: Slice, S: Clone + std::fmt::Debug, O>(
+    input: &mut Input<B, S>,
     result: Result<O, ErrMode<ParseError>>,
 ) -> Result<O, ParseError> {
     match result {
@@ -1180,10 +1249,10 @@ pub fn finish<'a, S: Clone + std::fmt::Debug, O>(
 /// The fast pass of an entry point: `Some` only when it accepted the whole
 /// input. Otherwise the input is back where it started - the diagnosing pass
 /// may run - and the state is as the fast pass left it, `fold` included.
-pub fn accepted<'a, S, O, F>(input: &mut ParseInput<'a, S>, fast: F) -> Option<O>
+pub fn accepted<B: Slice, S, O, F>(input: &mut Input<B, S>, fast: F) -> Option<O>
 where
     S: Clone + std::fmt::Debug,
-    F: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<EmptyError>>,
+    F: FnOnce(&mut Input<B, S>) -> Result<O, ErrMode<EmptyError>>,
 {
     let cp = input.checkpoint();
     match fast(input) {
@@ -1203,15 +1272,15 @@ where
 /// fast pass alone. One that fails - or leaves input over, whose reason only
 /// the diagnosing pass can name - is parsed again with the full engine, and
 /// that error goes out through [`finish`].
-pub fn entry<'a, S, O, F, D>(
-    input: &mut ParseInput<'a, S>,
+pub fn entry<B: Slice, S, O, F, D>(
+    input: &mut Input<B, S>,
     fast: F,
     diagnose: D,
 ) -> Result<O, ParseError>
 where
     S: Clone + std::fmt::Debug,
-    F: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<EmptyError>>,
-    D: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<ParseError>>,
+    F: FnOnce(&mut Input<B, S>) -> Result<O, ErrMode<EmptyError>>,
+    D: FnOnce(&mut Input<B, S>) -> Result<O, ErrMode<ParseError>>,
 {
     input.state.begin_parse();
     match input.state.diagnose {
@@ -1249,15 +1318,15 @@ where
 /// Should the tail parse after all - an item that did depend on what came
 /// before it, which no checked `par_fold` has - the whole input is diagnosed
 /// instead, as [`entry`] would.
-pub fn entry_framed<'a, S, O, F, D>(
-    input: &mut ParseInput<'a, S>,
+pub fn entry_framed<B: Slice, S, O, F, D>(
+    input: &mut Input<B, S>,
     fast: F,
     diagnose: D,
 ) -> Result<O, ParseError>
 where
     S: Clone + std::fmt::Debug,
-    F: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<EmptyError>>,
-    D: Fn(&mut ParseInput<'a, S>) -> Result<O, ErrMode<ParseError>>,
+    F: FnOnce(&mut Input<B, S>) -> Result<O, ErrMode<EmptyError>>,
+    D: Fn(&mut Input<B, S>) -> Result<O, ErrMode<ParseError>>,
 {
     input.state.begin_parse();
     let origin = input.current_token_start();
@@ -1305,13 +1374,13 @@ where
 
 /// The diagnosing pass from the current position: the recorded error
 /// belongs to this run, and [`finish`] selects between it and the returned one.
-fn diagnose_from_here<'a, S, O, D>(
-    input: &mut ParseInput<'a, S>,
+fn diagnose_from_here<B: Slice, S, O, D>(
+    input: &mut Input<B, S>,
     diagnose: D,
 ) -> Result<O, ParseError>
 where
     S: Clone + std::fmt::Debug,
-    D: FnOnce(&mut ParseInput<'a, S>) -> Result<O, ErrMode<ParseError>>,
+    D: FnOnce(&mut Input<B, S>) -> Result<O, ErrMode<ParseError>>,
 {
     input.state.furthest = None;
     // The fast pass's skips ran the grammar's trivia actions against a user

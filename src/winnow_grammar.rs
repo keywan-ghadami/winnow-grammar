@@ -321,6 +321,19 @@ impl<S> ParseContext<S> {
         self.intern_cache.intern(&self.interner, text)
     }
 
+    /// [`intern`](Self::intern) for bytes, in a grammar that declares
+    /// `input bytes;` (ADR 25 D4): a hit in the lookup cache is a text the
+    /// interner holds, so it is not checked again; a miss is checked once
+    /// and interned. `Err` holds the offset of the first byte that is not
+    /// UTF-8.
+    pub fn intern_bytes(&mut self, bytes: &[u8]) -> Result<Symbol, usize> {
+        if let Some(sym) = self.intern_cache.lookup_bytes(&self.interner, bytes) {
+            return Ok(sym);
+        }
+        let text = std::str::from_utf8(bytes).map_err(|e| e.valid_up_to())?;
+        Ok(self.intern(text))
+    }
+
     /// Records a discarded error - following the same ranking as
     /// [`ParseError::merge`].
     pub fn record(&mut self, e: &ParseError, start: usize) {
@@ -388,6 +401,11 @@ impl<S> ParseContext<S> {
 /// It combines the input string slice with the shared `ParseContext`.
 pub type ParseInput<'a, S = ()> =
     ::winnow::stream::Stateful<::winnow::stream::LocatingSlice<&'a str>, ParseContext<S>>;
+
+/// The input stream of a grammar that declares `input bytes;` (ADR 25): the
+/// same context as [`ParseInput`], over bytes nobody has checked as UTF-8.
+pub type ParseBytes<'a, S = ()> =
+    ::winnow::stream::Stateful<::winnow::stream::LocatingSlice<&'a [u8]>, ParseContext<S>>;
 
 pub mod types {
     use proc_macro2::TokenStream;

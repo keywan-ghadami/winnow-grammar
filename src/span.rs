@@ -119,11 +119,14 @@ pub fn caret(source: &str, offset: usize, width: usize) -> String {
         .map_or(source.len(), |i| offset + i);
     let text = source[start..end].trim_end_matches('\r');
     let (line, _) = line_column(source, offset);
+    caret_line(text, line, (offset - start).min(text.len()), width)
+}
 
+/// [`caret`] for one line that is already cut out: `text` is the line
+/// without its ending, `line` its number, `at` the byte offset in it.
+pub(crate) fn caret_line(text: &str, line: usize, at: usize, width: usize) -> String {
     // Both counted in characters, because that is what a reader counts.
-    let column = source[start..offset.min(start + text.len())]
-        .chars()
-        .count();
+    let column = text[..at].chars().count();
     let len = text.chars().count();
 
     let (from, to) = if len <= WINDOW {

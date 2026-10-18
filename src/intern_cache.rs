@@ -185,8 +185,7 @@ impl InternCache {
     /// rest of a lookup (measured: 13.2 ns a lookup against 8.1). Longer
     /// texts are read as two unaligned words, overlapping below sixteen.
     #[inline]
-    fn key(text: &str) -> (u64, u64) {
-        let b = text.as_bytes();
+    fn key(b: &[u8]) -> (u64, u64) {
         if b.len() > 8 {
             let head = u64::from_le_bytes(b[..8].try_into().expect("eight bytes"));
             let tail = u64::from_le_bytes(b[b.len() - 8..].try_into().expect("eight bytes"));
@@ -250,12 +249,33 @@ impl InternCache {
         self.home = Some(home);
     }
 
+    /// The symbol for `bytes` if the cache holds it, without asking the
+    /// interner and without checking the bytes: what the cache holds came
+    /// from a `&str`, so a hit is valid UTF-8 (ADR 25 D4). `None` on a miss,
+    /// which the caller checks and interns.
+    #[inline]
+    pub(crate) fn lookup_bytes(&mut self, interner: &InternerContext, b: &[u8]) -> Option<Symbol> {
+        if self.slots.is_empty() {
+            self.fill(interner);
+        }
+        let (head, tail) = Self::key(b);
+        let len = b.len() as u32;
+        let slot = &self.slots[self.index(head, tail)];
+        if slot.sym != 0 && slot.head == head && slot.tail == tail && slot.len == len {
+            let sym = Symbol::from_index(slot.sym - 1);
+            if len <= 16 || interner.resolve(sym).as_bytes() == b {
+                return Some(sym);
+            }
+        }
+        None
+    }
+
     #[inline]
     pub(crate) fn intern(&mut self, interner: &InternerContext, text: &str) -> Symbol {
         if self.slots.is_empty() {
             self.fill(interner);
         }
-        let (head, tail) = Self::key(text);
+        let (head, tail) = Self::key(text.as_bytes());
         let len = text.len() as u32;
         let at = self.index(head, tail);
         let slot = &mut self.slots[at];
@@ -411,7 +431,7 @@ mod tests {
         let mut next = InternCache::new();
         next.rebind(&interner);
         next.fill(&interner);
-        let at = next.index(InternCache::key("Hamburg").0, 0);
+        let at = next.index(InternCache::key(b"Hamburg").0, 0);
         assert_eq!(
             next.slots[at].sym,
             sym.index() + 1,
