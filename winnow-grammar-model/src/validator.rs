@@ -17,9 +17,17 @@ pub struct Validated {
     pub analysis: crate::analysis::GrammarAnalysis,
 }
 
+/// The built-in that yields bytes, and exists only in a byte grammar.
+const BYTES_BUILTIN: &str = "bytes";
+
 pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<Validated> {
     let builtins = B::get_builtins();
-    let builtin_names: HashSet<String> = builtins.iter().map(|b| b.name.to_string()).collect();
+    let mut builtin_names: HashSet<String> = builtins.iter().map(|b| b.name.to_string()).collect();
+    // `bytes(p)` exists only where the input is bytes (ADR 25 D3). In a text
+    // grammar the name is free, as it always was.
+    if grammar.input == InputKind::Text {
+        builtin_names.remove(BYTES_BUILTIN);
+    }
 
     let mut defined_rules = HashSet::new();
     for rule in &grammar.rules {
@@ -226,6 +234,14 @@ fn validate_pattern(
                     rule_name_ident == "separated" || rule_name_ident == "repeated";
 
                 if !all_defs.contains(&rule_name_str) && !is_param && !is_portable_builtin {
+                    if rule_name_str == BYTES_BUILTIN {
+                        return Err(syn::Error::new(
+                            rule_path.span(),
+                            "`bytes(p)` exists only in a grammar that declares `input bytes;`; \
+                             a text grammar's input is already text, so `text(p)` is what \
+                             captures it",
+                        ));
+                    }
                     return Err(syn::Error::new(
                         rule_path.span(),
                         format!("Undefined rule: '{}'", rule_name_str),

@@ -723,7 +723,8 @@ fn builtin_may_consume(name: &str, c: char) -> bool {
         // not. Judging them opaque rejects the grammar the frame check exists
         // for - `whole:dec<i32>(digit{1,2})` in a line-framed record, whose
         // `digit` cannot match a newline in the first place.
-        "intern" | "text" | "dec" => false,
+        // `bytes(p)` likewise (ADR 25).
+        "intern" | "text" | "bytes" | "dec" => false,
         // `string`, `char`, `any`, and anything not listed.
         _ => true,
     }

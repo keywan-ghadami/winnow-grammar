@@ -12,6 +12,7 @@ impl<'a> Codegen<'a> {
         is_rule_start: bool,
         label: Option<&str>,
     ) -> TokenStream {
+        let input_ty = self.input_ty();
         let span = Span::mixed_site();
         let input = &self.input_ident;
 
@@ -81,7 +82,7 @@ impl<'a> Codegen<'a> {
             };
 
             let closure = quote_spanned! {span=>
-                |#input: &mut ::winnow_grammar::ParseInput<'a, S>| {
+                |#input: &mut #input_ty| {
                     #steps_code
                     #state_injection
                     #final_expr
@@ -181,7 +182,7 @@ impl<'a> Codegen<'a> {
                     {
                         let mut __labelled = ::winnow_grammar::rt::labelled(
                             #label,
-                            |#input: &mut ::winnow_grammar::ParseInput<'a, S>| #body,
+                            |#input: &mut #input_ty| #body,
                         );
                         ::winnow::Parser::parse_next(&mut __labelled, #input)
                     }
@@ -228,6 +229,7 @@ impl<'a> Codegen<'a> {
         is_rule_start: bool,
         is_lexical: bool,
     ) -> TokenStream {
+        let input_ty = self.input_ty();
         let Some(label) = label else {
             return body;
         };
@@ -243,7 +245,7 @@ impl<'a> Codegen<'a> {
                 #lead
                 let mut __rule_labelled = ::winnow_grammar::rt::labelled(
                     #label,
-                    |#input: &mut ::winnow_grammar::ParseInput<'a, S>| { #body },
+                    |#input: &mut #input_ty| { #body },
                 );
                 ::winnow::Parser::parse_next(&mut __rule_labelled, #input)
             }

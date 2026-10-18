@@ -8,6 +8,8 @@ use winnow_grammar_model::{
 
 impl<'a> Codegen<'a> {
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
+        let rt_error = self.rt_error();
+        let input_ty = self.input_ty();
         let state_bound = self.state_bound();
         if super::is_template(rule) {
             // Template rules are not compiled as functions of their own.
@@ -112,7 +114,7 @@ impl<'a> Codegen<'a> {
         let gen_params = &rule.generics.params;
         let gen_where = &rule.generics.where_clause;
 
-        let mut all_generics = quote! { 'a, S: std::fmt::Debug + Clone #state_bound, E: ::winnow_grammar::rt::RtError<'a, S> };
+        let mut all_generics = quote! { 'a, S: std::fmt::Debug + Clone #state_bound, E: #rt_error };
         if !gen_params.is_empty() {
             all_generics.extend(quote! {, #gen_params});
         }
@@ -127,7 +129,7 @@ impl<'a> Codegen<'a> {
         let ws_shadow = if is_ws_rule {
             quote_spanned! {span=>
                 #[allow(dead_code)]
-                fn WS<'a, S: std::fmt::Debug + Clone, E>(_: &mut ::winnow_grammar::ParseInput<'a, S>) -> ::winnow::Result<(), ::winnow::error::ErrMode<E>> {
+                fn WS<'a, S: std::fmt::Debug + Clone, E>(_: &mut #input_ty) -> ::winnow::Result<(), ::winnow::error::ErrMode<E>> {
                     Ok(())
                 }
             }
@@ -137,7 +139,7 @@ impl<'a> Codegen<'a> {
 
         let inner_fn = quote_spanned! {span=>
             #[allow(dead_code)]
-            fn #inner_fn_name<#all_generics>(#input: &mut ::winnow_grammar::ParseInput<'a, S>, #(#inner_params_tokens),*) -> ::winnow::Result<#ret_type, #inner_err_type>
+            fn #inner_fn_name<#all_generics>(#input: &mut #input_ty, #(#inner_params_tokens),*) -> ::winnow::Result<#ret_type, #inner_err_type>
             where
                 #where_preds
             {
@@ -145,7 +147,7 @@ impl<'a> Codegen<'a> {
 
                 #ws_shadow
 
-                let mut parser = (|#input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #inner_err_type> {
+                let mut parser = (|#input: &mut #input_ty| -> ::winnow::Result<#ret_type, #inner_err_type> {
                     use ::winnow::prelude::*;
                     #body
                 })
@@ -209,7 +211,7 @@ impl<'a> Codegen<'a> {
         let slow_err = quote_spanned! {span=> ::winnow::error::ErrMode<#err_type> };
         let pass = |err: &TokenStream| {
             quote! {
-                |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err> {
+                |input: &mut #input_ty| -> ::winnow::Result<#ret_type, #err> {
                     #ws_before
                     let result: ::winnow::Result<#ret_type, #err> = #inner_fn_name(input, #(#arg_names),*);
                     let result = result?;
@@ -228,7 +230,7 @@ impl<'a> Codegen<'a> {
         };
 
         let outer_fn_body = quote! {
-            move |input: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #err_type> {
+            move |input: &mut #input_ty| -> ::winnow::Result<#ret_type, #err_type> {
                 #entry(input, #fast, #slow)
             }
         };
@@ -245,7 +247,7 @@ impl<'a> Codegen<'a> {
         let outer_fn = quote_spanned! {span=>
             #(#docs)*
             #vis fn #fn_name<#outer_generics> (#(#params_tokens),*) -> impl ::winnow::Parser<
-                ::winnow_grammar::ParseInput<'a, S>,
+                #input_ty,
                 #ret_type,
                 #err_type
             >
@@ -278,6 +280,14 @@ impl<'a> Codegen<'a> {
     ///   the `rayon` feature the pieces run in parallel, without it in
     ///   sequence - same cut, same answer.
     fn generate_frame_fns(&self, rule: &Rule) -> TokenStream {
+        let input_ty = self.input_ty();
+        let rts = self.rts();
+        // What the entry points take: `&str`, or `&[u8]` under `input bytes;`.
+        let slice = if self.is_bytes() {
+            quote! { [u8] }
+        } else {
+            quote! { str }
+        };
         let state_bound = self.state_bound();
         let span = Span::mixed_site();
         let rule_name_str = rule.name.to_string();
@@ -306,8 +316,8 @@ impl<'a> Codegen<'a> {
             /// frame boundary, together covering the input. Parse each piece
             /// with the rule's parser and combine the results.
             #[allow(dead_code)]
-            #vis fn #frames_fn(input: &str, n: usize) -> ::std::vec::Vec<::core::ops::Range<usize>> {
-                ::winnow_grammar::rt::frames(input, #boundary, n)
+            #vis fn #frames_fn(input: &#slice, n: usize) -> ::std::vec::Vec<::core::ops::Range<usize>> {
+                #rts::frames(input, #boundary, n)
             }
         };
 
@@ -347,7 +357,7 @@ impl<'a> Codegen<'a> {
                     /// wants `parse_…_pieces_with` - ADR 19.
                     #[allow(dead_code)]
                     #vis fn #pieces_fn<'a, S: std::fmt::Debug + Clone #state_bound>(
-                        input: &'a str,
+                        input: &'a #slice,
                         context: &::winnow_grammar::ParseContext<S>,
                         how: ::winnow_grammar::rt::Parallelism,
                     ) -> ::core::result::Result<#ret_type, ::winnow_grammar::ParseError>
@@ -369,7 +379,7 @@ impl<'a> Codegen<'a> {
                     /// symbols from two pieces are then not comparable.
                     #[allow(dead_code)]
                     #vis fn #pieces_with_fn<'a, S: std::fmt::Debug + Clone #state_bound>(
-                        input: &'a str,
+                        input: &'a #slice,
                         new_context: impl Fn() -> ::winnow_grammar::ParseContext<S> + Sync,
                         how: ::winnow_grammar::rt::Parallelism,
                     ) -> ::core::result::Result<#ret_type, ::winnow_grammar::ParseError>
@@ -382,10 +392,10 @@ impl<'a> Codegen<'a> {
                             #boundary,
                             how,
                             new_context,
-                            |piece: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, ::winnow::error::ErrMode<::winnow::error::EmptyError>> {
+                            |piece: &mut #input_ty| -> ::winnow::Result<#ret_type, ::winnow::error::ErrMode<::winnow::error::EmptyError>> {
                                 #inner_fn(piece)
                             },
-                            |piece: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, ::winnow::error::ErrMode<::winnow_grammar::ParseError>> {
+                            |piece: &mut #input_ty| -> ::winnow::Result<#ret_type, ::winnow::error::ErrMode<::winnow_grammar::ParseError>> {
                                 #inner_fn(piece)
                             },
                             #merge_fn,

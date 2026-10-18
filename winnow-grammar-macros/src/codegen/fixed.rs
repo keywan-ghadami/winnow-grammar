@@ -146,6 +146,7 @@ impl<'a> Codegen<'a> {
     }
 
     fn fixed_run(&self, run: &[&Fixed], patterns: &[ModelPattern], in_cut: bool) -> TokenStream {
+        let rts = self.rts();
         let span = Span::mixed_site();
         let input = &self.input_ident;
         let s = format_ident!("__fixed_s", span = span);
@@ -154,6 +155,17 @@ impl<'a> Codegen<'a> {
 
         // What a failed match breaks out with: the run either yields its
         // bindings or, with none, only whether it matched.
+        let slice_of_rest = if self.is_bytes() {
+            quote_spanned! {span=>
+                let #s: &'a [u8] = #rts::rest(#input);
+                let #b = #s;
+            }
+        } else {
+            quote_spanned! {span=>
+                let #s: &'a str = #rts::rest(#input);
+                let #b = #s.as_bytes();
+            }
+        };
         let fail = if run.iter().any(|f| f.binding().is_some()) {
             quote_spanned! {span=> ::core::option::Option::None }
         } else {
@@ -215,7 +227,15 @@ impl<'a> Codegen<'a> {
                     };
                 },
                 Fixed::Digits(min, max, b_) => {
-                    let value = b_.map(|_| quote_spanned! {span=> let #v = &#s[start..#at]; });
+                    // A run of digits is text in both kinds of grammar; over
+                    // bytes the class makes it so (ADR 25 D2).
+                    let value = b_.map(|_| {
+                        if self.is_bytes() {
+                            quote_spanned! {span=> let #v = ::winnow_grammar::rt::bytes::class_text(::winnow_grammar::ascii::AsciiClass::DIGIT, &#s[start..#at]); }
+                        } else {
+                            quote_spanned! {span=> let #v = &#s[start..#at]; }
+                        }
+                    });
                     quote_spanned! {span=>
                         let start = #at;
                         while #at - start < #max && #b.get(#at).is_some_and(u8::is_ascii_digit) {
@@ -237,8 +257,7 @@ impl<'a> Codegen<'a> {
         // their bindings handed out as the indexed match's would be.
         let fallback = patterns.iter().map(|p| self.generate_step(p, in_cut, true));
         let prelude = quote_spanned! {span=>
-            let #s: &'a str = ::winnow_grammar::rt::rest(#input);
-            let #b = #s.as_bytes();
+            #slice_of_rest
             let mut #at = 0usize;
         };
         // The diagnosing pass keeps the elements: an optional one that did
@@ -255,7 +274,7 @@ impl<'a> Codegen<'a> {
                         true
                     };
                     if found {
-                        ::winnow_grammar::rt::advance(#input, #at);
+                        #rts::advance(#input, #at);
                     } else {
                         #(#fallback)*
                     }
@@ -275,7 +294,7 @@ impl<'a> Codegen<'a> {
                 };
                 match found {
                     ::core::option::Option::Some(v) => {
-                        ::winnow_grammar::rt::advance(#input, #at);
+                        #rts::advance(#input, #at);
                         v
                     }
                     ::core::option::Option::None => {

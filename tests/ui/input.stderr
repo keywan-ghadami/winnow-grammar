@@ -3,3 +3,9 @@ error: a grammar declares its `input` at most once
   |
 9 |         input bytes;
   |         ^^^^^
+
+error: `bytes(p)` exists only in a grammar that declares `input bytes;`; a text grammar's input is already text, so `text(p)` is what captures it
+  --> tests/ui/input.rs:17:28
+   |
+17 |         pub r -> usize = b:bytes(digit1) -> { b.len() }
+   |                            ^^^^^

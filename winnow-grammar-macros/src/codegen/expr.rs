@@ -440,6 +440,15 @@ impl<'a> Codegen<'a> {
                 if let Some(rule) = self.grammar.rules.iter().find(|r| r.name == name) {
                     return Some(rule.return_type.clone());
                 }
+                // What differs in a byte grammar: `any` is a byte, and what a
+                // literal-like built-in matched is bytes (ADR 25).
+                if self.is_bytes() {
+                    match name.as_str() {
+                        "any" => return Some(syn::parse_quote!(u8)),
+                        "line_ending" | "frame_end" => return Some(syn::parse_quote!(&'a [u8])),
+                        _ => {}
+                    }
+                }
                 crate::WinnowBackend::get_builtins()
                     .iter()
                     .find(|b| b.name == name)
@@ -578,20 +587,21 @@ impl<'a> Codegen<'a> {
     /// The one-pass scan for a terminator of at most three needles: consumes
     /// everything before it and yields that as `&'a str`.
     fn generate_scan(&self, set: &ScanSet) -> TokenStream {
+        let rts = self.rts();
         let span = Span::mixed_site();
         match set.needles() {
             0 => quote_spanned! {span=> ::winnow::token::rest },
             1 if set.line_ending => {
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_line_ending() }
+                quote_spanned! {span=> #rts::scan_to_line_ending() }
             }
             1 => {
                 let lit = &set.lits[0];
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_literal(#lit) }
+                quote_spanned! {span=> #rts::scan_to_literal(#lit) }
             }
             _ => {
                 let lits = &set.lits;
                 let line_ending = set.line_ending;
-                quote_spanned! {span=> ::winnow_grammar::rt::scan_to_any(&[#(#lits),*], #line_ending) }
+                quote_spanned! {span=> #rts::scan_to_any(&[#(#lits),*], #line_ending) }
             }
         }
     }
@@ -693,6 +703,8 @@ impl<'a> Codegen<'a> {
         args: &[Argument],
         is_lexical: bool,
     ) -> TokenStream {
+        let input_ty = self.input_ty();
+        let rts = self.rts();
         let span = Span::mixed_site();
         let rule_name = &rule_path.segments.last().unwrap().ident;
         let name_str = rule_name.to_string();
@@ -778,8 +790,8 @@ impl<'a> Codegen<'a> {
                 let input_var = &self.input_ident; // <-- NEW: use the defined identifier
 
                 return quote_spanned! {span=>
-                    (|#input_var: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #inner_err_type> {
-                        let mut parser = (|#input_var: &mut ::winnow_grammar::ParseInput<'a, S>| -> ::winnow::Result<#ret_type, #inner_err_type> {
+                    (|#input_var: &mut #input_ty| -> ::winnow::Result<#ret_type, #inner_err_type> {
+                        let mut parser = (|#input_var: &mut #input_ty| -> ::winnow::Result<#ret_type, #inner_err_type> {
                             #body
                         });
                         ::winnow::Parser::parse_next(&mut parser, #input_var)
@@ -790,22 +802,22 @@ impl<'a> Codegen<'a> {
             // --- Normal function call for NON-template rules ---
             let fn_name = quote::format_ident!("parse_{}_inner", rule_name, span = span);
             if args.is_empty() {
-                return quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #fn_name(i)) };
+                return quote_spanned! {span=> (|i: &mut #input_ty| #fn_name(i)) };
             } else {
                 let arg_exprs = args
                     .iter()
                     .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                return quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| #fn_name(i, #(#arg_exprs),*)) };
+                return quote_spanned! {span=> (|i: &mut #input_ty| #fn_name(i, #(#arg_exprs),*)) };
             }
         }
 
         let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<E> };
-        let input_type = quote_spanned! {span=> ::winnow_grammar::ParseInput<'a, S> };
+        let input_type = quote_spanned! {span=> #input_ty };
 
         // `raw_ident`'s characters, shared with `ident` - which is
         // `intern(raw_ident)` and nothing else (ADR 18 §1).
         let raw_ident = quote_spanned! {span=>
-            ::winnow_grammar::rt::class_or_wide::<S, E>(
+            #rts::class_or_wide::<S, E>(
                 ::winnow_grammar::ascii::AsciiClass::IDENT,
                 |c| c.is_alphanumeric(),
                 1,
@@ -815,10 +827,13 @@ impl<'a> Codegen<'a> {
         // `interner I;` sends `ident` and `intern(…)` to the declared interner
         // instead of the context's - ADR 22.
         let intern_with = |inner: &TokenStream| match &self.grammar.interner {
-            Some(ty) => quote_spanned! {span=>
-                ::winnow_grammar::rt::intern_in::<#ty, _, _, _, _>(#inner)
+            Some(ty) if self.is_bytes() => quote_spanned! {span=>
+                #rts::intern_declared::<#ty, _, _, _, _>(#inner)
             },
-            None => quote_spanned! {span=> ::winnow_grammar::rt::intern(#inner) },
+            Some(ty) => quote_spanned! {span=>
+                #rts::intern_in::<#ty, _, _, _, _>(#inner)
+            },
+            None => quote_spanned! {span=> #rts::intern(#inner) },
         };
 
         let p = match name_str.as_str() {
@@ -851,10 +866,43 @@ impl<'a> Codegen<'a> {
                 // `text(digit{1,2})` is that run and not a wrapper around it.
                 // Taking it twice measured ~3 ns more on the 1BRC temperature.
                 if let [only] = &seq[..] {
-                    if self.is_char_run(only) {
+                    if self.is_text_run(only) {
                         return self.generate_parser_expr(only, is_lexical, false);
                     }
-                    // So is a character loop, once it is a scan.
+                    // So is a character loop, once it is a scan - of bytes,
+                    // in a byte grammar, which are checked as they become
+                    // text.
+                    if let Some(run) = self.char_loop_run(only, is_lexical) {
+                        if self.is_bytes() {
+                            return quote_spanned! {span=> #rts::text(#run) };
+                        }
+                        return run;
+                    }
+                }
+                let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
+                if self.is_bytes() {
+                    // ADR 25 D3: checked where it becomes text.
+                    quote_spanned! {span=> #rts::text(::winnow::Parser::take(#inner)) }
+                } else {
+                    quote_spanned! {span=> ::winnow::Parser::take(#inner) }
+                }
+            }
+            // `bytes(p)`: what `p` consumed, as bytes and unchecked - the
+            // byte grammar's `text(p)` without the check (ADR 25 D3). The
+            // validator rejects it in a text grammar.
+            "bytes" if self.is_bytes() => {
+                if args.is_empty() {
+                    let msg = "`bytes` takes the pattern whose input to capture, and got none";
+                    return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg)
+                        .to_compile_error();
+                }
+                let seq: Vec<ModelPattern> = args
+                    .iter()
+                    .map(|a| match a {
+                        Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
+                    })
+                    .collect();
+                if let [only] = &seq[..] {
                     if let Some(run) = self.char_loop_run(only, is_lexical) {
                         return run;
                     }
@@ -885,7 +933,7 @@ impl<'a> Codegen<'a> {
                 // As in `text`: a run is its own text, so it is read as it
                 // stands rather than taken a second time.
                 let run = match &seq[..] {
-                    [only] if self.is_char_run(only) => {
+                    [only] if self.is_text_run(only) => {
                         Some(self.generate_parser_expr(only, is_lexical, false))
                     }
                     [only] => self.char_loop_run(only, is_lexical),
@@ -896,10 +944,14 @@ impl<'a> Codegen<'a> {
                     quote_spanned! {span=> ::winnow::Parser::take(#inner) }
                 });
                 match call_generics.first() {
-                    Some(ty) => quote_spanned! {span=>
-                        ::winnow_grammar::rt::dec::<_, #ty, _, _>(#taken)
+                    // The byte driver's `dec` also names what `p` yields.
+                    Some(ty) if self.is_bytes() => quote_spanned! {span=>
+                        #rts::dec::<_, #ty, _, _, _>(#taken)
                     },
-                    None => quote_spanned! {span=> ::winnow_grammar::rt::dec(#taken) },
+                    Some(ty) => quote_spanned! {span=>
+                        #rts::dec::<_, #ty, _, _>(#taken)
+                    },
+                    None => quote_spanned! {span=> #rts::dec(#taken) },
                 }
             }
             "intern" => match args {
@@ -915,6 +967,40 @@ impl<'a> Codegen<'a> {
                     return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg)
                         .to_compile_error();
                 }
+            },
+            "string" if self.is_bytes() => quote_spanned! {span=>
+                 delimited(
+                    '"',
+                    #rts::text(::winnow::ascii::take_escaped(
+                        ::winnow::token::none_of(['\\', '"']),
+                        '\\',
+                        ::winnow::token::one_of(['\\', '"'])
+                    )),
+                    '"'.context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::CharLiteral('"')))
+                )
+            },
+            // In a byte grammar the character is decoded, with validation,
+            // from the bytes (ADR 25 D3); the escapes are the same.
+            "char" if self.is_bytes() => quote_spanned! {span=>
+                delimited(
+                    '\'',
+                    alt((
+                        ::winnow::combinator::preceded('\\', #rts::char_except(b"")).map(|c| {
+                             match c {
+                                'n' => '\n',
+                                'r' => '\r',
+                                't' => '\t',
+                                '\\' => '\\',
+                                '\'' => '\'',
+                                '\"' => '\"',
+                                '0' => '\0',
+                                _ => c // fallback
+                             }
+                        }),
+                        #rts::char_except(b"\\'")
+                    )),
+                    '\''.context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::CharLiteral('\'')))
+                )
             },
             "string" => quote_spanned! {span=>
                  delimited(
@@ -950,7 +1036,7 @@ impl<'a> Codegen<'a> {
             },
             "any" => quote_spanned! {span=> ::winnow::token::any::<#input_type, #inner_err_type> },
             "alpha1" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::ALPHA,
                     1,
                 )
@@ -960,70 +1046,70 @@ impl<'a> Codegen<'a> {
             // repetition (`digit{1,2}`), which a greedy terminal cannot express.
             // Tested as a byte rather than decoded as a `char` (`rt::digit`).
             "digit" => quote_spanned! {span=>
-                ::winnow_grammar::rt::digit::<S, E>()
+                #rts::digit::<S, E>()
             },
             "digit1" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::DIGIT,
                     1,
                 )
             },
             "hex_digit0" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::HEX_DIGIT,
                     0,
                 )
             },
             "hex_digit1" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::HEX_DIGIT,
                     1,
                 )
             },
             "oct_digit0" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::OCT_DIGIT,
                     0,
                 )
             },
             "oct_digit1" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::OCT_DIGIT,
                     1,
                 )
             },
             "binary_digit0" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::BINARY_DIGIT,
                     0,
                 )
             },
             "binary_digit1" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::BINARY_DIGIT,
                     1,
                 )
             },
             "space0" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::SPACE,
                     0,
                 )
             },
             "space1" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::SPACE,
                     1,
                 )
             },
             "multispace0" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::MULTISPACE,
                     0,
                 )
             },
             "multispace1" => quote_spanned! {span=>
-                ::winnow_grammar::rt::class::<S, E>(
+                #rts::class::<S, E>(
                     ::winnow_grammar::ascii::AsciiClass::MULTISPACE,
                     1,
                 )
@@ -1040,7 +1126,7 @@ impl<'a> Codegen<'a> {
                 let b = self.current_boundary.borrow().clone().unwrap_or_default();
                 if let [byte] = b.as_bytes() {
                     if byte.is_ascii() {
-                        return quote_spanned! {span=> ::winnow_grammar::rt::lit_byte(#byte, #b, ::core::option::Option::None) };
+                        return quote_spanned! {span=> #rts::lit_byte(#byte, #b, ::core::option::Option::None) };
                     }
                 }
                 quote_spanned! {span=>
@@ -1103,7 +1189,7 @@ impl<'a> Codegen<'a> {
                     // grammar's error type is; the fast pass drops it, and
                     // says so first, so that the parser need not build one
                     // (`ParseError::from_input`).
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| {
+                    quote_spanned! {span=> (|i: &mut #input_ty| {
                         let outer = ::core::mem::replace(&mut i.state.diagnosing, <E as ::winnow_grammar::Diagnostics>::RECORDING);
                         let r = ::winnow::Parser::parse_next(&mut #rule_path, i);
                         i.state.diagnosing = outer;
@@ -1113,7 +1199,7 @@ impl<'a> Codegen<'a> {
                     let arg_exprs = args
                         .iter()
                         .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| {
+                    quote_spanned! {span=> (|i: &mut #input_ty| {
                         let outer = ::core::mem::replace(&mut i.state.diagnosing, <E as ::winnow_grammar::Diagnostics>::RECORDING);
                         let r = #rule_path(i, #(#arg_exprs),*);
                         i.state.diagnosing = outer;
@@ -1170,6 +1256,27 @@ impl<'a> Codegen<'a> {
         CHAR_CLASSES.contains(&name.as_str())
     }
 
+    /// The built-in `any`, as opposed to a class of ASCII characters.
+    fn is_any(p: &ModelPattern) -> bool {
+        matches!(p, ModelPattern::RuleCall { rule_path, .. } if rule_path.is_ident("any"))
+    }
+
+    /// A run that already is text: any character run in a text grammar, and
+    /// in a byte grammar a run of digits - a run of `any` is bytes there.
+    fn is_text_run(&self, p: &ModelPattern) -> bool {
+        if !self.is_char_run(p) {
+            return false;
+        }
+        if !self.is_bytes() {
+            return true;
+        }
+        match p {
+            ModelPattern::Repeat(inner, _) | ModelPattern::Plus(inner, _) => !Self::is_any(inner),
+            ModelPattern::Bounded { pattern, .. } => !Self::is_any(pattern),
+            _ => false,
+        }
+    }
+
     /// A repetition whose element is a character class - the patterns that
     /// yield `&'a str` rather than their elements. `text(..)` and `dec(..)`
     /// over one of these have nothing to add: the run is already the text.
@@ -1200,6 +1307,7 @@ impl<'a> Codegen<'a> {
         is_lexical: bool,
         is_discarded: bool,
     ) -> TokenStream {
+        let input_ty = self.input_ty();
         let span = Span::mixed_site();
         // A character loop nobody looks at is a scan. One that is bound still
         // collects its elements, which is what its type says it does; under
@@ -1214,7 +1322,7 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=> #p }
         } else {
             // `WS` is a function and `preceded` wants a parser.
-            quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i), #p) }
+            quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p) }
         };
         let max = match max {
             Some(m) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
@@ -1230,7 +1338,13 @@ impl<'a> Codegen<'a> {
             // produces a value.
             quote_spanned! {span=> ::winnow::Parser::void(::winnow::Parser::take(#counting)) }
         } else if self.is_char_class(inner) {
-            quote_spanned! {span=> ::winnow::Parser::take(#counting) }
+            // A run of digits is text in a byte grammar too (ADR 25 D2); a
+            // run of `any` there is bytes, as `any` is.
+            if self.is_bytes() && !Self::is_any(inner) {
+                quote_spanned! {span=> ::winnow_grammar::rt::bytes::ascii_run(::winnow::Parser::take(#counting)) }
+            } else {
+                quote_spanned! {span=> ::winnow::Parser::take(#counting) }
+            }
         } else {
             quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording_bounded(#min, #max, #elem) }
         }
@@ -1242,6 +1356,8 @@ impl<'a> Codegen<'a> {
         is_lexical: bool,
         is_discarded: bool,
     ) -> TokenStream {
+        let input_ty = self.input_ty();
+        let rts = self.rts();
         let span = Span::mixed_site();
         match pattern {
             ModelPattern::SpanBinding(inner, _, _) => {
@@ -1275,7 +1391,7 @@ impl<'a> Codegen<'a> {
                         Some(c) => quote_spanned! {span=> ::core::option::Option::Some(#c) },
                         None => quote_spanned! {span=> ::core::option::Option::None },
                     };
-                    return quote_spanned! {span=> ::winnow_grammar::rt::lit_byte(#byte, #text, #char_lit) };
+                    return quote_spanned! {span=> #rts::lit_byte(#byte, #text, #char_lit) };
                 }
                 // Pure literal, no ws wrapping
                 match lit {
@@ -1359,7 +1475,7 @@ impl<'a> Codegen<'a> {
             ModelPattern::Count { pattern, .. } => {
                 let p = self.generate_parser_expr(pattern, is_lexical, false);
                 if !is_lexical {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i), #p)) }
+                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p)) }
                 } else {
                     quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, #p) }
                 }
@@ -1396,7 +1512,7 @@ impl<'a> Codegen<'a> {
                     }
                 };
                 if !is_lexical {
-                    quote_spanned! {span=> #fold(0, ::winnow::combinator::preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i), #p), #init, #step) }
+                    quote_spanned! {span=> #fold(0, ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p), #init, #step) }
                 } else {
                     quote_spanned! {span=> #fold(0, #p, #init, #step) }
                 }
@@ -1433,6 +1549,7 @@ impl<'a> Codegen<'a> {
         is_lexical: bool,
         discard: bool,
     ) -> TokenStream {
+        let input_ty = self.input_ty();
         let span = Span::mixed_site();
         let mut parsers = Vec::new();
         let mut in_cut = false;
@@ -1441,7 +1558,7 @@ impl<'a> Codegen<'a> {
             if let ModelPattern::Cut(_) = p {
                 in_cut = true;
                 if i > 0 && !is_lexical {
-                    parsers.push(quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i)) });
+                    parsers.push(quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i)) });
                 }
                 let p_expr = self.generate_parser_expr(p, is_lexical, discard);
                 if in_cut {
@@ -1455,7 +1572,7 @@ impl<'a> Codegen<'a> {
             // Infix WS
             if i > 0 && !is_lexical {
                 parsers.push(
-                    quote_spanned! {span=> (|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i)) },
+                    quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i)) },
                 );
             }
 
@@ -1481,6 +1598,7 @@ impl<'a> Codegen<'a> {
         close: &str,
         is_lexical: bool,
     ) -> TokenStream {
+        let input_ty = self.input_ty();
         let span = Span::mixed_site();
         let inner_parser = self.generate_sequence_parser(inner, is_lexical);
 
@@ -1495,7 +1613,7 @@ impl<'a> Codegen<'a> {
             // Infix logic: Open, WS, Inner, WS, Close
             // This is: delimited(open, preceded(WS, inner), preceded(WS, close))
             quote_spanned! {span=>
-                delimited(#open_p, preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i), #inner_parser), preceded(|i: &mut ::winnow_grammar::ParseInput<'a, S>| ::winnow_grammar::rt::skip_trivia(WS, i), #close_p))
+                delimited(#open_p, preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #inner_parser), preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #close_p))
             }
         }
     }

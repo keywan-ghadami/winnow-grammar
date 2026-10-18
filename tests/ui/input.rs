@@ -11,4 +11,11 @@ grammar! {
     }
 }
 
+// `bytes(p)` exists only in a byte grammar.
+grammar! {
+    grammar TextOnly {
+        pub r -> usize = b:bytes(digit1) -> { b.len() }
+    }
+}
+
 fn main() {}

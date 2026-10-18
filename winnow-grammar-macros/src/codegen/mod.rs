@@ -8,7 +8,7 @@ use quote::{format_ident, quote, quote_spanned};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use winnow_grammar_model::frame::Frames;
-use winnow_grammar_model::model::GrammarDefinition;
+use winnow_grammar_model::model::{GrammarDefinition, InputKind};
 use winnow_grammar_model::ParsedGrammar;
 
 /// Is the rule a template that is not generated as a function of its own but
@@ -84,6 +84,42 @@ impl Codegen<'_> {
         };
         quote! { #state #interner }
     }
+
+    /// Whether the grammar declares `input bytes;` - ADR 25.
+    pub fn is_bytes(&self) -> bool {
+        self.grammar.input == InputKind::Bytes
+    }
+
+    /// The input every rule of this grammar reads: `ParseInput`, or
+    /// `ParseBytes` under `input bytes;`.
+    pub fn input_ty(&self) -> TokenStream {
+        if self.is_bytes() {
+            quote! { ::winnow_grammar::ParseBytes<'a, S> }
+        } else {
+            quote! { ::winnow_grammar::ParseInput<'a, S> }
+        }
+    }
+
+    /// The bound on a rule's error type parameter `E`, for this grammar's
+    /// input.
+    pub fn rt_error(&self) -> TokenStream {
+        if self.is_bytes() {
+            quote! { ::winnow_grammar::rt::RtError<'a, S, &'a [u8]> }
+        } else {
+            quote! { ::winnow_grammar::rt::RtError<'a, S> }
+        }
+    }
+
+    /// Where the runtime helpers that yield what they matched live:
+    /// `rt` for text, `rt::bytes` for a byte grammar. The helpers that only
+    /// step and record are shared and stay `rt::…`.
+    pub fn rts(&self) -> TokenStream {
+        if self.is_bytes() {
+            quote! { ::winnow_grammar::rt::bytes }
+        } else {
+            quote! { ::winnow_grammar::rt }
+        }
+    }
 }
 
 impl<'a> Codegen<'a> {
@@ -107,6 +143,9 @@ impl<'a> Codegen<'a> {
         let input = &self.input_ident;
 
         let has_user_ws = self.user_rules.contains("WS");
+        let input_ty = self.input_ty();
+        let rt_error = self.rt_error();
+        let rts = self.rts();
 
         let rules = self.grammar.rules.iter().map(|r| self.generate_rule(r));
 
@@ -155,15 +194,15 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 // Whitespace handling (similar to syn)
                 #[allow(dead_code)]
-                fn WS<'a, S: std::fmt::Debug + Clone, E: ::winnow_grammar::rt::RtError<'a, S>>(
-                    #input: &mut ::winnow_grammar::ParseInput<'a, S>,
+                fn WS<'a, S: std::fmt::Debug + Clone, E: #rt_error>(
+                    #input: &mut #input_ty,
                 ) -> ::winnow::Result<(), ::winnow::error::ErrMode<E>> {
                     use ::winnow::Parser;
                     // The default whitespace skip runs between every two
                     // tokens, so it is the hottest scan in a generated parser
                     // - and a word at a time (`src/ascii.rs`), not a
                     // character at a time.
-                    ::winnow_grammar::rt::class::<S, E>(
+                    #rts::class::<S, E>(
                         ::winnow_grammar::ascii::AsciiClass::MULTISPACE,
                         0,
                     )

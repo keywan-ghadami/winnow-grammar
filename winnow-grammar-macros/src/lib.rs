@@ -33,6 +33,13 @@ impl Backend for WinnowBackend {
                 name: "text",
                 return_type: "&'a str",
             },
+            // Takes one argument, like `text`, and yields the bytes it
+            // consumed unchecked. Only in a grammar that declares
+            // `input bytes;` - the validator rejects it elsewhere.
+            BuiltIn {
+                name: "bytes",
+                return_type: "&'a [u8]",
+            },
             // Takes one argument - the pattern whose matched text is read as
             // a number. The type is the one the call names, `dec<u32>(..)`.
             BuiltIn {
