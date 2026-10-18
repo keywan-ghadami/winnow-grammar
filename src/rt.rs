@@ -84,27 +84,62 @@ where
 /// The input not yet consumed, as text. With [`advance`], what a run of
 /// fixed-shape elements is matched with: by index into this slice, then one
 /// step forward (ADR 24 §8).
+///
+/// The slice is taken without a character-boundary check: it ends at the end
+/// of the input, which always is one.
 #[inline]
 pub fn rest<'a, S: Clone + std::fmt::Debug>(input: &ParseInput<'a, S>) -> &'a str {
-    input.peek_slice(input.eof_offset())
+    let n = input.eof_offset();
+    // SAFETY: `n` is the length of the text not yet consumed; its end is the
+    // end of a `&str`, a character boundary.
+    unsafe { input.peek_slice_unchecked(n) }
 }
 
-/// Consume `n` bytes that [`rest`] showed to be matched. `n` lies on a
-/// character boundary because every element the indexed match accepts ends
-/// on one.
+/// Cut the first `n` bytes off the input without checking that `n` is a
+/// character boundary - the one place this module does (ADR 24 §12a). Every
+/// caller states why its `n` is one; they come down to three facts of UTF-8:
+/// the position just before an ASCII byte, the one just after it, and the
+/// end of the text are always character boundaries, because an ASCII byte is
+/// a whole character and a continuation byte never follows one.
+///
+/// # Safety
+///
+/// `n` is at most the length of [`rest`] and a character boundary of it.
+#[inline(always)]
+unsafe fn take_on_boundary<'a, S: Clone + std::fmt::Debug>(
+    input: &mut ParseInput<'a, S>,
+    n: usize,
+) -> &'a str {
+    debug_assert!(rest(input).is_char_boundary(n));
+    // SAFETY: the caller's guarantee, see above.
+    unsafe { input.next_slice_unchecked(n) }
+}
+
+/// Consume `n` bytes that [`rest`] showed to be matched.
+///
+/// The indexed match (ADR 24 §8) ends every run just after an ASCII byte it
+/// compared - a digit, or the last byte of an ASCII literal - so the cut is
+/// made unchecked when the byte before it is ASCII, which LLVM sees from the
+/// compare it just made. Anything else (a run ending in a literal that is not
+/// ASCII, or a caller with an arbitrary `n`) takes winnow's checked cut.
 #[inline]
 pub fn advance<S: Clone + std::fmt::Debug>(input: &mut ParseInput<'_, S>, n: usize) {
-    input.next_slice(n);
+    if n > 0 && rest(input).as_bytes().get(n - 1).is_some_and(u8::is_ascii) {
+        // SAFETY: byte `n - 1` exists and is ASCII, so `n` is just after an
+        // ASCII byte: a character boundary.
+        unsafe { take_on_boundary(input, n) };
+    } else {
+        input.next_slice(n);
+    }
 }
 /// A literal of one ASCII byte - `";"`, `"\n"`, a `frame_end` whose boundary is
 /// one - in the fast pass: one byte compared, one consumed (ADR 24 §8a).
 ///
 /// winnow's `literal` compares a `&str` pair by pair in a loop and then cuts at
 /// the end with a character-boundary check; for one byte that is most of the
-/// cost of matching a separator. Consumed with `next_token`, as [`digit`] is,
-/// which steps over the byte without the boundary check `next_slice(1)` makes;
-/// the value is the same one-byte slice, and a caller that discards it - the
-/// usual case for a separator - does not compute it.
+/// cost of matching a separator. Consumed with an unchecked cut, as [`digit`]
+/// is: the byte compared is ASCII, so one byte on is a character boundary; the
+/// value is the same one-byte slice.
 ///
 /// The diagnosing pass runs `literal` with its expectation as before, so the
 /// error, and every message built from it, is unchanged.
@@ -116,10 +151,10 @@ pub fn lit_byte<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
 ) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<&'a str, ErrMode<E>> {
     move |input| {
         if !E::RECORDING {
-            let rest = rest(input);
-            return if rest.as_bytes().first() == Some(&byte) {
-                input.next_token();
-                Ok(rest.get(..1).unwrap_or_default())
+            return if byte.is_ascii() && rest(input).as_bytes().first() == Some(&byte) {
+                // SAFETY: the first byte is `byte`, which is ASCII: offset 1 is
+                // just after an ASCII byte, a character boundary.
+                Ok(unsafe { take_on_boundary(input, 1) })
             } else {
                 Err(ErrMode::Backtrack(E::from_input(input)))
             };
@@ -159,7 +194,9 @@ pub fn scan_to_literal<'a, S: Clone + std::fmt::Debug, E>(
             Some(range) => range.start,
             None => input.eof_offset(),
         };
-        Ok(take_to_hit(input, end))
+        // SAFETY: the start of a needle's match (a `&str`), the `\r` before
+        // the `\n` found, or the end of the input.
+        Ok(unsafe { take_to_hit(input, end) })
     }
 }
 
@@ -188,23 +225,26 @@ pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug, E>(
             }
             None => input.eof_offset(),
         };
-        Ok(take_to_hit(input, end))
+        // SAFETY: the start of a needle's match (a `&str`), the `\r` before
+        // the `\n` found, or the end of the input.
+        Ok(unsafe { take_to_hit(input, end) })
     }
 }
 
-/// The text up to a scan's hit, consumed. A hit is the first byte of an ASCII
-/// needle, so the cut is on a character boundary; said where LLVM can see it,
-/// the boundary check `next_slice` makes folds away, and where the scan found
-/// nothing (`end` is the end) the same cut is made unseen (#23).
-#[inline]
-fn take_to_hit<'a, S: Clone + std::fmt::Debug>(
+/// The text up to a scan's hit, consumed, without a boundary check.
+///
+/// # Safety
+///
+/// `end` is where a needle - a `&str`, so valid UTF-8 that starts with a
+/// character's first byte - matched, the `\r` before a `\n` it found, or the
+/// end of the input. Each is a character boundary.
+#[inline(always)]
+unsafe fn take_to_hit<'a, S: Clone + std::fmt::Debug>(
     input: &mut ParseInput<'a, S>,
     end: usize,
 ) -> &'a str {
-    if rest(input).as_bytes().get(end).is_some_and(u8::is_ascii) {
-        return input.next_slice(end);
-    }
-    input.next_slice(end)
+    // SAFETY: the caller's guarantee, see above.
+    unsafe { take_on_boundary(input, end) }
 }
 
 /// `until(";" | "\n")` / `until(";" | line_ending)` - a terminator with two
@@ -251,7 +291,9 @@ pub fn scan_to_any<'a, S: Clone + std::fmt::Debug, E>(
             }
             None => input.eof_offset(),
         };
-        Ok(take_to_hit(input, end))
+        // SAFETY: the start of a needle's match (a `&str`), the `\r` before
+        // the `\n` found, or the end of the input.
+        Ok(unsafe { take_to_hit(input, end) })
     }
 }
 
@@ -1092,15 +1134,17 @@ pub fn class<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
 /// run of `digit*` 15 → 9 per character; branches fall with them and
 /// mispredicts do not move.
 ///
-/// The consuming half is `next_token`, not `next_slice(1)`: on a `&str` the
-/// latter checks that the cut lands on a character boundary, and that check
-/// made the long run *slower* than `one_of` (20 per character) while the short
-/// cases still won.
+/// The consuming half is an unchecked cut of one byte, not `next_slice(1)`: on
+/// a `&str` the latter checks that the cut lands on a character boundary, and
+/// that check made the long run *slower* than `one_of` (20 per character)
+/// while the short cases still won. After an ASCII digit it always does.
 pub fn digit<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
 ) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<char, ErrMode<E>> {
     move |input| match input.as_bstr().first() {
         Some(&b) if b.is_ascii_digit() => {
-            input.next_token();
+            // SAFETY: the first byte is an ASCII digit: offset 1 is just
+            // after an ASCII byte, a character boundary.
+            unsafe { take_on_boundary(input, 1) };
             Ok(b as char)
         }
         _ => Err(ErrMode::Backtrack(E::from_input(input))),

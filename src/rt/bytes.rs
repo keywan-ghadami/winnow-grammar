@@ -108,7 +108,26 @@ pub fn invalid_utf8<'a, S: Clone + std::fmt::Debug, E: Diagnostics>(
 /// The input not yet consumed, as bytes - [`super::rest`] for a byte grammar.
 #[inline]
 pub fn rest<'a, S: Clone + std::fmt::Debug>(input: &ParseBytes<'a, S>) -> &'a [u8] {
-    input.peek_slice(input.eof_offset())
+    let n = input.eof_offset();
+    // SAFETY: `n` is the length of what is not yet consumed.
+    unsafe { input.peek_slice_unchecked(n) }
+}
+
+/// Cut the first `n` bytes off the input without the bounds check - what
+/// [`super`]'s unchecked cut is for a byte grammar, where every position is a
+/// boundary and only the length matters (ADR 24 §12a).
+///
+/// # Safety
+///
+/// `n` is at most the length of [`rest`].
+#[inline(always)]
+unsafe fn take_in_bounds<'a, S: Clone + std::fmt::Debug>(
+    input: &mut ParseBytes<'a, S>,
+    n: usize,
+) -> &'a [u8] {
+    debug_assert!(n <= input.eof_offset());
+    // SAFETY: the caller's guarantee, see above.
+    unsafe { input.next_slice_unchecked(n) }
 }
 
 /// Consume `n` bytes that [`rest`] showed to be matched.
@@ -161,7 +180,8 @@ pub fn scan_to_literal<'a, S: Clone + std::fmt::Debug, E>(
             Some(range) => range.start,
             None => input.eof_offset(),
         };
-        Ok(input.next_slice(end))
+        // SAFETY: a scan's hit lies inside the input, and the end is its length.
+        Ok(unsafe { take_in_bounds(input, end) })
     }
 }
 
@@ -180,7 +200,8 @@ pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug, E>(
             }
             None => input.eof_offset(),
         };
-        Ok(input.next_slice(end))
+        // SAFETY: a scan's hit lies inside the input, and the end is its length.
+        Ok(unsafe { take_in_bounds(input, end) })
     }
 }
 
@@ -213,7 +234,8 @@ pub fn scan_to_any<'a, S: Clone + std::fmt::Debug, E>(
             }
             None => input.eof_offset(),
         };
-        Ok(input.next_slice(end))
+        // SAFETY: a scan's hit lies inside the input, and the end is its length.
+        Ok(unsafe { take_in_bounds(input, end) })
     }
 }
 
