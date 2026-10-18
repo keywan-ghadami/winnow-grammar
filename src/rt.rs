@@ -2,16 +2,16 @@
 //! diagnostics engine ([`crate::ParseError`]) steps in.
 //!
 //! Everything here works on a grammar's input with its context
-//! ([`Input`]) because it needs the state (`input.state`): that is where the
+//! ([`Input`](crate::rt::Input)) because it needs the state (`input.state`): that is where the
 //! furthest failure position lives, which a successful backtrack would
 //! otherwise discard. The error type is generic
 //! ([`RtError`](crate::rt::RtError)): the same helper serves the fast pass
 //! with `EmptyError` and the diagnosing pass with [`ParseError`] - see ADR 17.
 //!
 //! A helper that only steps, records and decides is generic over the slice
-//! ([`Slice`]: `&str` or `&[u8]`), so text and byte grammars share it. One
+//! ([`Slice`](crate::rt::Slice): `&str` or `&[u8]`), so text and byte grammars share it. One
 //! that hands back text is written here for [`ParseInput`] and again, over
-//! [`ParseBytes`](crate::ParseBytes), in [`bytes`] - ADR 25.
+//! [`ParseBytes`](crate::ParseBytes), in [`bytes`](crate::rt::bytes) - ADR 25.
 
 use crate::ascii::AsciiClass;
 use crate::error::{Diagnostics, ParseError};
