@@ -16,8 +16,22 @@ pub struct GrammarDefinition {
     /// `interner I;` - the interner `ident` and `intern(…)` use (ADR 22).
     /// `None` means the one in the context, with its lookup cache.
     pub interner: Option<syn::Type>,
+    /// `input bytes;` - what the rules read (ADR 25). [`InputKind::Text`],
+    /// what every grammar that does not say otherwise has always read.
+    pub input: InputKind,
     pub imports: Vec<ImportedGrammar>,
     pub uses: Vec<syn::ItemUse>,
+}
+
+/// What a grammar's rules read - ADR 25.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputKind {
+    /// `&str`: text already proved to be UTF-8.
+    #[default]
+    Text,
+    /// `&[u8]`, declared with `input bytes;`: only what becomes text is
+    /// checked, where it becomes text.
+    Bytes,
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +208,7 @@ impl From<parser::GrammarDefinition> for GrammarDefinition {
             uses,
             state: p.state,
             interner: p.interner,
+            input: p.input,
         }
     }
 }

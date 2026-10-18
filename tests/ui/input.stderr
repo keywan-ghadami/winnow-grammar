@@ -1,0 +1,5 @@
+error: a grammar declares its `input` at most once
+ --> tests/ui/input.rs:9:9
+  |
+9 |         input bytes;
+  |         ^^^^^

@@ -47,6 +47,8 @@ pub mod kw {
     syn::custom_keyword!(spaced);
     syn::custom_keyword!(state);
     syn::custom_keyword!(interner);
+    syn::custom_keyword!(input);
+    syn::custom_keyword!(bytes);
 }
 
 fn parse_path_no_args(input: ParseStream) -> Result<Path> {
@@ -150,6 +152,8 @@ pub struct GrammarDefinition {
     pub state: Option<Type>,
     /// `interner I;` - the interner `ident` and `intern(…)` use (ADR 22).
     pub interner: Option<Type>,
+    /// `input bytes;` - what the grammar's rules read (ADR 25).
+    pub input: crate::model::InputKind,
     pub imports: Vec<ImportedGrammar>,
 }
 
@@ -187,6 +191,7 @@ impl Parse for GrammarDefinition {
         let mut nested_imports = Vec::new();
         let mut state: Option<Type> = None;
         let mut interner: Option<Type> = None;
+        let mut input_kind: Option<crate::model::InputKind> = None;
 
         while !content.is_empty() {
             if content.peek(Token![use]) {
@@ -219,6 +224,20 @@ impl Parse for GrammarDefinition {
                     ));
                 }
                 interner = Some(ty);
+            } else if content.peek(kw::input) && !content.peek2(Token![->]) {
+                // `input bytes;` - the grammar reads bytes, not text.
+                let kw = content.parse::<kw::input>()?;
+                let _ = content.parse::<kw::bytes>().map_err(|e| {
+                    syn::Error::new(e.span(), "expected `bytes`: a grammar reads `input bytes;`")
+                })?;
+                let _ = content.parse::<Token![;]>()?;
+                if input_kind.is_some() {
+                    return Err(syn::Error::new(
+                        kw.span,
+                        "a grammar declares its `input` at most once",
+                    ));
+                }
+                input_kind = Some(crate::model::InputKind::Bytes);
             } else if peek_extern_rule(&content) {
                 extern_rules.push(content.parse()?);
             } else {
@@ -238,6 +257,7 @@ impl Parse for GrammarDefinition {
             extern_rules,
             state,
             interner,
+            input: input_kind.unwrap_or_default(),
             imports,
         })
     }
