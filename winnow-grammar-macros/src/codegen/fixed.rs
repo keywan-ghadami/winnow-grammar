@@ -10,7 +10,10 @@
 //! **Only the fast pass's accepting path is new.** When the indexed match
 //! fails, the input is where it was and the elements run again as they always
 //! did, so a failure - its position, a `cut` after a `=>` - comes from exactly
-//! the code that produced it before. The diagnosing pass (ADR 17) does not
+//! the code that produced it before. `dec<T>(digit{m,n})` joins a run when
+//! `n` digits always fit in `T` (ADR 24 §8c): the value is accumulated as the
+//! digits are matched, and a wider bound keeps `rt::dec` and its overflow
+//! error. The diagnosing pass (ADR 17) does not
 //! take the indexed path at all: an optional element that did not match
 //! records what it expected ("also possible here"), and that record is the
 //! elements' to make. The two paths agree on every input the fast one accepts
@@ -20,7 +23,7 @@
 use super::Codegen;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote_spanned};
-use winnow_grammar_model::model::ModelPattern;
+use winnow_grammar_model::model::{Argument, ModelPattern};
 
 /// One element the indexed match understands, and the value its binding gets
 /// - the same type the element's own parser yields.
@@ -35,6 +38,8 @@ enum Fixed<'p> {
     OptDigit(Option<&'p syn::Ident>),
     /// `digit{min,max}` with an upper bound: `&'a str` when bound.
     Digits(usize, usize, Option<&'p syn::Ident>),
+    /// `dec<T>(digit{min,max})` where `max` digits always fit in `T`: `T`.
+    Dec(&'p syn::Type, usize, usize, Option<&'p syn::Ident>),
 }
 
 impl Fixed<'_> {
@@ -44,7 +49,8 @@ impl Fixed<'_> {
             | Fixed::OptLit(_, b)
             | Fixed::Digit(b)
             | Fixed::OptDigit(b)
-            | Fixed::Digits(_, _, b) => *b,
+            | Fixed::Digits(_, _, b)
+            | Fixed::Dec(_, _, _, b) => *b,
         }
     }
 }
@@ -52,6 +58,26 @@ impl Fixed<'_> {
 /// Longer runs of digits than this are left to the repetition: the point is
 /// a bounded field, not a number of any length.
 const MAX_DIGITS: usize = 16;
+
+/// How many decimal digits always fit in the integer type `ty`: one fewer
+/// than its largest value has. `None` for anything else, `usize` and `isize`
+/// included - their width is the target's, which a proc macro does not know.
+fn digits_that_fit(ty: &syn::Type) -> Option<usize> {
+    let syn::Type::Path(p) = ty else { return None };
+    if p.qself.is_some() {
+        return None;
+    }
+    let name = p.path.get_ident()?.to_string();
+    Some(match name.as_str() {
+        "u8" | "i8" => 2,
+        "u16" | "i16" => 4,
+        "u32" | "i32" => 9,
+        "u64" => 19,
+        "i64" => 18,
+        "u128" | "i128" => 38,
+        _ => return None,
+    })
+}
 
 impl<'a> Codegen<'a> {
     fn literal_bytes(lit: &syn::Lit) -> Option<Vec<u8>> {
@@ -104,6 +130,32 @@ impl<'a> Codegen<'a> {
             } if *max <= MAX_DIGITS && min <= max && *max > 0 => self
                 .builtin_digit(pattern)
                 .map(|b| Fixed::Digits(*min, *max, b)),
+            ModelPattern::RuleCall {
+                rule_path,
+                generics,
+                args,
+                binding,
+            } if rule_path.is_ident("dec") && !self.user_rules.contains("dec") => {
+                let ([ty], [Argument::Positional(arg)]) = (&generics[..], &args[..]) else {
+                    return None;
+                };
+                let ModelPattern::Bounded {
+                    pattern,
+                    min,
+                    max: Some(max),
+                    ..
+                } = arg
+                else {
+                    return None;
+                };
+                self.builtin_digit(pattern)?;
+                (min <= max && *max > 0 && *max <= digits_that_fit(ty)?).then_some(Fixed::Dec(
+                    ty,
+                    (*min).max(1),
+                    *max,
+                    binding.as_ref(),
+                ))
+            }
             other => self.builtin_digit(other).map(Fixed::Digit),
         }
     }
@@ -145,6 +197,18 @@ impl<'a> Codegen<'a> {
         Some(steps)
     }
 
+    /// The text of the one ASCII byte at `at` of the run's slice `s`: a
+    /// checked slice over bytes, `rt::ascii_at` over text, whose check the
+    /// compare just made answers.
+    fn byte_text(&self, s: &syn::Ident, at: &syn::Ident) -> TokenStream {
+        let span = Span::mixed_site();
+        if self.is_bytes() {
+            quote_spanned! {span=> &#s[#at..#at + 1] }
+        } else {
+            quote_spanned! {span=> ::winnow_grammar::rt::ascii_at(#s, #at) }
+        }
+    }
+
     fn fixed_run(&self, run: &[&Fixed], patterns: &[ModelPattern], in_cut: bool) -> TokenStream {
         let rts = self.rts();
         let span = Span::mixed_site();
@@ -184,6 +248,36 @@ impl<'a> Codegen<'a> {
             let m = match f {
                 // An element nobody named is matched and not sliced: a cut
                 // of the text is two character-boundary checks (#23).
+                // One ASCII byte, the usual separator or sign: compared as a
+                // byte, its text cut where the compare shows a boundary, and
+                // an optional one taken without a branch on whether it is
+                // there - a sign is as often there as not.
+                Fixed::Lit(bytes, b_) if bytes.len() == 1 => {
+                    let byte = bytes[0];
+                    let value = b_.map(|_| {
+                        let cut = self.byte_text(&s, &at);
+                        quote_spanned! {span=> let #v = #cut; }
+                    });
+                    quote_spanned! {span=>
+                        if #b.get(#at) != ::core::option::Option::Some(&#byte) { break 'fixed #fail; }
+                        #value
+                        #at += 1;
+                    }
+                }
+                Fixed::OptLit(bytes, b_) if bytes.len() == 1 => {
+                    let byte = bytes[0];
+                    let value = b_.map(|_| {
+                        let cut = self.byte_text(&s, &at);
+                        quote_spanned! {span=>
+                            let #v = if hit { ::core::option::Option::Some(#cut) } else { ::core::option::Option::None };
+                        }
+                    });
+                    quote_spanned! {span=>
+                        let hit = #b.get(#at) == ::core::option::Option::Some(&#byte);
+                        #value
+                        #at += usize::from(hit);
+                    }
+                }
                 Fixed::Lit(bytes, b_) => {
                     let n = bytes.len();
                     let lit = syn::LitByteStr::new(bytes, span);
@@ -243,6 +337,45 @@ impl<'a> Codegen<'a> {
                         }
                         if #at - start < #min { break 'fixed #fail; }
                         #value
+                    }
+                }
+                // The value as the digits are matched: `max` of them always
+                // fit, so the wrapping operations never wrap, and the result
+                // is the one `str::parse` gives. No digit at all is `dec`'s
+                // error, left to the elements (`min` is at least one), and
+                // `max` is at most 38, the most any type takes.
+                Fixed::Dec(ty, min, max, _) => {
+                    // One test per digit, written out: a short field is a
+                    // few compares, not a loop with a counter.
+                    let mut digits = TokenStream::new();
+                    for k in 0..*max {
+                        let step = if k == 0 {
+                            quote_spanned! {span=> value = (c - b'0') as #ty; }
+                        } else {
+                            quote_spanned! {span=> value = value.wrapping_mul(10).wrapping_add((c - b'0') as #ty); }
+                        };
+                        let missing = if k < *min {
+                            quote_spanned! {span=> break 'fixed #fail }
+                        } else {
+                            quote_spanned! {span=> break 'dec }
+                        };
+                        digits.extend(quote_spanned! {span=>
+                            match #b.get(#at) {
+                                ::core::option::Option::Some(&c) if c.is_ascii_digit() => {
+                                    #step
+                                    #at += 1;
+                                }
+                                _ => #missing,
+                            }
+                        });
+                    }
+                    quote_spanned! {span=>
+                        let mut value: #ty = 0;
+                        #[allow(unused_labels)]
+                        'dec: {
+                            #digits
+                        }
+                        let #v_pat = value;
                     }
                 }
             };

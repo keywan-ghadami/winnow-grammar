@@ -118,6 +118,22 @@ unsafe fn take_on_boundary<'a, S: Clone + std::fmt::Debug>(
     unsafe { input.next_slice_unchecked(n) }
 }
 
+/// The one-byte text at `at` of `s`, for an indexed match that just compared
+/// that byte with an ASCII literal (ADR 24 §8). The slice is cut unchecked
+/// when the byte is ASCII, which the compare before it has shown; any other
+/// `at` gets the checked slice, and its panic.
+#[doc(hidden)]
+#[inline(always)]
+pub fn ascii_at(s: &str, at: usize) -> &str {
+    if s.as_bytes().get(at).is_some_and(u8::is_ascii) {
+        // SAFETY: byte `at` exists and is ASCII, so `at` is just before an
+        // ASCII byte and `at + 1` just after it: both character boundaries.
+        unsafe { s.get_unchecked(at..at + 1) }
+    } else {
+        &s[at..at + 1]
+    }
+}
+
 /// Consume `n` bytes that [`rest`] showed to be matched.
 ///
 /// The indexed match (ADR 24 §8) ends every run just after an ASCII byte it

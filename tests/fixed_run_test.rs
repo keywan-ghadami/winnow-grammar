@@ -57,7 +57,53 @@ grammar! {
         // keeps `rt::dec` and its overflow error ("999").
         pub DEC_U8 -> (u8, u8) = a:dec<u8>(digit{2}) "-" b:dec<u8>(digit{1,3}) -> { (a, b) }
         pub DEC_U8_REF -> (u8, u8) = a:dec<u8>(digit{2}) "" "-" "" b:dec<u8>(digit{1,3}) -> { (a, b) }
+
+        // The 1BRC line's tail as one run - separator, sign, `dec` of a
+        // bounded field, point, digit, terminator - after a scan that may
+        // stop just after a two-byte character, and behind a commit point.
+        pub TAIL -> (&'a str, i32) =
+            n:until(";" | "x") ";" => neg:"-"? w:dec<i32>(digit{1,2}) "." f:digit "x" -> {
+                let v = w * 10 + (f as i32 - '0' as i32);
+                (n, if neg.is_some() { -v } else { v })
+            }
+        pub TAIL_REF -> (&'a str, i32) =
+            n:until(";" | "x") ";" => neg:"-"? "" w:dec<i32>(digit{1,2}) "" "." "" f:digit "" "x" -> {
+                let v = w * 10 + (f as i32 - '0' as i32);
+                (n, if neg.is_some() { -v } else { v })
+            }
+
+        // A run that ends in a literal that is not ASCII: the advance after it
+        // is the checked one.
+        pub WIDE_END -> (char, &'a str) = d:digit e:'é' -> { (d, e) }
+        pub WIDE_END_REF -> (char, &'a str) = d:digit "" e:'é' -> { (d, e) }
+
+        // `dec` at the widest bound that still fits, and one past it.
+        pub DEC_I64 -> i64 = "+" v:dec<i64>(digit{1,18}) -> { v }
+        pub DEC_U64 -> u64 = "+" v:dec<u64>(digit{1,20}) -> { v }
     }
+}
+
+grammar! {
+    grammar FixedB {
+        input bytes;
+        pub TAIL -> (&'a [u8], i32) =
+            n:until(";" | "x") ";" => neg:"-"? w:dec<i32>(digit{1,2}) "." f:digit "x" -> {
+                let v = w * 10 + (f as i32 - '0' as i32);
+                (n, if neg.is_some() { -v } else { v })
+            }
+    }
+}
+
+fn run_bytes<'a, O, P>(mut p: P, input: &'a [u8]) -> (Result<O, String>, usize)
+where
+    P: Parser<winnow_grammar::ParseBytes<'a, ()>, O, ParseError>,
+{
+    let mut stream = winnow_grammar::ParseBytes {
+        input: LocatingSlice::new(input),
+        state: ParseContext::<()>::default(),
+    };
+    let result = p.parse_next(&mut stream).map_err(|e| e.render(input));
+    (result, input.len() - stream.eof_offset())
 }
 
 fn run<'a, O, P>(mut p: P, input: &'a str) -> (Result<O, String>, usize)
@@ -148,6 +194,61 @@ fn dec_of_digits_that_may_not_fit_agrees() {
 }
 
 #[test]
+fn the_1brc_tail_agrees() {
+    agree!(parse_TAIL, parse_TAIL_REF);
+}
+
+#[test]
+fn a_run_ending_in_a_wide_literal_agrees() {
+    agree!(parse_WIDE_END, parse_WIDE_END_REF);
+}
+
+#[test]
+fn the_1brc_tail_yields_and_fails_where_the_elements_do() {
+    assert_eq!(run(Fixed::parse_TAIL(), "Hä;-12.3x").0, Ok(("Hä", -123)));
+    assert_eq!(run(Fixed::parse_TAIL(), "ä;4.5x"), (Ok(("ä", 45)), 7));
+    // Every place the fixed match can fail, with the message and the offset
+    // of the element-by-element parse.
+    for s in [
+        "ä;",
+        "ä;-",
+        "ä;-x",
+        "ä;1",
+        "ä;12",
+        "ä;123.4x",
+        "ä;1.",
+        "ä;1.x",
+        "ä;1.2",
+        "ä;1.2;",
+        "ä;--1.2x",
+        "ä;1.2xx",
+        "äx",
+    ] {
+        let fast = run(Fixed::parse_TAIL(), s);
+        assert!(fast.0.is_err(), "{s:?}: {fast:?}");
+        assert_eq!(fast, run(Fixed::parse_TAIL_REF(), s), "{s:?}");
+    }
+}
+
+#[test]
+fn dec_at_the_widest_bound_that_fits() {
+    assert_eq!(
+        run(Fixed::parse_DEC_I64(), "+999999999999999999").0,
+        Ok(999_999_999_999_999_999)
+    );
+    // Twenty digits may not fit a `u64`: `rt::dec` reads them, and says so.
+    assert_eq!(
+        run(Fixed::parse_DEC_U64(), "+18446744073709551615").0,
+        Ok(u64::MAX)
+    );
+    let overflow = run(Fixed::parse_DEC_U64(), "+18446744073709551616").0;
+    assert!(
+        overflow.as_ref().is_err_and(|e| e.contains("too large")),
+        "{overflow:?}"
+    );
+}
+
+#[test]
 fn dec_yields_the_number() {
     assert_eq!(run(Fixed::parse_DEC(), "-12.3").0, Ok(-123));
     assert_eq!(run(Fixed::parse_DEC(), "07.5").0, Ok(75));
@@ -174,4 +275,18 @@ fn the_values_are_the_elements_own() {
         Ok(("é", Some('1'), "23", "x"))
     );
     assert!(run(Fixed::parse_MIXED(), "é12x").0.is_err());
+}
+
+#[test]
+fn the_1brc_tail_over_bytes_agrees_with_text() {
+    for s in strings(&ALPHABET, 6) {
+        let text = run(Fixed::parse_TAIL(), &s);
+        let bytes = run_bytes(FixedB::parse_TAIL(), s.as_bytes());
+        assert_eq!(bytes.1, text.1, "{s:?}");
+        assert_eq!(
+            bytes.0.map(|(n, v)| (n.to_vec(), v)),
+            text.0.map(|(n, v)| (n.as_bytes().to_vec(), v)),
+            "{s:?}"
+        );
+    }
 }
