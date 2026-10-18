@@ -207,8 +207,14 @@ The `grammar!` macro expands into a Rust module containing:
 ### Input Type
 The generated parsers take `&str`: the input type is
 `winnow_grammar::ParseInput<'a, S>`, a `winnow` `LocatingSlice<&'a str>` carrying
-the shared `ParseContext`. A byte-oriented input type is not offered yet; the
-split primitive it would need, `rt::frames_bytes`, already works on `&[u8]`.
+the shared `ParseContext`. A grammar that declares `input bytes;` takes `&[u8]`
+instead - `winnow_grammar::ParseBytes<'a, S>`, the same context over a
+`LocatingSlice<&'a [u8]>` - and checks as UTF-8 only what it turns into text:
+`text(p)`, `intern(p)`, `raw_ident`, `string`, `char`. Literals and ASCII
+classes compare bytes and are not checked; `bytes(p)` and `until(t)` yield the
+bytes as they are. A byte that is not UTF-8 where text is made is a cut at its
+own offset, `invalid UTF-8 at byte N: 0xXX`. See *Byte input* in the syntax
+guide and ADR 25.
 
 If you use **Span Binding (`@`)**, your input type **must** implement `winnow::stream::Location`. The recommended type for this is `winnow::stream::LocatingSlice`.
 

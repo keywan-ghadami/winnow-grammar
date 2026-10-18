@@ -568,6 +568,27 @@
 
 ### Added
 
+- **A grammar over bytes: `input bytes;`** (ADR 25, #24). A grammar that
+  declares it reads `&[u8]` - every rule takes `ParseBytes<'a, S>`, the same
+  context over `LocatingSlice<&'a [u8]>`, and `frames_<rule>` and
+  `parse_<rule>_pieces` take `&[u8]` - and checks as UTF-8 only what becomes
+  text, where it becomes text: `text(p)`, `intern(p)` (only on an interner
+  miss: `Interner::lookup_bytes`, defaulted, overridden by the context's lookup
+  cache), and `raw_ident`, `string` and `char`, which decode with validation.
+  Literals, ASCII classes, the whitespace skip, frame boundaries and `eof`
+  compare bytes and are not checked; an ASCII class still yields `&'a str`.
+  New: `bytes(p)` (byte grammars only), the unchecked `&'a [u8]` a pattern
+  consumed; `until(t)`, literals and `any` yield bytes there. A bad byte is a
+  cut at its absolute offset, `invalid UTF-8 at byte N: 0xXX`, also across the
+  pieces of a `par_fold`; `ParseError::render` and `line_column` take text or
+  bytes and show bytes that are not UTF-8 lossily. A grammar without the
+  declaration generates what it generated before. The runtime's stepping and
+  recording helpers are generic over the slice (`rt::Slice`, `rt::Input`), the
+  ones that yield what they matched are written again over bytes in
+  `rt::bytes`. For an implementer: `ErrorCore` has a new field
+  (`invalid_utf8`), `Diagnostics` and `Interner` a new method each, both
+  defaulted. `tests/byte_input_test.rs`, `tests/ui/input.rs`.
+
 - **`Symbol` is `Ord`** (`PartialOrd`, `Ord`), so it can key a `BTreeMap` or `BTreeSet` without going through the resolved text. The order is the interner's first-seen order - not alphabetical, and not stable across interners or runs - so use it only where the iteration order is not observable, and sort by resolved text for output. `tests/symbol_ord_test.rs`.
 
 - **A run of nothing is answered before the word loop is entered** (`TODO.md` §5, now closed). `AsciiClass::run` scans eight bytes at a time, and it paid that whole setup - eight bytes read, a mask built, a count of trailing zeros divided - to report that the very *first* byte is not in the class. Testing that byte first costs 6 instructions where the run is real and saves 22 where it is not.

@@ -44,31 +44,6 @@ not two: whether a merge must remap is decided by *which interner* the context
 holds, along with whether it is shared and whether it must be thread-safe.
 Build them together, after that measurement.
 
-## 3. The byte driver
-
-`ParseInput<'a, S>` is `LocatingSlice<&'a str>`, so every generated parser
-takes `&str` and every built-in is written against it. A format that is not
-UTF-8 - a binary record, a length-prefixed field, a file whose encoding is the
-grammar's business rather than the reader's - has no way in.
-
-What already points that way: `rt::frames_bytes` cuts `&[u8]` and is what
-`rt::frames` is a `&str` view of (ADR 24 §4), so the piece machinery does not
-assume text. The character classes now match on bytes as well (ADR 23):
-`AsciiClass::run` takes a `&[u8]` and would carry over unchanged - only
-`raw_ident`'s decoded tail is about text at all. The error engine takes `I: Stream + Location + AsBStr`, which
-`&[u8]` satisfies. What does not: the `ParseInput` alias, the built-ins
-(`ident`, `digit1`, `string`, the character classes), `text(p)` and `intern(p)`
-yielding `&'a str`, and the whitespace rules.
-
-**Decided in ADR 25 (`input bytes;`), to build in #24.**
-
-The shape of the question was whether the input type becomes a parameter of the
-generated code - which would put it in every signature beside `S` and `E` - or
-whether a byte grammar is a second, narrower set of built-ins over a fixed
-`&[u8]` input. That is an ADR, and it should be written before anything is
-built: it decides how much of the language a byte grammar shares with a text
-one.
-
 ## 4. `count(p)` pays for keeping its count
 
 Three loops over 200_000 digits, element for element identical and differing

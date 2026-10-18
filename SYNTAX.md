@@ -504,6 +504,76 @@ cut (`=>`), which no enclosing alternative retries past. A failed *parse* is a
 different matter and is handled: under the default `Diagnose::Replay` the
 state is restored before the diagnosing pass, so an action runs once.
 
+## Byte input: `input bytes;`
+
+A grammar reads text unless it says otherwise. One that declares `input
+bytes;` reads `&[u8]` - a binary format, or a text format that arrives as
+bytes nobody has checked - and checks as UTF-8 only what it turns into text,
+where it turns it into text (ADR 25):
+
+```rust,ignore
+grammar! {
+    grammar Stations {
+        input bytes;
+
+        #[frame(boundary = "\n")]
+        pub ROW -> (&'a str, i32) =
+            name:text(until(";" | frame_end)) ";" t:dec<i32>(digit{1,2}) "\n" -> { (name, t) }
+    }
+}
+```
+
+The declaration sits beside `state T;` and `interner I;`, at most once per
+grammar. Every rule then takes `ParseBytes<'a, S>`
+(`Stateful<LocatingSlice<&'a [u8]>, ParseContext<S>>`) in place of
+`ParseInput<'a, S>`, and `frames_<rule>` and `parse_<rule>_pieces` take
+`&'a [u8]`. The context, the state, the interner, the diagnose modes and the
+frames are the same as in a text grammar, and so is everything else on this
+page; what differs is what some patterns yield:
+
+| Pattern | Text grammar | Byte grammar |
+| :--- | :--- | :--- |
+| a literal, `line_ending`, `frame_end` | `&'a str` | `&'a [u8]` |
+| `until(t)`, a character loop `(not(t) any)*` | `&'a str` | `&'a [u8]`, unchecked |
+| `bytes(p)` | rejected | `&'a [u8]`: what `p` consumed, unchecked |
+| `text(p)` | `&'a str` | `&'a str`, **checked** as UTF-8 |
+| `intern(p)`, `ident` | `Symbol` | `Symbol`, checked on an interner miss |
+| `alpha1`, `digit1`, `space0`, …, `digit{n,m}` | `&'a str` | `&'a str`: ASCII, text by construction |
+| `raw_ident`, `string`, `char` | decoded | decoded **with validation** |
+| `any` | `char` | `u8`, one byte |
+| `dec<T>(p)`, `u8` … `f64`, `bool`, `eof` | the value | the value |
+
+**What is compared is not checked.** A literal, an ASCII class, the whitespace
+skip, a frame boundary and `eof` compare bytes, and nothing they accept can be
+invalid UTF-8; they cost what they cost in a text grammar. An ASCII class
+still yields `&'a str`. A run of digits and the text under `dec<T>(p)` are
+turned into text with one `is_ascii` over their few bytes. **What becomes
+text is checked where it becomes text**: `text(until(";"))` is how a name read
+from bytes becomes a `&str`. A grammar that wants the bytes writes `bytes(…)`
+instead.
+
+**Interning checks only what it has not seen.** `intern(p)` asks the interner
+first; a name it already holds came from a `&str` and is not checked again. On
+the context's interner that is a hit in its lookup cache. A declared interner
+answers through `Interner::lookup_bytes`, whose default checks and interns -
+correct for every interner; one that can look bytes up itself overrides it and
+answers `None` for what it does not hold.
+
+**A bad byte is a hard error at its own offset.** It is a cut, not a
+backtrack - no alternative that reads the same bytes as text can succeed - and
+the message names the byte:
+
+```text
+invalid UTF-8 at byte 6: 0xff at line 2, column 3
+   2 | ab�c;
+         ^
+```
+
+`ParseError::render` and `line_column` take the input as text or as bytes;
+over bytes that are not UTF-8 they count lines in `\n` bytes and show the line
+lossily, the bad byte as `U+FFFD`. Under `par_fold` the offset is the byte's in
+the whole input, whichever piece found it.
+
 ## Hand-written Parsers: `extern rule`
 
 A parser that is easier to write in Rust than in the DSL - a scanner of your

@@ -1,6 +1,7 @@
 # ADR 25: A Grammar Over Bytes - `input bytes;`, and Only What Becomes Text Is Checked
 
-**Status:** Accepted, not yet built. **Date:** 2026-10-18.
+**Status:** Accepted, implemented (#24). **Date:** 2026-10-18.
+**Tests:** `tests/byte_input_test.rs`, `tests/ui/input.rs`.
 **Raised by:** TODO §3 ("The byte driver"), and
 [Nikaia#422](https://github.com/Nikaia-Foundation/Nikaia/issues/422), which
 needs a backend that reads bytes before Nikaia can decide what one of its views
