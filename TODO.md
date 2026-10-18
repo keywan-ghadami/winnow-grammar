@@ -60,7 +60,9 @@ assume text. The character classes now match on bytes as well (ADR 23):
 (`ident`, `digit1`, `string`, the character classes), `text(p)` and `intern(p)`
 yielding `&'a str`, and the whitespace rules.
 
-The shape of the question is whether the input type becomes a parameter of the
+**Decided in ADR 25 (`input bytes;`), to build in #24.**
+
+The shape of the question was whether the input type becomes a parameter of the
 generated code - which would put it in every signature beside `S` and `E` - or
 whether a byte grammar is a second, narrower set of built-ins over a fixed
 `&[u8]` input. That is an ADR, and it should be written before anything is
