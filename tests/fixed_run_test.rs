@@ -80,6 +80,39 @@ grammar! {
         // `dec` at the widest bound that still fits, and one past it.
         pub DEC_I64 -> i64 = "+" v:dec<i64>(digit{1,18}) -> { v }
         pub DEC_U64 -> u64 = "+" v:dec<u64>(digit{1,20}) -> { v }
+
+        // ADR 24 §8d: 1BRC's line, whose run from the `;` to the frame's end
+        // takes in the elements of the rule it calls, `T10` - and the same
+        // with `""` in the rule, which is then no run and is called.
+        pub T10 -> i32 =
+            neg:"-"? whole:dec<i32>(digit{1,2}) "." frac:digit -> {
+                let value = <i32>::wrapping_add(<i32>::wrapping_mul(whole, 10), frac as i32 - '0' as i32);
+                if neg.is_some() { <i32>::wrapping_neg(value) } else { value }
+            }
+        #[frame(boundary = "\n")]
+        pub ROW -> (&'a str, i32) =
+            name:until(";" | frame_end) ";" => temp:T10 frame_end -> { (name, temp) }
+        pub T10_REF -> i32 =
+            neg:"-"? "" whole:dec<i32>(digit{1,2}) "." frac:digit -> {
+                let value = <i32>::wrapping_add(<i32>::wrapping_mul(whole, 10), frac as i32 - '0' as i32);
+                if neg.is_some() { <i32>::wrapping_neg(value) } else { value }
+            }
+        #[frame(boundary = "\n")]
+        pub ROW_REF -> (&'a str, i32) =
+            name:until(";" | frame_end) ";" => temp:T10_REF frame_end -> { (name, temp) }
+
+        // A call nobody binds, whose rule binds nothing: the rule's action
+        // still runs, here counting into the context's rule stack - which
+        // it reads, not changes, in the fast pass.
+        UNIT -> () = "-" digit -> { let _ = _state.rules.len(); }
+        pub CALLS -> char = UNIT "." d:digit UNIT -> { d }
+        UNIT_REF -> () = "-" "" digit -> { let _ = _state.rules.len(); }
+        pub CALLS_REF -> char = UNIT_REF "" "." d:digit UNIT_REF -> { d }
+
+        // A rule with an alternative is called, not taken in.
+        SIGN -> bool = "-" -> { true } | "+" -> { false }
+        pub ALT -> (bool, char) = ";" s:SIGN d:digit -> { (s, d) }
+        pub ALT_REF -> (bool, char) = ";" "" s:SIGN "" d:digit -> { (s, d) }
     }
 }
 
@@ -289,4 +322,70 @@ fn the_1brc_tail_over_bytes_agrees_with_text() {
             "{s:?}"
         );
     }
+}
+
+/// Every string of up to six characters, and each with the frame's end
+/// after it.
+fn rows() -> Vec<String> {
+    let mut out = strings(&ALPHABET, 6);
+    let ended: Vec<String> = out.iter().map(|s| format!("{s}\n")).collect();
+    out.extend(ended);
+    out
+}
+
+#[test]
+fn a_run_that_takes_in_a_called_rule_agrees() {
+    for s in rows() {
+        assert_eq!(
+            run(Fixed::parse_ROW(), &s),
+            run(Fixed::parse_ROW_REF(), &s),
+            "ROW and ROW_REF disagree on {s:?}"
+        );
+    }
+}
+
+#[test]
+fn the_taken_in_rule_yields_and_fails_where_its_call_did() {
+    assert_eq!(
+        run(Fixed::parse_ROW(), "Hä;-12.3\n"),
+        (Ok(("Hä", -123)), 10)
+    );
+    // Inside the temperature the error is the called rule's, at its offset.
+    for s in [
+        "ä;",
+        "ä;-",
+        "ä;1",
+        "ä;12",
+        "ä;123.4\n",
+        "ä;1.",
+        "ä;1.x\n",
+        "ä;--1.2\n",
+    ] {
+        let fast = run(Fixed::parse_ROW(), s);
+        let message = fast.0.clone().unwrap_err();
+        assert!(message.contains("T10"), "{s:?}: {message}");
+        assert_eq!(fast, run(Fixed::parse_ROW_REF(), s), "{s:?}");
+    }
+    // After it, the frame's end.
+    for s in ["ä;1.2", "ä;1.2x", "ä;1.23\n"] {
+        let fast = run(Fixed::parse_ROW(), s);
+        assert!(fast.0.is_err(), "{s:?}: {fast:?}");
+        assert_eq!(fast, run(Fixed::parse_ROW_REF(), s), "{s:?}");
+    }
+}
+
+#[test]
+fn a_published_rule_taken_in_is_still_callable_on_its_own() {
+    assert_eq!(run(Fixed::parse_T10(), "-12.3"), (Ok(-123), 5));
+    agree!(parse_T10, parse_T10_REF);
+}
+
+#[test]
+fn an_unbound_call_of_a_rule_that_binds_nothing_agrees() {
+    agree!(parse_CALLS, parse_CALLS_REF);
+}
+
+#[test]
+fn a_call_of_a_rule_with_an_alternative_agrees() {
+    agree!(parse_ALT, parse_ALT_REF);
 }

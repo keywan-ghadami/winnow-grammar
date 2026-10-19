@@ -5,6 +5,18 @@
 
 ### Performance
 
+- **A run takes in a small rule of fixed shape it calls** (ADR 24 §8d): where
+  a lexical sequence calls a rule whose whole body is one run of fixed-shape
+  elements (one alternative, no call of its own, no parameters or span, an
+  action without `return`, `?` or a macro), the rule's elements stand in the
+  call's place in the caller's run and its action runs on what they bound. A
+  `=>` between two elements and a `frame_end` resolved to a literal now join a
+  run too, so 1BRC's `";" => TENTHS frame_end` is one run. The called rule
+  keeps its own parser; a mismatch and the diagnosing pass call it as
+  written, so an error inside it names it, at the same offset with the same
+  message. Nikaia's `examples/1brc.nika`, callgrind over 1 M rows: 239.3 →
+  232.1 instructions and 1.08 → 1.06 mispredictions per row.
+
 - **Cuts at a known boundary are not checked** (ADR 24 §12a): `rt::rest`,
   `lit_byte`, `digit`, the cut at a scan's hit, `advance` after an indexed
   run and the text of a one-byte literal it binds cut the input without the

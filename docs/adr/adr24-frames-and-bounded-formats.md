@@ -1,8 +1,7 @@
 # ADR 24: Frames — Parsing an Input in Pieces, and What a Bounded Format Buys the Parser
 
 **Status:** Accepted. Part I is in force as implemented; Part II §8, §8a,
-§8c, §12, §12a and §12b are implemented, §8d is decided (2026-10-19) and not
-yet built, §9 was measured and rejected, and
+§8c, §8d, §12, §12a and §12b are implemented, §9 was measured and rejected, and
 §8b's rejection is superseded by §8c. **Date:** 2026-10-18.
 **Supersedes:** ADR 16, now withdrawn. Everything of it that still holds is
 here, brought up to date (§2 and §3 had drifted from the code). Its sections 1
@@ -11,7 +10,8 @@ to 5 keep their numbers, so a reference to "ADR 16 §4" in the history reads as
 **Tests:** `tests/frames_test.rs` (the split, split + parse + merge against the
 sequential parse, the driver), `tests/ui/frames.rs` (what the check rejects),
 `tests/fixed_run_test.rs` (§8: the indexed match against the element-by-element
-parse on every string up to six characters, `dec<T>` included),
+parse on every string up to six characters, `dec<T>` included; §8d: a run
+that takes in a called rule, against the same rule called),
 `tests/lit_byte_test.rs` (§8a: every rule run with and without the fast pass,
 on every string up to six characters), `tests/scan_cut_test.rs` (§12-§12b:
 the scans against the position-by-position path, over text and bytes, short
@@ -407,6 +407,29 @@ grammar's author or a parse's caller can observe.
 match by index, so the run stays a fixed number of byte tests with one
 advance. A rule with an alternative, a repetition without a bound or a call of
 its own is a parser, not a shape, and is called.
+
+**As built** (`codegen/fixed.rs`). A rule is taken in when it is lexical, has
+one alternative and no parameters, generics or span, every element of its body
+is one of §8's (a `=>` included), and its action cannot leave early or see
+what only its own function has: no `return`, no `?`, no macro, which might
+hide either, no `_span`, no input. Any other rule is called, as before. The
+action runs with the context as `_state`, as in its own function, and only
+after the whole run matched - so a mismatch behind the call, when the
+elements run as written, leaves nothing done twice. Two elements join a run
+on the way: a `=>` between two elements, which matches nothing and which the
+elements as written carry, and `frame_end` where the frame check resolved it
+to a literal - the frame boundary, compared like any other (§8a).
+`tests/fixed_run_test.rs` holds 1BRC's line `name:until(";" | frame_end) ";"
+=> temp:T10 frame_end` to the same line calling a copy of `T10` that is no
+run, on every string of up to six characters with and without the frame's
+end after it: same value, same length consumed, same rendered error, and a
+failure inside the temperature names `T10`. `T10` is still callable on its
+own and agrees with its copy; a rule with an alternative, a call or an action
+that may leave early is called (the generator's own tests).
+
+**Measured** (1 M rows, callgrind, the setup of §8c): 239.3 → **232.1**
+instructions per row, mispredictions 1.08 → **1.06**, the output byte for
+byte the same - what the hand-written variant of §8c came to (232.2).
 
 ## 9. One search per input instead of one per frame — measured, rejected
 
