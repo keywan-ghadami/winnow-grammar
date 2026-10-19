@@ -1,7 +1,8 @@
 # ADR 24: Frames — Parsing an Input in Pieces, and What a Bounded Format Buys the Parser
 
 **Status:** Accepted. Part I is in force as implemented; Part II §8, §8a,
-§8c, §12, §12a and §12b are implemented, §9 was measured and rejected, and
+§8c, §12, §12a and §12b are implemented, §8d is decided (2026-10-19) and not
+yet built, §9 was measured and rejected, and
 §8b's rejection is superseded by §8c. **Date:** 2026-10-18.
 **Supersedes:** ADR 16, now withdrawn. Everything of it that still holds is
 here, brought up to date (§2 and §3 had drifted from the code). Its sections 1
@@ -306,8 +307,8 @@ function; the numbers in §8a and §8b are taken without (§10).
 
 It stays because it costs nothing at run time that it does not repay, removes
 work rather than moving it, and the rule it applies is local — a run of
-elements in one sequence, decided from those elements alone. The generated
-parser of a rule still depends on nothing outside that rule.
+elements in one sequence, decided from those elements alone. Which rule a run
+may reach into is §8d's.
 
 ## 8a. A one-byte literal is compared as a byte
 
@@ -373,8 +374,39 @@ one it does not, and the written-out digits cost less than the loop.
 mispredictions 1.58 → **1.08**. Across §12a, §12b and §8c: 273.4 → 239.4
 (−12 %), 1.58 → 1.08. A hand-written variant that also took the `";"`
 before the temperature and the `"\n"` after it into one run - across the
-call of the `TENTHS` rule - came to 232.2; that would make a rule's generated
-parser depend on the rule it calls, which §8 rules out, and is not done.
+call of the `TENTHS` rule - came to 232.2. §8d decides it.
+
+## 8d. A run reaches into a small rule of fixed shape it calls
+
+**Decision.** Where a sequence calls a rule whose whole body is one run of
+§8's elements - one alternative, no recursion, no rule call of its own, a
+bounded width - the call is an element of the caller's run: the callee's
+elements stand in its place, and its action runs on the values they bind, as
+the call would have run it. `MEASUREMENT`'s `";" => TENTHS frame_end` is then
+one run, from the `;` to the line's end.
+
+**What a rule must keep, and keeps.** Two things are what a rule is for, and
+neither depends on where its code is written:
+
+1. *A published rule is callable on its own.* `pub rule TENTHS` keeps its own
+   entry, generated as before; a caller taking its elements into a run does
+   not remove or change it.
+2. *A diagnosis names the rule.* A mismatch anywhere in the run runs the
+   elements as written, the call of `TENTHS` included, and the diagnosing pass
+   never takes the run (§8, 1 and 2): an error inside the temperature is
+   reported in `TENTHS`, at the same offset and with the same message as
+   before.
+
+What is given up is the narrower claim §8 kept until here, that a rule's
+generated code depends on nothing outside the rule: a change to `TENTHS` now
+changes the code generated for a rule that calls it. That is the trade every
+compiler makes when it inlines a small function, and it changes nothing a
+grammar's author or a parse's caller can observe.
+
+**Why only a rule of fixed shape.** It is the case §8 already knows how to
+match by index, so the run stays a fixed number of byte tests with one
+advance. A rule with an alternative, a repetition without a bound or a call of
+its own is a parser, not a shape, and is called.
 
 ## 9. One search per input instead of one per frame — measured, rejected
 
