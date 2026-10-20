@@ -141,7 +141,11 @@ pub fn ascii_at(s: &str, at: usize) -> &str {
 /// made unchecked when the byte before it is ASCII, which LLVM sees from the
 /// compare it just made. Anything else (a run ending in a literal that is not
 /// ASCII, or a caller with an arbitrary `n`) takes winnow's checked cut.
-#[inline]
+///
+/// Always inlined: which codegen unit rustc puts it in decided whether LLVM
+/// inlined it into a run's hot loop, and with it the compare it needs to see
+/// (Nikaia's 1BRC: 244.0 -> 235.0 instructions a row at one unit).
+#[inline(always)]
 pub fn advance<S: Clone + std::fmt::Debug>(input: &mut ParseInput<'_, S>, n: usize) {
     if n > 0 && rest(input).as_bytes().get(n - 1).is_some_and(u8::is_ascii) {
         // SAFETY: byte `n - 1` exists and is ASCII, so `n` is just after an

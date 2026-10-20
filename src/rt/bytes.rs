@@ -130,8 +130,9 @@ unsafe fn take_in_bounds<'a, S: Clone + std::fmt::Debug>(
     unsafe { input.next_slice_unchecked(n) }
 }
 
-/// Consume `n` bytes that [`rest`] showed to be matched.
-#[inline]
+/// Consume `n` bytes that [`rest`] showed to be matched. Always inlined, as
+/// [`super::advance`] is.
+#[inline(always)]
 pub fn advance<S: Clone + std::fmt::Debug>(input: &mut ParseBytes<'_, S>, n: usize) {
     input.next_slice(n);
 }
