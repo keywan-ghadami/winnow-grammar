@@ -3,6 +3,22 @@
 
 ## [0.1.0] - Unreleased
 
+### Parallelism
+
+- **`par_fold` pieces are claimed while the work runs** (Nikaia ADR-372 D4,
+  D5, D8): `Parallelism::Claimed { piece, order }` cuts the input near every
+  `piece` bytes, each piece repairing its start to just past the first
+  boundary at or after it, and makes each piece a rayon job of its own, so a
+  worker that is done takes the next and a slow core holds back only its
+  piece. `rt::Order::Kept` merges the results in input order;
+  `rt::Order::Any` merges them into one result per worker as pieces end, for
+  a merge that also commutes. `Pieces(n)` and `Auto` run their pieces the
+  same way. Every piece is parsed; when several fail, the first one's error
+  is returned, under either order. A piece left empty by a frame longer than
+  it is not parsed. The pieces run on rayon's current pool, so a caller
+  bounds the workers with `ThreadPool::install`; the merge now has to be
+  `Sync`.
+
 ### Performance
 
 - **A run takes in a small rule of fixed shape it calls** (ADR 24 §8d): where

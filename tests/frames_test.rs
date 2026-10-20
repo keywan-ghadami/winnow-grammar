@@ -480,6 +480,63 @@ fn the_driver_reports_a_piece_error_at_its_offset_in_the_whole_input() {
     }
 }
 
+/// **Pieces claimed while the work runs** agree with the sequential parse at
+/// every piece size and under either order, the empty input included.
+#[test]
+fn claimed_pieces_agree_with_the_sequential_parse_at_both_orders() {
+    use winnow_grammar::rt::Order;
+    let input = sample_input(5_000);
+    let expected = parse_sequential(&input);
+    for order in [Order::Kept, Order::Any] {
+        for piece in [0, 1, 7, 64, 4096, 1 << 30] {
+            let how = Parallelism::Claimed { piece, order };
+            let got = Measurements::parse_FILE_pieces(&input, &ParseContext::<()>::default(), how)
+                .unwrap_or_else(|e| panic!("{how:?}: {}", e.render(&input)));
+            assert_eq!(got, expected, "{how:?}");
+            let empty = Measurements::parse_FILE_pieces("", &ParseContext::<()>::default(), how)
+                .unwrap_or_else(|e| panic!("{how:?}: {}", e.render("")));
+            assert_eq!(empty, parse_sequential(""), "{how:?}");
+        }
+    }
+    assert_eq!(
+        Parallelism::Claimed {
+            piece: 64,
+            order: Order::Kept
+        }
+        .pieces_of(1000),
+        16
+    );
+    assert_eq!(Parallelism::Off.pieces_of(1000), 1);
+    assert_eq!(Order::default(), Order::Kept);
+}
+
+/// **The failure reported is the first in the input** whatever the order and
+/// however the pieces fall: two broken lines far apart, and the error is the
+/// one a parse in one go reports.
+#[test]
+fn claimed_pieces_report_the_first_failure_in_the_input() {
+    use winnow_grammar::rt::Order;
+    let mut input = sample_input(3_000);
+    let lines: Vec<&str> = input.lines().collect();
+    let mut broken: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    broken[1_000] = "Hamburg;x.0".to_owned();
+    broken[2_500] = "Berlin;y.0".to_owned();
+    input = broken.join("\n") + "\n";
+    let sequential =
+        Measurements::parse_FILE_pieces(&input, &ParseContext::<()>::default(), Parallelism::Off)
+            .expect_err("two lines are broken")
+            .render(&input);
+    assert!(sequential.contains("line 1001"), "{sequential}");
+    for order in [Order::Kept, Order::Any] {
+        for piece in [1, 64, 4096, 1 << 30] {
+            let how = Parallelism::Claimed { piece, order };
+            let err = Measurements::parse_FILE_pieces(&input, &ParseContext::<()>::default(), how)
+                .expect_err("two lines are broken");
+            assert_eq!(err.render(&input), sequential, "{how:?}");
+        }
+    }
+}
+
 #[test]
 fn parallelism_off_is_one_piece_and_auto_is_the_core_count() {
     assert_eq!(Parallelism::Off.pieces(), None);

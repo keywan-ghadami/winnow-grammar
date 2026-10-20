@@ -347,13 +347,37 @@ pub enum Parallelism {
     /// One piece per available core (`std::thread::available_parallelism`).
     #[default]
     Auto,
+    /// Pieces cut near every `piece` bytes, as many as the input's length
+    /// asks for, each claimed by a worker while the work runs; `order` says
+    /// how their results are merged.
+    Claimed {
+        /// The size a piece is cut near, in bytes; `0` is read as `1`.
+        piece: usize,
+        /// Whether the results are merged in input order.
+        order: Order,
+    },
+}
+
+/// **How the results of a claimed parse are merged**: `Kept` in input order,
+/// so the answer is the sequential parse's wherever the merge is associative;
+/// `Any` into one result per worker, in whatever order the pieces end, for a
+/// merge that also commutes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Order {
+    /// Results merged in input order.
+    #[default]
+    Kept,
+    /// One result per worker, pieces merged into it as they end.
+    Any,
 }
 
 impl Parallelism {
-    /// The number of pieces this asks for; `None` for [`Parallelism::Off`].
+    /// The number of pieces this asks for; `None` for [`Parallelism::Off`],
+    /// and for [`Parallelism::Claimed`], whose count follows from the input's
+    /// length ([`Parallelism::pieces_of`]).
     pub fn pieces(self) -> Option<usize> {
         match self {
-            Parallelism::Off => None,
+            Parallelism::Off | Parallelism::Claimed { .. } => None,
             Parallelism::Pieces(n) => Some(n.max(1)),
             Parallelism::Auto => Some(
                 std::thread::available_parallelism()
@@ -362,20 +386,91 @@ impl Parallelism {
             ),
         }
     }
+
+    /// The number of pieces an input of `len` bytes is cut into: `1` for
+    /// [`Parallelism::Off`] and for empty input.
+    pub fn pieces_of(self, len: usize) -> usize {
+        match self {
+            Parallelism::Claimed { piece, .. } => len.div_ceil(piece.max(1)).max(1),
+            other => other.pieces().unwrap_or(1),
+        }
+    }
+
+    /// Where piece `k` of `count` is cut near, before its seam is repaired.
+    fn nominal(self, len: usize, count: usize, k: usize) -> usize {
+        match self {
+            Parallelism::Claimed { piece, .. } => k.saturating_mul(piece.max(1)).min(len),
+            // `len * k` in `usize` would overflow before `len` does on a
+            // 32-bit target; the quotient itself is at most `len`.
+            _ => ((len as u128 * k as u128) / count.max(1) as u128) as usize,
+        }
+    }
+
+    /// How the results are merged: `Kept` but where [`Parallelism::Claimed`]
+    /// says otherwise.
+    #[cfg_attr(not(feature = "rayon"), allow(dead_code))]
+    fn order(self) -> Order {
+        match self {
+            Parallelism::Claimed { order, .. } => order,
+            _ => Order::Kept,
+        }
+    }
+}
+
+/// Where a piece cut near `at` begins: just past the first `boundary` at or
+/// after `at` - the seam repair - the start for `0`, the end where none
+/// follows.
+fn repaired(input: &[u8], boundary: &[u8], at: usize) -> usize {
+    if at == 0 {
+        return 0;
+    }
+    if at >= input.len() {
+        return input.len();
+    }
+    let tail: &[u8] = &input[at..];
+    tail.find_slice(boundary)
+        .map_or(input.len(), |r| at + r.end)
+}
+
+/// The byte range of piece `k` of `count`: from its own repaired start to the
+/// next piece's.
+fn piece_range(
+    input: &[u8],
+    boundary: &[u8],
+    how: Parallelism,
+    count: usize,
+    k: usize,
+) -> std::ops::Range<usize> {
+    let len = input.len();
+    let start = repaired(input, boundary, how.nominal(len, count, k));
+    let end = if k + 1 >= count {
+        len
+    } else {
+        repaired(input, boundary, how.nominal(len, count, k + 1))
+    };
+    start..end.max(start)
 }
 
 /// The driver behind `parse_<rule>_pieces` on a `par_fold` rule: cut `input`
 /// at `boundary` into the pieces `how` asks for, parse each under a context
-/// from `new_context`, and fold the results with `merge`, first piece first.
-/// A piece's error is shifted to its offset in `input`, so it renders against
-/// the whole input; when several pieces fail, the first one's error is the
-/// one returned.
+/// from `new_context`, and fold the results with `merge`. A piece's error is
+/// shifted to its offset in `input`, so it renders against the whole input.
+///
+/// **Pieces are claimed while the work runs**: each is a job of its own, and a
+/// worker that is done takes the next, so a slow core holds back only the
+/// piece it is on. A piece starts just past the first boundary at or after
+/// where it is cut, so every frame lies in exactly one piece; a piece left
+/// empty by a frame longer than it is not parsed.
+///
+/// **The failure reported is the first in the input**, under either order:
+/// every piece is parsed, and of the failing pieces the first one's error is
+/// returned - the one a parse in one go stops at.
 ///
 /// `fast` and `diagnose` are the rule's parser instantiated with `EmptyError`
 /// and with [`ParseError`]; each piece goes through [`entry_framed`], so a
 /// failing piece is diagnosed from the item its fast pass stopped in.
 ///
-/// With the `rayon` feature the pieces are parsed on rayon's global pool;
+/// With the `rayon` feature the pieces are parsed on rayon's current pool;
 /// without it, in sequence - the same cut and the same answer, which is what
 /// lets a test check the split without threads.
 #[cfg(not(feature = "rayon"))]
@@ -409,8 +504,8 @@ where
 }
 
 /// See the sequential definition; this one runs the pieces on rayon's
-/// global pool. Configure that pool (`rayon::ThreadPoolBuilder`) to bound
-/// the threads; `Parallelism` bounds the pieces.
+/// current pool - the global one, or the one it is called in
+/// (`ThreadPool::install`), which is how a caller bounds the workers.
 #[cfg(feature = "rayon")]
 pub fn fold_pieces<B, S, T, F, D, M, C>(
     input: B,
@@ -428,30 +523,106 @@ where
     B: Slice + Sync,
     F: Fn(&mut Input<B, S>) -> Result<T, ErrMode<EmptyError>> + Sync,
     D: Fn(&mut Input<B, S>) -> Result<T, ErrMode<ParseError>> + Sync,
-    M: Fn(T, T) -> T,
+    M: Fn(T, T) -> T + Sync,
 {
     use rayon::prelude::*;
-    let ranges = piece_ranges(input.as_bstr(), boundary, how);
-    let results: Vec<Result<T, ParseError>> = ranges
-        .into_par_iter()
-        .map(|r| parse_piece(input.clone(), r, &new_context, &fast, &diagnose))
-        .collect();
-    let mut acc: Option<T> = None;
-    for res in results {
-        let v = res?;
-        acc = Some(match acc {
-            Some(a) => merge(a, v),
-            None => v,
-        });
+    use std::sync::Mutex;
+
+    let bytes = input.as_bstr();
+    let count = match how {
+        Parallelism::Off => 1,
+        _ => how.pieces_of(bytes.len()),
+    };
+    if count == 1 || bytes.is_empty() {
+        return parse_piece(
+            input.clone(),
+            0..bytes.len(),
+            &new_context,
+            &fast,
+            &diagnose,
+        );
     }
-    Ok(acc.expect("at least one piece"))
+    let one = |k: usize| -> Option<(usize, Result<T, ParseError>)> {
+        let range = piece_range(bytes, boundary.as_bytes(), how, count, k);
+        if range.is_empty() {
+            return None;
+        }
+        let start = range.start;
+        Some((
+            start,
+            parse_piece(input.clone(), range, &new_context, &fast, &diagnose),
+        ))
+    };
+    let claims = (0..count).into_par_iter().with_max_len(1);
+    match how.order() {
+        // **Merged in input order**: rayon's `reduce_with` joins neighbours,
+        // and the earlier of two failures wins.
+        Order::Kept => claims
+            .filter_map(one)
+            .map(|(_, parsed)| parsed)
+            .reduce_with(|a, b| match (a, b) {
+                (Ok(a), Ok(b)) => Ok(merge(a, b)),
+                (Err(e), _) | (Ok(_), Err(e)) => Err(e),
+            })
+            .expect("input that is not empty has a piece that is not"),
+        // **One result per worker**: a piece's result is merged into the slot
+        // of the thread that parsed it, with no lock held while `merge` runs.
+        Order::Any => {
+            let threads = rayon::current_num_threads().max(1);
+            let slots: Vec<Mutex<Option<T>>> = (0..threads).map(|_| Mutex::new(None)).collect();
+            let first: Mutex<Option<(usize, ParseError)>> = Mutex::new(None);
+            claims.for_each(|k| match one(k) {
+                None => {}
+                Some((start, Err(e))) => {
+                    let mut first = first.lock().unwrap_or_else(|p| p.into_inner());
+                    if first.as_ref().is_none_or(|(at, _)| start < *at) {
+                        *first = Some((start, e));
+                    }
+                }
+                Some((_, Ok(mut v))) => {
+                    let slot = &slots[rayon::current_thread_index().unwrap_or(0) % threads];
+                    loop {
+                        let before = {
+                            let mut put = slot.lock().unwrap_or_else(|p| p.into_inner());
+                            match put.take() {
+                                Some(before) => before,
+                                None => {
+                                    *put = Some(v);
+                                    break;
+                                }
+                            }
+                        };
+                        v = merge(before, v);
+                    }
+                }
+            });
+            if let Some((_, e)) = first.into_inner().unwrap_or_else(|p| p.into_inner()) {
+                return Err(e);
+            }
+            Ok(slots
+                .into_iter()
+                .filter_map(|m| m.into_inner().unwrap_or_else(|p| p.into_inner()))
+                .reduce(&merge)
+                .expect("input that is not empty has a piece that is not"))
+        }
+    }
 }
 
+/// The byte ranges of the pieces `how` cuts `input` into that are not empty,
+/// in input order; empty input is one empty piece.
+#[cfg(not(feature = "rayon"))]
 fn piece_ranges(input: &[u8], boundary: &str, how: Parallelism) -> Vec<std::ops::Range<usize>> {
-    match how.pieces() {
-        None => std::iter::once(0..input.len()).collect(),
-        Some(n) => frames_bytes(input, boundary.as_bytes(), n),
+    let count = match how {
+        Parallelism::Off => 1,
+        _ => how.pieces_of(input.len()),
+    };
+    if count == 1 || input.is_empty() {
+        return vec![0..input.len()];
     }
+    (0..count)
+        .map(|k| piece_range(input, boundary.as_bytes(), how, count, k))
+        .filter(|r| !r.is_empty())
+        .collect()
 }
 
 fn parse_piece<B, S, T, F, D, C>(
