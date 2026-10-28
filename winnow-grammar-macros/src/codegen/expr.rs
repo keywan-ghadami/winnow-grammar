@@ -4,6 +4,59 @@ use quote::{quote, quote_spanned};
 use std::collections::HashMap;
 use winnow_grammar_model::model::{Argument, ModelPattern};
 
+/// The widest tuple winnow implements `Alt` for.
+const ALT_MAX: usize = 9;
+/// The widest tuple winnow implements `Parser` for.
+const SEQ_MAX: usize = 11;
+
+/// `alt((…))` over any number of alternatives. winnow 1.0 implements `Alt` for
+/// at most nine, so a wider choice is nested, nine at a time, in order: the
+/// first that succeeds is still the first written.
+pub(crate) fn alt_of(alts: Vec<TokenStream>) -> TokenStream {
+    let span = Span::mixed_site();
+    if alts.len() <= ALT_MAX {
+        return quote_spanned! {span=> ::winnow::combinator::alt(( #(#alts),* )) };
+    }
+    let groups = alts
+        .chunks(ALT_MAX)
+        .map(|c| match c {
+            [one] => one.clone(),
+            _ => quote_spanned! {span=> ::winnow::combinator::alt(( #(#c),* )) },
+        })
+        .collect();
+    alt_of(groups)
+}
+
+/// The tuple of a sequence, `(p0, p1, …)`. winnow 1.0 implements `Parser` for
+/// tuples of at most eleven; a longer sequence is a closure that runs the
+/// parsers in turn and yields the same flat tuple.
+fn seq_of(parsers: Vec<TokenStream>, input_ty: &TokenStream) -> TokenStream {
+    let span = Span::mixed_site();
+    if parsers.len() <= SEQ_MAX {
+        return quote_spanned! {span=> ( #(#parsers),* ) };
+    }
+    let ps: Vec<syn::Ident> = (0..parsers.len())
+        .map(|n| syn::Ident::new(&format!("__p{n}"), span))
+        .collect();
+    let os: Vec<syn::Ident> = (0..parsers.len())
+        .map(|n| syn::Ident::new(&format!("__o{n}"), span))
+        .collect();
+    quote_spanned! {span=>
+        {
+            #( let mut #ps = #parsers; )*
+            move |i: &mut #input_ty| {
+                #(
+                    let #os = match ::winnow::Parser::parse_next(&mut #ps, i) {
+                        ::core::result::Result::Ok(o) => o,
+                        ::core::result::Result::Err(e) => return ::core::result::Result::Err(e),
+                    };
+                )*
+                ::core::result::Result::Ok(( #(#os),* ))
+            }
+        }
+    }
+}
+
 pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::Ident>) {
     match pattern {
         ModelPattern::RuleCall { binding, .. } => *binding = new_binding,
@@ -1489,7 +1542,7 @@ impl<'a> Codegen<'a> {
                         .iter()
                         .map(|(seq, _, _)| self.generate_sequence_parser(seq, is_lexical))
                         .collect();
-                    quote_spanned! {span=> alt(( #(#alts),* )) }
+                    alt_of(alts)
                 }
             }
             ModelPattern::Optional(inner, _) => {
@@ -1658,7 +1711,7 @@ impl<'a> Codegen<'a> {
         if parsers.len() == 1 {
             quote_spanned! {span=> #(#parsers)* }
         } else {
-            quote_spanned! {span=> ( #(#parsers),* ) }
+            seq_of(parsers, &input_ty)
         }
     }
 

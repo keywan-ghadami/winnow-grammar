@@ -191,10 +191,9 @@ impl<'a> Codegen<'a> {
             };
             self.wrap_in_rule_label(body, label, is_rule_start, is_lexical)
         } else {
+            let alt = super::expr::alt_of(variant_parsers.collect());
             let body = quote_spanned! {span=>
-                alt((
-                    #(#variant_parsers),*
-                )).parse_next(#input)
+                #alt.parse_next(#input)
             };
             // Hoisted without a label to wrap it: the skip still happens once,
             // before the alternation, rather than once inside each of its

@@ -237,6 +237,16 @@
 
 ### Breaking Changes
 
+- **winnow 1.0.** The generated parsers and `rt` are built on winnow 1.0
+  instead of 0.7; a crate that names winnow types beside a grammar (its own
+  `extern rule` parsers, a `ParseInput` it builds) moves to 1.0 with it.
+  winnow 1.0 implements `alt` for at most nine parsers and `Parser` for
+  tuples of at most eleven, where 0.7 went to twenty-one; the generator nests
+  a wider choice, nine at a time and in the order written, and runs a longer
+  sequence in a closure that yields the same flat tuple, so a grammar of any
+  width compiles as before - and no longer stops at twenty-one alternatives
+  (`tests/wide_test.rs`).
+
 - **`ahash` is a default feature**, and `ahash-compile-time-rng` is new. The
   interner's hasher was std's `RandomState` unless asked; Nikaia measured
   `ahash` at **2.5-3.6 % of a whole compile** (1brc 55.66 M → 54.23 M
