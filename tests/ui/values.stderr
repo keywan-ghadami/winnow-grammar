@@ -1,0 +1,17 @@
+error: `p` of rule 'WRAP' takes a parser, not a value
+ --> tests/ui/values.rs:8:50
+  |
+8 |         pub R -> usize = m:count(" ") v:WRAP(p = m) -> { v }
+  |                                                  ^
+
+error: A guard cannot be bound: it matches nothing.
+  --> tests/ui/values.rs:16:25
+   |
+16 |         pub R -> () = g:if(true) "a" -> { () }
+   |                         ^^
+
+error: this built-in takes a pattern, not a value
+  --> tests/ui/values.rs:23:45
+   |
+23 |         pub R(n: usize) -> &'a str = t:text(n) -> { t }
+   |                                             ^

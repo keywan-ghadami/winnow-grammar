@@ -1432,6 +1432,61 @@ where
     }
 }
 
+/// `if(cond)` (ADR 26 D4): nothing consumed, and a backtrack where `cond`
+/// does not hold, expecting `what` - the message, or the condition as
+/// written.
+#[inline]
+pub fn guard<'a, B: Slice, S: Clone + std::fmt::Debug, E: RtError<'a, S, B>>(
+    input: &mut Input<B, S>,
+    holds: bool,
+    what: &'static str,
+) -> Result<(), ErrMode<E>> {
+    if holds {
+        Ok(())
+    } else {
+        let at = input.current_token_start();
+        Err(ErrMode::Backtrack(E::from_input(input).expected(at, what)))
+    }
+}
+
+/// An integer that a computed repetition bound may be (ADR 26 D3).
+pub trait Bound: Copy {
+    /// The value, saturated into `i128`.
+    fn wide(self) -> i128;
+}
+
+macro_rules! bound_from {
+    ($($t:ty),*) => {$(
+        impl Bound for $t {
+            #[inline(always)]
+            fn wide(self) -> i128 {
+                i128::try_from(self).unwrap_or(i128::MAX)
+            }
+        }
+    )*};
+}
+bound_from!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize);
+
+/// Computed bounds as the repetition takes them: `k` elements with
+/// `min <= k <= max`, a bound below zero below every `k`. `None` when no
+/// `k` is possible - `{0, n - 1}` with `n = 0` - and the repetition fails
+/// where it stands.
+#[inline]
+pub fn bounds<A: Bound, B: Bound>(min: A, max: Option<B>) -> Option<(usize, Option<usize>)> {
+    let lo = min.wide().max(0);
+    let lo = usize::try_from(lo).ok()?;
+    match max {
+        None => Some((lo, None)),
+        Some(hi) => {
+            let hi = hi.wide();
+            if hi < lo as i128 {
+                return None;
+            }
+            Some((lo, Some(usize::try_from(hi).unwrap_or(usize::MAX))))
+        }
+    }
+}
+
 /// `digit` - one ASCII digit, as the `char` it is.
 ///
 /// Was winnow's `one_of('0'..='9')`, which decodes a UTF-8 character and then

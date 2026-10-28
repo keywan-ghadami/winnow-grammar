@@ -277,6 +277,7 @@ fn uses_frame_end(rule: &Rule, user_rules: &HashSet<String>) -> bool {
                     .is_some_and(|s| s.ident == FRAME_END)
                     || args.iter().any(|a| match a {
                         Argument::Positional(p) | Argument::Named(_, p) => walk(p),
+                        Argument::Value(..) => false,
                     })
             }
             ModelPattern::Group { alts, .. } => alts.iter().any(|(seq, _, _)| seq.iter().any(walk)),
@@ -296,7 +297,10 @@ fn uses_frame_end(rule: &Rule, user_rules: &HashSet<String>) -> bool {
             | ModelPattern::Fold { pattern, .. }
             | ModelPattern::Bounded { pattern, .. } => walk(pattern),
             ModelPattern::Recover { body, sync, .. } => walk(body) || walk(sync),
-            ModelPattern::Cut(_) | ModelPattern::Fail { .. } | ModelPattern::Lit { .. } => false,
+            ModelPattern::Cut(_)
+            | ModelPattern::Fail { .. }
+            | ModelPattern::Guard { .. }
+            | ModelPattern::Lit { .. } => false,
         }
     }
     rule.variants.iter().any(|v| v.pattern.iter().any(walk))
@@ -566,7 +570,7 @@ fn check_sequence(seq: &[ModelPattern], lexical: bool, rule: &Rule, cx: &Cx) -> 
 
 fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::Result<()> {
     match p {
-        ModelPattern::Cut(_) | ModelPattern::Fail { .. } => Ok(()),
+        ModelPattern::Cut(_) | ModelPattern::Fail { .. } | ModelPattern::Guard { .. } => Ok(()),
         // Lookahead consumes nothing.
         ModelPattern::Peek(_, _) | ModelPattern::Not(_, _) => Ok(()),
         ModelPattern::Lit { .. } => {
@@ -589,8 +593,8 @@ fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::
                 .map(|s| s.ident.to_string())
                 .unwrap_or_default();
             for a in args {
-                let pat = match a {
-                    Argument::Positional(p) | Argument::Named(_, p) => p,
+                let Some(pat) = a.pattern() else {
+                    continue;
                 };
                 check_pattern(pat, lexical, rule, cx)?;
             }
@@ -807,6 +811,7 @@ fn collect_outside_lookahead(
                     Argument::Positional(p) | Argument::Named(_, p) => {
                         collect_outside_lookahead(p, user_rules, out)
                     }
+                    Argument::Value(..) => {}
                 }
             }
         }
@@ -819,11 +824,15 @@ fn collect_outside_lookahead(
 /// Applies `f` to every sub-pattern of `p`, one level down.
 fn for_each_child(p: &ModelPattern, f: &mut impl FnMut(&ModelPattern)) {
     match p {
-        ModelPattern::Cut(_) | ModelPattern::Fail { .. } | ModelPattern::Lit { .. } => {}
+        ModelPattern::Cut(_)
+        | ModelPattern::Fail { .. }
+        | ModelPattern::Guard { .. }
+        | ModelPattern::Lit { .. } => {}
         ModelPattern::RuleCall { args, .. } => {
             for a in args {
                 match a {
                     Argument::Positional(p) | Argument::Named(_, p) => f(p),
+                    Argument::Value(..) => {}
                 }
             }
         }
@@ -868,7 +877,10 @@ fn collect_calls(seq: &[ModelPattern], user_rules: &HashSet<String>, out: &mut V
 
 fn collect_calls_in(p: &ModelPattern, user_rules: &HashSet<String>, out: &mut Vec<String>) {
     match p {
-        ModelPattern::Cut(_) | ModelPattern::Fail { .. } | ModelPattern::Lit { .. } => {}
+        ModelPattern::Cut(_)
+        | ModelPattern::Fail { .. }
+        | ModelPattern::Guard { .. }
+        | ModelPattern::Lit { .. } => {}
         ModelPattern::RuleCall {
             rule_path, args, ..
         } => {
@@ -883,6 +895,7 @@ fn collect_calls_in(p: &ModelPattern, user_rules: &HashSet<String>, out: &mut Ve
                     Argument::Positional(p) | Argument::Named(_, p) => {
                         collect_calls_in(p, user_rules, out)
                     }
+                    Argument::Value(..) => {}
                 }
             }
         }

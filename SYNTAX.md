@@ -1202,6 +1202,59 @@ value(offset: i32) -> i32 = i:i32 -> { i + offset }
 # }
 ```
 
+### Values: arguments, bounds and guards
+
+A typed parameter is a **value**, and so is a binding written earlier in the
+same sequence. Where a value's name appears, a call argument or a repetition
+bound is a Rust expression over it, and `if(…)` tests one. That is what a
+format whose structure depends on what it has read needs - YAML's
+indentation, a length in front of a payload - and since a value is a plain
+argument of the generated function, backtracking needs nothing restored. The
+decision record is `docs/adr/adr26-values-in-the-grammar.md`.
+
+```rust
+# use winnow_grammar::grammar;
+# fn main() {
+grammar! {
+    grammar Indented {
+        WS -> () = "" -> { () }
+
+        // An item, and the items more indented under it, each at the
+        // indentation of the first of them.
+        pub ITEM(n: isize) -> usize =
+            "-" " " until("\n") "\n"
+            m:count(" ") if((m as isize) > n) k:ITEM(n = m as isize)
+            rest:MORE(m = m)* -> { 1 + k + rest.iter().sum::<usize>() }
+          | "-" " " until("\n") "\n" -> { 1 }
+
+        MORE(m: usize) -> usize = " "{m} k:ITEM(n = m as isize) -> { k }
+    }
+}
+# }
+```
+
+- **Arguments.** `inner(m)`, `sum(n, k + 1)`, `block(n = m + 1)`: an argument
+  that names a value is passed as the expression it is, and the parameter's
+  type decides what it must be. A named argument for a typed parameter is a
+  value even without one: `c = Ctx::BlockIn`, `n = -1`. A value given to a
+  parameter that takes a parser (`p: Rule<T>`) is an error; a pattern that
+  uses a value inside it - `text(byte{n})` - is still a pattern. A value shadows
+  a rule of the same name.
+- **Bounds.** `" "{n}`, `" "{0, n - 1}`, `" "{n,}`, `byte{len as usize}`:
+  a brace group after a pattern whose content starts with a value is a bound,
+  of any integer type. The repetition takes `k` elements with
+  `min <= k <= max`, and a bound below zero is below every `k`, so
+  `{0, n - 1}` with `n = 0` fails rather than wrapping. Greedy and possessive,
+  as a literal bound.
+- **Guards.** `if(m > n)` matches nothing and succeeds where the condition
+  holds; otherwise it fails where it stands, as a backtrack, so the next
+  alternative is tried. The message of the failure is the condition as
+  written, or the one given: `if(c == Ctx::BlockIn, "a sequence entry")`.
+
+A pattern of a computed bound is never one of the fixed-shape runs or scans
+that a literal bound can be. `tests/yaml_indent_test.rs` is a subset of YAML's
+block structure written the way its specification is.
+
 ### Generic Rules
 Define reusable rules with generic types and parser parameters.
 

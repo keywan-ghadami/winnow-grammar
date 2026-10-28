@@ -29,6 +29,185 @@ mod rt {
     }
 }
 
+/// The values in scope where a pattern is being parsed (ADR 26 D1): the
+/// typed parameters of the rule and the bindings written before it. A name
+/// that is a value makes an argument or a repetition bound an expression.
+///
+/// Parsing has no context to thread through `syn`'s `Parse`, so the scope is
+/// kept beside it, per thread, and set back after every sequence.
+mod scope {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static VALUES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// The rule's own values: its typed parameters. Starts a fresh scope.
+    pub fn enter_rule(params: &[super::RuleParameter]) {
+        VALUES.with(|v| {
+            let mut v = v.borrow_mut();
+            v.clear();
+            v.extend(
+                params
+                    .iter()
+                    .filter(|p| p.ty.as_ref().is_some_and(|t| !super::is_rule_type(t)))
+                    .map(|p| p.name.to_string()),
+            );
+        });
+    }
+
+    /// Where a sequence begins, to come back to after it.
+    pub fn mark() -> usize {
+        VALUES.with(|v| v.borrow().len())
+    }
+
+    pub fn reset(mark: usize) {
+        VALUES.with(|v| v.borrow_mut().truncate(mark));
+    }
+
+    /// The bindings of an element just parsed, visible to what follows it.
+    pub fn bind(pattern: &super::Pattern) {
+        let mut names = Vec::new();
+        pattern.collect_bindings(&mut names);
+        VALUES.with(|v| v.borrow_mut().extend(names.iter().map(|n| n.to_string())));
+    }
+
+    pub fn contains(name: &str) -> bool {
+        VALUES.with(|v| v.borrow().iter().any(|n| n == name))
+    }
+}
+
+/// A named argument given to a typed parameter is a value, whatever else it
+/// could be read as: `ITEM(c = Ctx::Block)` passes the enum, not a call of a
+/// rule `Ctx::Block` (ADR 26 D2). Decided once every rule is known, by the
+/// parameter it fills; one that mentions a value was decided while parsing.
+fn resolve_value_arguments(rules: &mut [Rule], extern_rules: &[ExternRule]) -> Result<()> {
+    use std::collections::HashMap;
+    let mut typed: HashMap<String, Vec<bool>> = HashMap::new();
+    let params = rules
+        .iter()
+        .map(|r| (r.name.to_string(), &r.params))
+        .chain(extern_rules.iter().map(|r| (r.name.to_string(), &r.params)));
+    for (name, params) in params {
+        let is_value = params
+            .iter()
+            .map(|p| p.ty.as_ref().is_some_and(|t| !is_rule_type(t)))
+            .collect();
+        typed.insert(name, is_value);
+    }
+
+    fn walk(p: &mut Pattern, typed: &HashMap<String, Vec<bool>>) -> Result<()> {
+        match p {
+            Pattern::RuleCall {
+                rule_path, args, ..
+            } => {
+                let callee = rule_path
+                    .get_ident()
+                    .and_then(|i| typed.get(&i.to_string()));
+                for (i, arg) in args.iter_mut().enumerate() {
+                    if let Argument::Named(name, pattern) = arg {
+                        if callee.and_then(|c| c.get(i)) == Some(&true) {
+                            let e: syn::Expr = syn::parse2(pattern.to_token_stream())?;
+                            *arg = Argument::Value(Some(name.clone()), Box::new(e));
+                            continue;
+                        }
+                    }
+                    if let Argument::Positional(p) | Argument::Named(_, p) = arg {
+                        walk(p, typed)?;
+                    }
+                }
+            }
+            Pattern::Group { alts, .. } => {
+                for (seq, _, _) in alts {
+                    for p in seq {
+                        walk(p, typed)?;
+                    }
+                }
+            }
+            Pattern::Bracketed { patterns, .. }
+            | Pattern::Braced { patterns, .. }
+            | Pattern::Parenthesized { patterns, .. } => {
+                for p in patterns {
+                    walk(p, typed)?;
+                }
+            }
+            Pattern::Optional(p, _)
+            | Pattern::Repeat(p, _)
+            | Pattern::Plus(p, _)
+            | Pattern::SpanBinding(p, _, _)
+            | Pattern::Peek(p, _)
+            | Pattern::Not(p, _)
+            | Pattern::LexicalScope(p, _)
+            | Pattern::SpacedScope(p, _) => walk(p, typed)?,
+            Pattern::Bounded { pattern, .. }
+            | Pattern::Until { pattern, .. }
+            | Pattern::Count { pattern, .. }
+            | Pattern::Fold { pattern, .. } => walk(pattern, typed)?,
+            Pattern::Recover { body, sync, .. } => {
+                walk(body, typed)?;
+                walk(sync, typed)?;
+            }
+            Pattern::Cut(_)
+            | Pattern::Lit { .. }
+            | Pattern::Fail { .. }
+            | Pattern::Guard { .. } => {}
+        }
+        Ok(())
+    }
+
+    for rule in rules {
+        for v in &mut rule.variants {
+            for p in &mut v.pattern {
+                walk(p, &typed)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Is `ty` `Rule<…>`, the type of a parser parameter?
+pub fn is_rule_type(ty: &Type) -> bool {
+    matches!(ty, Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "Rule"))
+}
+
+/// Does the stream, up to the next `,` at its own level, name a value in
+/// scope as an operand? `n + m` and `(n - 1)` do; `byte{n}` and `inner(n)` do
+/// not: those are patterns that use a value in their own bound or argument,
+/// so neither a brace or bracket group nor the parentheses of a call are
+/// looked into.
+fn mentions_value(input: ParseStream) -> bool {
+    use proc_macro2::{Delimiter, TokenTree};
+    fn operand(t: &TokenTree, after_ident: bool) -> bool {
+        match t {
+            TokenTree::Ident(i) => scope::contains(&i.to_string()),
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Parenthesis && !after_ident => {
+                let mut after = false;
+                g.stream().into_iter().any(|t| {
+                    let hit = operand(&t, after);
+                    after = matches!(t, TokenTree::Ident(_));
+                    hit
+                })
+            }
+            _ => false,
+        }
+    }
+    let mut cursor = input.cursor();
+    let mut after_ident = false;
+    while let Some((tt, next)) = cursor.token_tree() {
+        if let TokenTree::Punct(p) = &tt {
+            if p.as_char() == ',' {
+                return false;
+            }
+        }
+        if operand(&tt, after_ident) {
+            return true;
+        }
+        after_ident = matches!(tt, TokenTree::Ident(_));
+        cursor = next;
+    }
+    false
+}
+
 pub mod kw {
     syn::custom_keyword!(grammar);
     syn::custom_keyword!(rule);
@@ -249,6 +428,8 @@ impl Parse for GrammarDefinition {
         let mut imports = top_level_imports;
         imports.extend(nested_imports);
 
+        resolve_value_arguments(&mut rules, &extern_rules)?;
+
         Ok(GrammarDefinition {
             name,
             inherits,
@@ -405,6 +586,7 @@ impl Parse for Rule {
             false
         };
 
+        scope::enter_rule(&params);
         let variants = RuleVariant::parse_list(input, capture_span)?;
 
         Ok(Rule {
@@ -484,7 +666,9 @@ pub struct RuleVariant {
 impl RuleVariant {
     pub fn parse_list(input: ParseStream, capture_span: bool) -> Result<Vec<Self>> {
         let mut variants = Vec::new();
+        let rule_scope = scope::mark();
         loop {
+            scope::reset(rule_scope);
             let mut pattern: Vec<Pattern> = Vec::new();
             while !input.is_empty()
                 && !input.peek(Token![->])
@@ -506,7 +690,9 @@ impl RuleVariant {
                     break;
                 }
 
-                pattern.push(input.parse()?);
+                let p: Pattern = input.parse()?;
+                scope::bind(&p);
+                pattern.push(p);
             }
 
             let label = if input.peek(Token![#]) && input.peek2(syn::LitStr) {
@@ -585,18 +771,43 @@ impl ToTokens for RuleVariant {
 pub enum Argument {
     Positional(Pattern),
     Named(Ident, Pattern),
+    /// An argument that mentions a value in scope: a Rust expression, passed
+    /// to the rule's parameter as it is (ADR 26 D2). The name, if the
+    /// argument was written `name = …`.
+    Value(Option<Ident>, Box<syn::Expr>),
 }
 
 impl Parse for Argument {
     fn parse(input: ParseStream) -> Result<Self> {
-        if input.peek(Ident) && input.peek2(Token![=]) {
+        let name = if input.peek(Ident) && input.peek2(Token![=]) && !input.peek2(Token![==]) {
             let name: Ident = input.parse()?;
             let _ = input.parse::<Token![=]>()?;
-            let val: Pattern = input.parse()?;
-            Ok(Argument::Named(name, val))
+            Some(name)
         } else {
-            Ok(Argument::Positional(input.parse()?))
+            None
+        };
+        if mentions_value(input) {
+            let e: syn::Expr = input.parse()?;
+            return Ok(Argument::Value(name, Box::new(e)));
         }
+        // A pattern, as before - unless a named argument is not one, or is
+        // one that does not fill the argument (`n = -1`, `n = 2 * 3`): then
+        // an expression, if that is what it is. Both were errors before.
+        let ends = |s: ParseStream| s.is_empty() || s.peek(Token![,]);
+        let fork = input.fork();
+        let pattern = fork.parse::<Pattern>();
+        if name.is_some() && !(pattern.is_ok() && ends(&fork)) {
+            let fork = input.fork();
+            if fork.parse::<syn::Expr>().is_ok() && ends(&fork) {
+                let e: syn::Expr = input.parse()?;
+                return Ok(Argument::Value(name, Box::new(e)));
+            }
+        }
+        let val: Pattern = input.parse()?;
+        Ok(match name {
+            Some(name) => Argument::Named(name, val),
+            None => Argument::Positional(val),
+        })
     }
 }
 
@@ -608,6 +819,13 @@ impl ToTokens for Argument {
                 n.to_tokens(tokens);
                 token::Eq::default().to_tokens(tokens);
                 p.to_tokens(tokens);
+            }
+            Argument::Value(n, e) => {
+                if let Some(n) = n {
+                    n.to_tokens(tokens);
+                    token::Eq::default().to_tokens(tokens);
+                }
+                e.to_tokens(tokens);
             }
         }
     }
@@ -659,6 +877,9 @@ pub enum Pattern {
         min: usize,
         /// `None` for an open upper bound (`p{n,}`).
         max: Option<usize>,
+        /// Bounds that are expressions over values (ADR 26 D3). `min` and
+        /// `max` are then 0 and open: what the analyses may assume.
+        dynamic: Option<Box<DynBounds>>,
         token: token::Brace,
     },
     SpanBinding(Box<Pattern>, Ident, Token![@]),
@@ -700,6 +921,31 @@ pub enum Pattern {
         message: Option<Lit>,
         kw_token: kw::fail,
     },
+    /// `if(cond)` / `if(cond, "message")`: matches nothing, and only where
+    /// `cond` holds (ADR 26 D4).
+    Guard {
+        cond: Box<syn::Expr>,
+        message: Option<syn::LitStr>,
+        kw_token: Token![if],
+    },
+}
+
+/// The bounds of a repetition that are computed (ADR 26 D3): `{e}`, `{e,}`,
+/// `{a, b}`, each an expression of any integer type.
+#[derive(Debug, Clone)]
+pub struct DynBounds {
+    pub min: syn::Expr,
+    pub max: DynMax,
+}
+
+#[derive(Debug, Clone)]
+pub enum DynMax {
+    /// `{e}`: exactly `min`.
+    Exact,
+    /// `{e,}`.
+    Open,
+    /// `{a, b}`.
+    To(Box<syn::Expr>),
 }
 
 impl Pattern {
@@ -822,7 +1068,7 @@ impl Pattern {
             }
             Pattern::LexicalScope(p, _) => p.collect_bindings(acc),
             Pattern::SpacedScope(p, _) => p.collect_bindings(acc),
-            Pattern::Fail { .. } => {}
+            Pattern::Fail { .. } | Pattern::Guard { .. } => {}
             Pattern::Cut(_) => {}
         }
     }
@@ -872,7 +1118,7 @@ impl Pattern {
             } => binding.is_some() || pattern.has_binding(),
             Pattern::LexicalScope(p, _) => p.has_binding(),
             Pattern::SpacedScope(p, _) => p.has_binding(),
-            Pattern::Fail { .. } => false,
+            Pattern::Fail { .. } | Pattern::Guard { .. } => false,
             Pattern::Cut(_) => false,
         }
     }
@@ -891,7 +1137,11 @@ fn starts_repeat_bounds(input: ParseStream) -> bool {
     let peek_inside = |s: ParseStream| -> Result<bool> {
         let content;
         let _ = syn::braced!(content in s);
-        Ok(content.peek(syn::LitInt))
+        if content.peek(syn::LitInt) {
+            return Ok(true);
+        }
+        // Or with a value in scope (ADR 26 D3): `" "{n}`.
+        Ok(content.peek(Ident) && scope::contains(&content.parse::<Ident>()?.to_string()))
     };
     peek_inside(&fork).unwrap_or(false)
 }
@@ -912,9 +1162,43 @@ fn starts_with_int_literal(patterns: &[Pattern]) -> bool {
 /// Parses `{n}`, `{n,}` or `{n,m}`. Only called once [`starts_repeat_bounds`]
 /// has established that this brace group is a bound, so every error here is a
 /// malformed bound and is reported as such.
-fn parse_repeat_bounds(input: ParseStream) -> Result<(usize, Option<usize>, token::Brace)> {
+#[allow(clippy::type_complexity)]
+fn parse_repeat_bounds(
+    input: ParseStream,
+) -> Result<(usize, Option<usize>, Option<Box<DynBounds>>, token::Brace)> {
     let content;
     let token = syn::braced!(content in input);
+
+    // Integers and a comma are the bounds as they always were; anything else
+    // is computed.
+    let literal = content
+        .cursor()
+        .token_stream()
+        .into_iter()
+        .all(|t| match t {
+            proc_macro2::TokenTree::Literal(_) => true,
+            proc_macro2::TokenTree::Punct(p) => p.as_char() == ',',
+            _ => false,
+        });
+    if !literal {
+        let min: syn::Expr = content.parse()?;
+        let max = if content.peek(Token![,]) {
+            content.parse::<Token![,]>()?;
+            if content.is_empty() {
+                DynMax::Open
+            } else {
+                DynMax::To(Box::new(content.parse()?))
+            }
+        } else {
+            DynMax::Exact
+        };
+        if !content.is_empty() {
+            return Err(
+                content.error("expected the end of the repetition bound: `{n}`, `{n,}` or `{n,m}`")
+            );
+        }
+        return Ok((0, None, Some(Box::new(DynBounds { min, max })), token));
+    }
 
     let min_lit: syn::LitInt = content.parse()?;
     let min: usize = min_lit.base10_parse()?;
@@ -956,7 +1240,7 @@ fn parse_repeat_bounds(input: ParseStream) -> Result<(usize, Option<usize>, toke
         );
     }
 
-    Ok((min, max, token))
+    Ok((min, max, None, token))
 }
 
 impl Parse for Pattern {
@@ -979,11 +1263,12 @@ impl Parse for Pattern {
                 // an integer is read as a bound - and once it does, a malformed
                 // bound is an error rather than a confusing "expected pattern"
                 // from the delimiter parser.
-                let (min, max, token) = parse_repeat_bounds(input)?;
+                let (min, max, dynamic, token) = parse_repeat_bounds(input)?;
                 pat = Pattern::Bounded {
                     pattern: Box::new(pat),
                     min,
                     max,
+                    dynamic,
                     token,
                 };
             } else if input.peek(Token![@]) {
@@ -1132,6 +1417,24 @@ impl ToTokens for Pattern {
                 token::Plus::default().to_tokens(tokens);
             }
             Pattern::Bounded {
+                pattern,
+                dynamic: Some(d),
+                ..
+            } => {
+                pattern.to_tokens(tokens);
+                token::Brace::default().surround(tokens, |t| {
+                    d.min.to_tokens(t);
+                    match &d.max {
+                        DynMax::Exact => {}
+                        DynMax::Open => token::Comma::default().to_tokens(t),
+                        DynMax::To(e) => {
+                            token::Comma::default().to_tokens(t);
+                            e.to_tokens(t);
+                        }
+                    }
+                });
+            }
+            Pattern::Bounded {
                 pattern, min, max, ..
             } => {
                 pattern.to_tokens(tokens);
@@ -1254,6 +1557,20 @@ impl ToTokens for Pattern {
                     });
                 }
             }
+            Pattern::Guard {
+                cond,
+                message,
+                kw_token,
+            } => {
+                kw_token.to_tokens(tokens);
+                token::Paren::default().surround(tokens, |t| {
+                    cond.to_tokens(t);
+                    if let Some(m) = message {
+                        token::Comma::default().to_tokens(t);
+                        m.to_tokens(t);
+                    }
+                });
+            }
         }
     }
 }
@@ -1343,6 +1660,28 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
             binding,
             body: Box::new(body),
             sync: Box::new(sync),
+            kw_token,
+        })
+    } else if input.peek(Token![if]) {
+        if binding.is_some() {
+            return Err(input.error("A guard cannot be bound: it matches nothing."));
+        }
+        let kw_token = input.parse::<Token![if]>()?;
+        let content;
+        syn::parenthesized!(content in input);
+        let cond: syn::Expr = content.parse()?;
+        let message = if content.peek(Token![,]) {
+            let _ = content.parse::<Token![,]>()?;
+            Some(content.parse::<syn::LitStr>()?)
+        } else {
+            None
+        };
+        if !content.is_empty() {
+            return Err(content.error("expected `if(condition)` or `if(condition, \"message\")`"));
+        }
+        Ok(Pattern::Guard {
+            cond: Box::new(cond),
+            message,
             kw_token,
         })
     } else if input.peek(kw::peek) {
@@ -1524,7 +1863,9 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
             // Note: `is_scoped` (e.g. `foo::bar(...)`) is NO LONGER a heuristic for args.
             // Explicitly: only built-ins or named args or templates allowed.
 
-            if has_named_arg || is_builtin {
+            // 4. A value in scope as an operand: `inner(m)`, `sum(n, k + 1)`
+            //    - an argument list, whatever else it could be (ADR 26 D2).
+            if has_named_arg || is_builtin || mentions_value(&content) {
                 parse_args(input)?
             } else {
                 Vec::new()
@@ -1559,22 +1900,30 @@ fn parse_args(input: ParseStream) -> Result<Vec<Argument>> {
 
 fn parse_pattern_list(input: ParseStream) -> Result<Vec<Pattern>> {
     let mut list = Vec::new();
+    let outer = scope::mark();
     while !input.is_empty() {
-        list.push(input.parse()?);
+        let p: Pattern = input.parse()?;
+        scope::bind(&p);
+        list.push(p);
     }
+    scope::reset(outer);
     Ok(list)
 }
 
 fn parse_group_content(input: ParseStream) -> Result<Vec<GroupAlternative>> {
     let mut alts = Vec::new();
+    let outer = scope::mark();
     loop {
+        scope::reset(outer);
         let mut seq = Vec::new();
         while !input.is_empty()
             && !input.peek(Token![|])
             && !input.peek(Token![#])
             && !input.peek(Token![->])
         {
-            seq.push(input.parse()?);
+            let p: Pattern = input.parse()?;
+            scope::bind(&p);
+            seq.push(p);
         }
 
         let action = if input.peek(Token![->]) {
@@ -1595,6 +1944,7 @@ fn parse_group_content(input: ParseStream) -> Result<Vec<GroupAlternative>> {
         };
 
         alts.push((seq, action, label));
+        scope::reset(outer);
         if input.peek(Token![|]) {
             let _: Token![|] = input.parse()?;
         } else {

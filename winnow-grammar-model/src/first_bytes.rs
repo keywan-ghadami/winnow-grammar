@@ -202,6 +202,8 @@ impl<'g> FirstBytes<'g> {
             // A lookahead consumes nothing; what it demands of the byte is a
             // further condition, and leaving it out only makes the set larger.
             ModelPattern::Peek(..) | ModelPattern::Not(..) => Start::Transparent,
+            // A guard consumes nothing either, and can only fail more.
+            ModelPattern::Guard { .. } => Start::Transparent,
             // A cut before anything is consumed makes the alternative's failure
             // a commitment; `until`, `recover`, the scopes and the folds are
             // left alone.

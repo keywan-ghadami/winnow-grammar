@@ -639,6 +639,21 @@
 
 ### Added
 
+- **Values in the grammar: arguments, bounds and guards** (ADR 26). A typed
+  parameter and a binding written earlier in the sequence are values, and
+  where one is named a call argument (`inner(m)`, `block(n = m + 1)`) or a
+  repetition bound (`" "{n}`, `" "{0, n - 1}`, `byte{len as usize}`) is a Rust
+  expression over it; `if(cond)` and `if(cond, "message")` match nothing and
+  fail, as a backtrack, where the condition does not hold. A named argument
+  for a typed parameter is a value even without one (`c = Ctx::BlockIn`,
+  `n = -1`). Raised by a YAML parser: its block structure is indentation, and
+  its specification is written as productions that take it as a parameter -
+  `tests/yaml_indent_test.rs` writes a subset of it that way, with detected
+  indentation, `seq-spaces(n, block-out)` and compact sequences. Unlike a
+  stack in the state, a value is an argument of the generated function, so a
+  branch that loses takes it with it. A grammar that names no value generates
+  what it did before (`tests/values_test.rs`, `tests/ui/values.rs`).
+
 - **A grammar over bytes: `input bytes;`** (ADR 25, #24). A grammar that
   declares it reads `&[u8]` - every rule takes `ParseBytes<'a, S>`, the same
   context over `LocatingSlice<&'a [u8]>`, and `frames_<rule>` and

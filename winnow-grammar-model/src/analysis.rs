@@ -123,6 +123,7 @@ fn collect_from_patterns(patterns: &[ModelPattern], kws: &mut HashSet<String>) {
                         Argument::Positional(p) | Argument::Named(_, p) => {
                             collect_from_patterns(std::slice::from_ref(p), kws);
                         }
+                        Argument::Value(..) => {}
                     }
                 }
             }
@@ -444,7 +445,7 @@ pub fn get_peek_token_string(patterns: &[ModelPattern]) -> Option<String> {
 
 pub fn is_nullable(pattern: &ModelPattern) -> bool {
     match pattern {
-        ModelPattern::Cut(_) => true,
+        ModelPattern::Cut(_) | ModelPattern::Guard { .. } => true,
         ModelPattern::Lit { .. } => false,
         ModelPattern::RuleCall { .. } => true,
         ModelPattern::Group { alts, .. } => {
@@ -544,7 +545,7 @@ fn is_sequence_nullable(patterns: &[ModelPattern], nullable_rules: &HashSet<Stri
 
 fn is_pattern_nullable_precise(pattern: &ModelPattern, nullable_rules: &HashSet<String>) -> bool {
     match pattern {
-        ModelPattern::Cut(_) => true,
+        ModelPattern::Cut(_) | ModelPattern::Guard { .. } => true,
         ModelPattern::Lit { .. } => false,
         ModelPattern::RuleCall { rule_path, .. } => {
             let name = rule_path.segments.last().unwrap().ident.to_string();
@@ -734,7 +735,7 @@ fn collect_nullable_deps(
             | ModelPattern::Fail { .. } => {
                 return;
             }
-            ModelPattern::Cut(_) => {}
+            ModelPattern::Cut(_) | ModelPattern::Guard { .. } => {}
         }
     }
 }
@@ -807,6 +808,7 @@ fn collect_called_rules<F: FnMut(String)>(patterns: &[ModelPattern], cb: &mut F)
                         Argument::Positional(p) | Argument::Named(_, p) => {
                             collect_called_rules(std::slice::from_ref(p), cb);
                         }
+                        Argument::Value(..) => {}
                     }
                 }
             }
@@ -1119,6 +1121,7 @@ fn arguments_structure_eq(args1: &[Argument], args2: &[Argument]) -> bool {
             (Argument::Named(n1, p1), Argument::Named(n2, p2)) => {
                 n1 == n2 && pattern_structure_eq(p1, p2)
             }
+            (Argument::Value(n1, e1), Argument::Value(n2, e2)) => n1 == n2 && e1 == e2,
             _ => false,
         })
 }
@@ -1129,6 +1132,7 @@ fn pattern_structure_eq(p1: &ModelPattern, p2: &ModelPattern) -> bool {
 
     match (p1, p2) {
         (ModelPattern::Cut(_), ModelPattern::Cut(_)) => true,
+        (ModelPattern::Guard { cond: c1, .. }, ModelPattern::Guard { cond: c2, .. }) => c1 == c2,
         (ModelPattern::Lit { lit: l1, .. }, ModelPattern::Lit { lit: l2, .. }) => l1 == l2,
         (
             ModelPattern::RuleCall {
@@ -1170,15 +1174,34 @@ fn pattern_structure_eq(p1: &ModelPattern, p2: &ModelPattern) -> bool {
                 pattern: p1,
                 min: min1,
                 max: max1,
+                dynamic: d1,
                 ..
             },
             ModelPattern::Bounded {
                 pattern: p2,
                 min: min2,
                 max: max2,
+                dynamic: d2,
                 ..
             },
-        ) => min1 == min2 && max1 == max2 && pattern_structure_eq(p1, p2),
+        ) => {
+            // Computed bounds are the same only when written the same.
+            let written = |d: &Option<Box<crate::parser::DynBounds>>| {
+                d.as_ref().map(|d| {
+                    let max = match &d.max {
+                        crate::parser::DynMax::Exact => "=".to_string(),
+                        crate::parser::DynMax::Open => ",".to_string(),
+                        crate::parser::DynMax::To(e) => quote::quote!(#e).to_string(),
+                    };
+                    let min = &d.min;
+                    (quote::quote!(#min).to_string(), max)
+                })
+            };
+            min1 == min2
+                && max1 == max2
+                && written(d1) == written(d2)
+                && pattern_structure_eq(p1, p2)
+        }
         (
             ModelPattern::Recover {
                 body: b1, sync: s1, ..

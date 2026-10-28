@@ -3,6 +3,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use std::collections::HashMap;
 use winnow_grammar_model::model::{Argument, ModelPattern};
+use winnow_grammar_model::parser::DynMax;
 
 /// The widest tuple winnow implements `Alt` for.
 const ALT_MAX: usize = 9;
@@ -55,6 +56,21 @@ fn seq_of(parsers: Vec<TokenStream>, input_ty: &TokenStream) -> TokenStream {
             }
         }
     }
+}
+
+/// The arguments of a built-in that wraps patterns (`text(p)`, `dec(p)`), or
+/// the error for one that is a value: those take a pattern, not a value.
+fn pattern_args(args: &[Argument]) -> Result<Vec<ModelPattern>, TokenStream> {
+    args.iter()
+        .map(|a| match a {
+            Argument::Positional(p) | Argument::Named(_, p) => Ok(p.clone()),
+            Argument::Value(_, e) => Err(syn::Error::new_spanned(
+                e,
+                "this built-in takes a pattern, not a value",
+            )
+            .to_compile_error()),
+        })
+        .collect()
 }
 
 pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::Ident>) {
@@ -215,6 +231,7 @@ pub(crate) fn substitute_pattern(
                     Argument::Positional(p) | Argument::Named(_, p) => {
                         substitute_pattern(p, subst, type_subst);
                     }
+                    Argument::Value(..) => {}
                 }
             }
         }
@@ -252,7 +269,10 @@ pub(crate) fn substitute_pattern(
         ModelPattern::Until { pattern: inner, .. } => {
             substitute_pattern(inner, subst, type_subst);
         }
-        ModelPattern::Lit { .. } | ModelPattern::Fail { .. } | ModelPattern::Cut(_) => {}
+        ModelPattern::Lit { .. }
+        | ModelPattern::Fail { .. }
+        | ModelPattern::Guard { .. }
+        | ModelPattern::Cut(_) => {}
     }
 }
 
@@ -468,6 +488,13 @@ impl<'a> Codegen<'a> {
         let pattern = match arg {
             Argument::Positional(p) => p,
             Argument::Named(_, p) => p,
+            // Passed as it is: the parameter's type decides (ADR 26 D2). As
+            // a clone, because the call may sit in a closure that runs again
+            // - an element of `*` - and a value that is not `Copy` cannot be
+            // moved out of it; for a number the clone is the copy.
+            Argument::Value(_, e) => {
+                return quote_spanned! {span=> ::core::clone::Clone::clone(&(#e)) }
+            }
         };
 
         match pattern {
@@ -765,7 +792,11 @@ impl<'a> Codegen<'a> {
             ModelPattern::Repeat(inner, _) => self.char_loop_text(inner, 0, None, is_lexical),
             ModelPattern::Plus(inner, _) => self.char_loop_text(inner, 1, None, is_lexical),
             ModelPattern::Bounded {
-                pattern, min, max, ..
+                pattern,
+                min,
+                max,
+                dynamic: None,
+                ..
             } => self.char_loop_text(pattern, *min, *max, is_lexical),
             _ => None,
         }
@@ -795,15 +826,26 @@ impl<'a> Codegen<'a> {
 
             if super::is_template(target_rule) {
                 // 3b. Parser parameters -> argument patterns
-                let arg_patterns: Vec<ModelPattern> = args
-                    .iter()
-                    .map(|arg| match arg {
-                        Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
-                    })
-                    .collect();
+                let arg_patterns: Vec<Option<ModelPattern>> =
+                    args.iter().map(|arg| arg.pattern().cloned()).collect();
                 let mut subst = HashMap::new();
-                for (param, arg_pattern) in target_rule.params.iter().zip(&arg_patterns) {
-                    subst.insert(param.name.to_string(), arg_pattern.clone());
+                // A value given to a typed parameter of a template is bound
+                // under the parameter's name, before the inlined body that
+                // uses it (ADR 26 D2).
+                let mut values = TokenStream::new();
+                for (param, arg) in target_rule.params.iter().zip(args) {
+                    match arg {
+                        Argument::Value(_, e) => {
+                            let name = &param.name;
+                            let ty = param.ty.as_ref().map(|t| quote! { : #t });
+                            values.extend(quote_spanned! {span=>
+                                let #name #ty = ::core::clone::Clone::clone(&(#e));
+                            });
+                        }
+                        Argument::Positional(p) | Argument::Named(_, p) => {
+                            subst.insert(param.name.to_string(), p.clone());
+                        }
+                    }
                 }
 
                 // 3a. Type parameters -> type. Explicitly given ones
@@ -819,7 +861,10 @@ impl<'a> Codegen<'a> {
                 for (idx, name) in type_params.enumerate() {
                     if let Some(call_ty) = call_generics.get(idx) {
                         type_subst.insert(name, call_ty.clone());
-                    } else if let Some(ty) = arg_patterns.get(idx).and_then(|p| self.infer_type(p))
+                    } else if let Some(ty) = arg_patterns
+                        .get(idx)
+                        .and_then(|p| p.as_ref())
+                        .and_then(|p| self.infer_type(p))
                     {
                         type_subst.insert(name, ty);
                     }
@@ -866,6 +911,7 @@ impl<'a> Codegen<'a> {
 
                 return quote_spanned! {span=>
                     (|#input_var: &mut #input_ty| -> ::winnow::Result<#ret_type, #inner_err_type> {
+                        #values
                         let mut parser = (|#input_var: &mut #input_ty| -> ::winnow::Result<#ret_type, #inner_err_type> {
                             #body
                         });
@@ -931,12 +977,10 @@ impl<'a> Codegen<'a> {
                     return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg)
                         .to_compile_error();
                 }
-                let seq: Vec<ModelPattern> = args
-                    .iter()
-                    .map(|a| match a {
-                        Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
-                    })
-                    .collect();
+                let seq = match pattern_args(args) {
+                    Ok(seq) => seq,
+                    Err(e) => return e,
+                };
                 // A run of a character class already *is* its text, so
                 // `text(digit{1,2})` is that run and not a wrapper around it.
                 // Taking it twice measured ~3 ns more on the 1BRC temperature.
@@ -971,12 +1015,10 @@ impl<'a> Codegen<'a> {
                     return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg)
                         .to_compile_error();
                 }
-                let seq: Vec<ModelPattern> = args
-                    .iter()
-                    .map(|a| match a {
-                        Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
-                    })
-                    .collect();
+                let seq = match pattern_args(args) {
+                    Ok(seq) => seq,
+                    Err(e) => return e,
+                };
                 if let [only] = &seq[..] {
                     if !self.loop_needs_check(only) {
                         if let Some(run) = self.char_loop_run(only, is_lexical) {
@@ -1001,12 +1043,10 @@ impl<'a> Codegen<'a> {
                     return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg)
                         .to_compile_error();
                 }
-                let seq: Vec<ModelPattern> = args
-                    .iter()
-                    .map(|a| match a {
-                        Argument::Positional(p) | Argument::Named(_, p) => p.clone(),
-                    })
-                    .collect();
+                let seq = match pattern_args(args) {
+                    Ok(seq) => seq,
+                    Err(e) => return e,
+                };
                 // As in `text`: a run is its own text, so it is read as it
                 // stands rather than taken a second time.
                 let run = match &seq[..] {
@@ -1425,13 +1465,41 @@ impl<'a> Codegen<'a> {
         is_lexical: bool,
         is_discarded: bool,
     ) -> TokenStream {
+        let span = Span::mixed_site();
+        let max_ts = match max {
+            Some(m) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
+            None => quote_spanned! {span=> ::core::option::Option::None },
+        };
+        self.generate_repetition_with(
+            inner,
+            Some((min, max)),
+            quote_spanned! {span=> #min },
+            max_ts,
+            is_lexical,
+            is_discarded,
+        )
+    }
+
+    /// [`generate_repetition`](Self::generate_repetition) with the bounds as
+    /// expressions, `min: usize` and `max: Option<usize>`. `fixed` is the
+    /// bounds when they are literals, which is when a character loop may be
+    /// a scan.
+    fn generate_repetition_with(
+        &self,
+        inner: &ModelPattern,
+        fixed: Option<(usize, Option<usize>)>,
+        min: TokenStream,
+        max: TokenStream,
+        is_lexical: bool,
+        is_discarded: bool,
+    ) -> TokenStream {
         let input_ty = self.input_ty();
         let span = Span::mixed_site();
         // A character loop nobody looks at is a scan. One that is bound still
         // collects its elements, which is what its type says it does; under
         // `text(…)` it is taken as a scan there.
-        if is_discarded {
-            if let Some(run) = self.char_loop_text(inner, min, max, is_lexical) {
+        if let (true, Some((fmin, fmax))) = (is_discarded, fixed) {
+            if let Some(run) = self.char_loop_text(inner, fmin, fmax, is_lexical) {
                 if self.is_bytes() && Self::loop_element_ends_in_any(inner) {
                     return quote_spanned! {span=> ::winnow::Parser::void(::winnow_grammar::rt::bytes::text(#run)) };
                 }
@@ -1444,10 +1512,6 @@ impl<'a> Codegen<'a> {
         } else {
             // `WS` is a function and `preceded` wants a parser.
             quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p) }
-        };
-        let max = match max {
-            Some(m) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
-            None => quote_spanned! {span=> ::core::option::Option::None },
         };
         let counting = quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting_bounded(#min, #max, #elem) };
         if is_discarded {
@@ -1487,6 +1551,16 @@ impl<'a> Codegen<'a> {
             ModelPattern::SpanBinding(inner, _, _) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 quote_spanned! {span=> #p.with_span().map(|(v, _)| v) }
+            }
+            // `if(cond)` (ADR 26 D4): evaluated where the parser gets here.
+            ModelPattern::Guard { cond, message, .. } => {
+                let what = match message {
+                    Some(m) => m.clone(),
+                    None => format!("`{}`", quote!(#cond)),
+                };
+                quote_spanned! {span=>
+                    (|i: &mut #input_ty| ::winnow_grammar::rt::guard(i, #cond, #what))
+                }
             }
             ModelPattern::RuleCall {
                 rule_path,
@@ -1554,6 +1628,43 @@ impl<'a> Codegen<'a> {
             }
             ModelPattern::Plus(inner, _span) => {
                 self.generate_repetition(inner, 1, None, is_lexical, is_discarded)
+            }
+            ModelPattern::Bounded {
+                pattern,
+                dynamic: Some(d),
+                ..
+            } => {
+                // Computed bounds (ADR 26 D3): evaluated where the parser
+                // gets here, then the same loop as a literal bound's, without
+                // the scans a literal bound allows.
+                let lo = &d.min;
+                let bounds = match &d.max {
+                    DynMax::Exact => quote_spanned! {span=>
+                        { let __n = #lo; ::winnow_grammar::rt::bounds(__n, ::core::option::Option::Some(__n)) }
+                    },
+                    DynMax::Open => quote_spanned! {span=>
+                        ::winnow_grammar::rt::bounds(#lo, ::core::option::Option::None::<usize>)
+                    },
+                    DynMax::To(hi) => quote_spanned! {span=>
+                        ::winnow_grammar::rt::bounds(#lo, ::core::option::Option::Some(#hi))
+                    },
+                };
+                let rep = self.generate_repetition_with(
+                    pattern,
+                    None,
+                    quote_spanned! {span=> __lo },
+                    quote_spanned! {span=> __hi },
+                    is_lexical,
+                    is_discarded,
+                );
+                quote_spanned! {span=>
+                    (|i: &mut #input_ty| match #bounds {
+                        ::core::option::Option::Some((__lo, __hi)) => ::winnow::Parser::parse_next(&mut #rep, i),
+                        ::core::option::Option::None => ::core::result::Result::Err(
+                            ::winnow::error::ErrMode::Backtrack(<E as ::winnow::error::ParserError<_>>::from_input(i)),
+                        ),
+                    })
+                }
             }
             ModelPattern::Bounded {
                 pattern, min, max, ..

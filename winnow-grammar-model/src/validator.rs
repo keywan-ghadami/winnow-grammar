@@ -267,6 +267,7 @@ fn validate_pattern(
                     Argument::Positional(p) | Argument::Named(_, p) => {
                         validate_pattern(p, all_defs, params)?;
                     }
+                    Argument::Value(..) => {}
                 }
             }
         }
@@ -336,6 +337,7 @@ fn validate_no_bindings(pattern: &ModelPattern) -> syn::Result<()> {
                     Argument::Positional(p) | Argument::Named(_, p) => {
                         validate_no_bindings(p)?;
                     }
+                    Argument::Value(..) => {}
                 }
             }
         }
@@ -394,7 +396,7 @@ fn validate_no_bindings(pattern: &ModelPattern) -> syn::Result<()> {
             validate_no_bindings(pattern)?;
         }
         ModelPattern::Cut(_) => {}
-        ModelPattern::Fail { .. } => {}
+        ModelPattern::Fail { .. } | ModelPattern::Guard { .. } => {}
     }
     Ok(())
 }
@@ -455,6 +457,23 @@ fn validate_args_recursive(
                                 ),
                             ));
                         }
+                        // A value goes to a typed parameter only: one that
+                        // takes a parser is given a pattern (ADR 26 D2).
+                        for (param, arg) in target_rule.params.iter().zip(args) {
+                            if let Argument::Value(_, e) = arg {
+                                let takes_parser =
+                                    param.ty.as_ref().is_none_or(crate::parser::is_rule_type);
+                                if takes_parser {
+                                    return Err(syn::Error::new_spanned(
+                                        e,
+                                        format!(
+                                            "`{}` of rule '{}' takes a parser, not a value",
+                                            param.name, rule_name_str
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -464,6 +483,7 @@ fn validate_args_recursive(
                         Argument::Positional(p) | Argument::Named(_, p) => {
                             validate_args_recursive(std::slice::from_ref(p), rule_map)?;
                         }
+                        Argument::Value(..) => {}
                     }
                 }
             }

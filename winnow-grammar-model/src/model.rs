@@ -111,6 +111,8 @@ pub enum ModelPattern {
         pattern: Box<ModelPattern>,
         min: usize,
         max: Option<usize>,
+        /// Computed bounds (ADR 26 D3); `min` and `max` are then 0 and open.
+        dynamic: Option<Box<parser::DynBounds>>,
         span: proc_macro2::Span,
     },
     SpanBinding(Box<ModelPattern>, Ident, proc_macro2::Span),
@@ -151,6 +153,13 @@ pub enum ModelPattern {
         message: Option<syn::Lit>,
         span: proc_macro2::Span,
     },
+    /// `if(cond)`: matches nothing, where `cond` holds (ADR 26 D4). To the
+    /// analyses it is the empty pattern.
+    Guard {
+        cond: Box<syn::Expr>,
+        message: Option<String>,
+        span: proc_macro2::Span,
+    },
 }
 
 impl ModelPattern {
@@ -180,6 +189,7 @@ impl ModelPattern {
             ModelPattern::LexicalScope(_, s) => *s,
             ModelPattern::SpacedScope(_, s) => *s,
             ModelPattern::Fail { span, .. } => *span,
+            ModelPattern::Guard { span, .. } => *span,
         }
     }
 }
@@ -188,6 +198,18 @@ impl ModelPattern {
 pub enum Argument {
     Positional(ModelPattern),
     Named(Ident, ModelPattern),
+    /// A Rust expression over the values in scope (ADR 26 D2).
+    Value(Option<Ident>, Box<syn::Expr>),
+}
+
+impl Argument {
+    /// The pattern this argument is, unless it is a value.
+    pub fn pattern(&self) -> Option<&ModelPattern> {
+        match self {
+            Argument::Positional(p) | Argument::Named(_, p) => Some(p),
+            Argument::Value(..) => None,
+        }
+    }
 }
 
 impl From<parser::GrammarDefinition> for GrammarDefinition {
@@ -356,11 +378,13 @@ impl From<parser::Pattern> for ModelPattern {
                 pattern,
                 min,
                 max,
+                dynamic,
                 token,
             } => ModelPattern::Bounded {
                 pattern: Box::new((*pattern).into()),
                 min,
                 max,
+                dynamic,
                 span: token.span.join(),
             },
             parser::Pattern::SpanBinding(p, id, token) => {
@@ -427,6 +451,15 @@ impl From<parser::Pattern> for ModelPattern {
                 message,
                 span: kw_token.span(),
             },
+            parser::Pattern::Guard {
+                cond,
+                message,
+                kw_token,
+            } => ModelPattern::Guard {
+                cond,
+                message: message.map(|m| m.value()),
+                span: kw_token.span,
+            },
         }
     }
 }
@@ -436,6 +469,7 @@ impl From<parser::Argument> for Argument {
         match p {
             parser::Argument::Positional(p) => Argument::Positional(p.into()),
             parser::Argument::Named(n, p) => Argument::Named(n, p.into()),
+            parser::Argument::Value(n, e) => Argument::Value(n, e),
         }
     }
 }
