@@ -499,8 +499,10 @@ that writes to the state and then loses has still written. There is no
 snapshot at alternative granularity, so state that a grammar writes wants to
 be *idempotent* - assigning a slot twice yields the same slot, exactly as
 interning does. A count or a sum belongs in what a rule returns and what
-`fold` combines, where a lost branch's value is discarded with it; or after a
-cut (`=>`), which no enclosing alternative retries past. A failed *parse* is a
+`fold` combines, where a lost branch's value is discarded with it. A write to
+the state after a cut (`=>`) is no exception. Once the rule that holds the cut
+has succeeded, an enclosing alternative that fails later is retried as usual,
+and so whatever the rule wrote to the state stays there. A failed *parse* is a
 different matter and is handled: under the default `Diagnose::Replay` the
 state is restored before the diagnosing pass, so an action runs once.
 
