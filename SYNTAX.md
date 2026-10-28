@@ -282,6 +282,12 @@ The following primitives are "portable" and expected to be available in all back
 
 *Note: Backends may provide additional specialized built-ins.*
 
+**The integers** (`u8` … `u128`, `usize`, `i8` … `i128`, `isize`) read `0`,
+or a digit `1`-`9` and the digits after it; a signed one takes a `+` or `-`
+before a digit that is not `0`, so `-0` and `+05` are no number. `007` is `0`
+with `07` left over. A value its type cannot hold is a parse error at the
+start of the number that says so ("number too large to fit in target type").
+
 **How a character class is matched.** `digit1`, `alpha1`, `hex_digit*`,
 `oct_digit*`, `binary_digit*`, `space*`, `multispace*` and the implicit
 whitespace skip do not test one character at a time. They test eight bytes at a

@@ -1340,6 +1340,98 @@ pub fn class<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
     }
 }
 
+/// The digits of a decimal integer at the start of `b`: `0` alone, or `1`-`9`
+/// and the digits after it - what winnow's `dec_uint` takes. 0 when there is
+/// none.
+#[inline(always)]
+fn dec_digits(b: &[u8]) -> usize {
+    match b.first() {
+        Some(b'0') => 1,
+        Some(b'1'..=b'9') => 1 + b[1..].iter().take_while(|c| c.is_ascii_digit()).count(),
+        _ => 0,
+    }
+}
+
+/// The first `len` bytes, a sign and digits [`dec_digits`] found, read as a
+/// `T` and consumed. A value that does not fit is an error at the start of the
+/// number, with the reason, and consumes nothing.
+#[inline(always)]
+fn dec_value<'a, B: Slice, S: Clone + std::fmt::Debug, T, E: RtError<'a, S, B>>(
+    input: &mut Input<B, S>,
+    len: usize,
+) -> Result<T, ErrMode<E>>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    // SAFETY: the bytes are an ASCII sign and ASCII digits, which are UTF-8.
+    let text = unsafe { std::str::from_utf8_unchecked(&input.as_bstr()[..len]) };
+    match text.parse::<T>() {
+        Ok(v) => {
+            // SAFETY: `len` bytes were just read, so they are in bounds, and
+            // they are ASCII: the cut after them is a character boundary.
+            unsafe { input.next_slice_unchecked(len) };
+            Ok(v)
+        }
+        Err(e) => Err(ErrMode::Backtrack(E::external(input, e))),
+    }
+}
+
+/// `u8` … `usize` - an unsigned decimal integer.
+///
+/// Was winnow's `dec_uint`, which takes the same text and then, since winnow
+/// 1.0, checks as UTF-8 what it matched as ASCII digits: on the 1BRC shape
+/// (`benches/interning.rs`, `parse/rows`) that made a parse 30 % slower. Here
+/// the digits are read as text without the check, and a value too large for
+/// `T` says so (`number too large to fit in target type`) where winnow's
+/// reported only the position. What is accepted, what is consumed and where
+/// a failure is are winnow's (`tests/dec_builtin_test.rs`).
+#[inline]
+pub fn dec_uint<'a, B: Slice, S: Clone + std::fmt::Debug, T, E: RtError<'a, S, B>>(
+    input: &mut Input<B, S>,
+) -> Result<T, ErrMode<E>>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match dec_digits(input.as_bstr()) {
+        0 => Err(ErrMode::Backtrack(E::from_input(input))),
+        n => dec_value(input, n),
+    }
+}
+
+/// `i8` … `isize` - a signed decimal integer: `0`, or `1`-`9` and the digits
+/// after it with an optional `+` or `-` before - winnow's `dec_int`, which
+/// takes a sign only before a digit that is not `0`, so `-0` and `+05` are no
+/// number.
+#[inline]
+pub fn dec_int<'a, B: Slice, S: Clone + std::fmt::Debug, T, E: RtError<'a, S, B>>(
+    input: &mut Input<B, S>,
+) -> Result<T, ErrMode<E>>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let b = input.as_bstr();
+    match b.first() {
+        Some(b'+' | b'-') => match dec_digits(&b[1..]) {
+            n if n > 0 && b[1] != b'0' => dec_value(input, 1 + n),
+            _ => {
+                // As winnow's: the failure is where the digit after the sign
+                // is missing, and nothing is consumed.
+                let cp = input.checkpoint();
+                // SAFETY: the sign is one ASCII byte, so in bounds and
+                // followed by a character boundary.
+                unsafe { input.next_slice_unchecked(1) };
+                let e = E::from_input(input);
+                input.reset(&cp);
+                Err(ErrMode::Backtrack(e))
+            }
+        },
+        _ => dec_uint(input),
+    }
+}
+
 /// `digit` - one ASCII digit, as the `char` it is.
 ///
 /// Was winnow's `one_of('0'..='9')`, which decodes a UTF-8 character and then

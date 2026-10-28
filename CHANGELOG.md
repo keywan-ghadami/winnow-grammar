@@ -246,6 +246,15 @@
   sequence in a closure that yields the same flat tuple, so a grammar of any
   width compiles as before - and no longer stops at twenty-one alternatives
   (`tests/wide_test.rs`).
+- **The integer built-ins are `rt::dec_uint` and `rt::dec_int`**, no longer
+  winnow's `dec_uint` and `dec_int`, which since winnow 1.0 check as UTF-8
+  the ASCII digits they matched: on the 1BRC shape with `t:i32`
+  (`benches/interning.rs`, `parse/rows`) that made a parse about 30 % slower.
+  What is accepted, what is consumed, where a failure is and how it renders
+  are winnow's, on every string of up to four characters over text and over
+  bytes (`tests/dec_builtin_test.rs`). One thing differs: a value too large
+  for its type says so ("number too large to fit in target type") where it
+  reported only the position.
 
 - **`ahash` is a default feature**, and `ahash-compile-time-rng` is new. The
   interner's hasher was std's `RandomState` unless asked; Nikaia measured

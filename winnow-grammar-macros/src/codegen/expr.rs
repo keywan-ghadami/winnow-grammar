@@ -1220,40 +1220,40 @@ impl<'a> Codegen<'a> {
             }
 
             "u8" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u8, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, u8, E> }
             }
             "u16" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u16, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, u16, E> }
             }
             "u32" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u32, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, u32, E> }
             }
             "u64" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u64, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, u64, E> }
             }
             "u128" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, u128, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, u128, E> }
             }
             "usize" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_uint::<#input_type, usize, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, usize, E> }
             }
             "i8" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i8, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, i8, E> }
             }
             "i16" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i16, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, i16, E> }
             }
             "i32" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i32, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, i32, E> }
             }
             "i64" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i64, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, i64, E> }
             }
             "i128" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, i128, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, i128, E> }
             }
             "isize" => {
-                quote_spanned! {span=> ::winnow::ascii::dec_int::<#input_type, isize, #inner_err_type> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, isize, E> }
             }
             "f32" => {
                 quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f32, #inner_err_type> }
