@@ -311,3 +311,29 @@ fn a_byte_grammar_reads_bytes() {
     }
     assert_eq!(expected.unwrap(), (0..100).sum::<i64>());
 }
+
+#[test]
+fn items_are_numbered_across_pieces_as_in_one_parse() {
+    let mut input = sample(60);
+    let line = input.len() - 30;
+    let line = line + input[line..].find('\n').unwrap() + 1;
+    input.insert_str(line, "broken\n");
+    let expected = totals_whole(&input).unwrap_err();
+    assert!(expected.to_string().contains("in item 5"), "{expected}");
+    for how in [
+        Parallelism::Pieces(2),
+        Parallelism::Pieces(7),
+        Parallelism::Claimed {
+            piece: 40,
+            order: winnow_grammar::rt::Order::Kept,
+        },
+        Parallelism::Claimed {
+            piece: 40,
+            order: winnow_grammar::rt::Order::Any,
+        },
+    ] {
+        let got =
+            Totals::parse_FILE_pieces(&input, &ParseContext::<()>::default(), how).unwrap_err();
+        assert_eq!(got.to_string(), expected.to_string(), "{how:?}");
+    }
+}

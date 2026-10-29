@@ -66,7 +66,7 @@ impl Buf {
     /// Drops the first `k` bytes.
     pub(crate) fn drop_front(&mut self, k: usize) {
         let gone = &self.data[..k];
-        self.lines += memchr::memchr_iter(b'\n', gone).count();
+        self.lines += count_lines(gone);
         if let Some(i) = memchr::memrchr(b'\n', gone) {
             self.line_start = self.dropped + i + 1;
         }
@@ -84,7 +84,7 @@ impl Buf {
             return None;
         }
         let before = &bytes[..at];
-        let line = self.lines + memchr::memchr_iter(b'\n', before).count() + 1;
+        let line = self.lines + count_lines(before) + 1;
         let (start, whole) = match memchr::memrchr(b'\n', before) {
             Some(i) => (i + 1, true),
             None => (0, self.line_start == self.dropped),
@@ -112,6 +112,16 @@ impl Buf {
             at: pos,
         })
     }
+}
+
+/// `\n` in `b`. Counted in `u8` over runs of 255 bytes, a shape the compiler
+/// turns into a vector loop: `memchr_iter` pays per match, and a plain
+/// `filter().count()` per byte - 3.5 instructions a byte, a fifth of a
+/// 1BRC row's parse.
+fn count_lines(b: &[u8]) -> usize {
+    b.chunks(255)
+        .map(|c| c.iter().map(|&x| (x == b'\n') as u8).sum::<u8>() as usize)
+        .sum()
 }
 
 /// How `parse_<rule>_reader` reads: the size of a read, and the bound on what

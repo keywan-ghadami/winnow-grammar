@@ -283,21 +283,207 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
         }
     }
 
-    /// One item of the fold: `f` parses it and, where [`commit`] says so,
-    /// hands it to the step, answering whether it did. `false` from here is
-    /// the end of the fold, at the position before the item; `index` numbers
-    /// the item in an error, from 1.
-    pub fn item<F>(
+    /// Items of the fold, as many as the input that has arrived decides: `f`
+    /// parses one and, where [`commit`] says so, hands it to the step,
+    /// answering whether it did. `n` counts the items taken, and numbers an
+    /// item in an error. `true` asks to be called again, after a read;
+    /// `false` is the end of the fold, at the position before the item that
+    /// did not come.
+    ///
+    /// One window serves every item it decides, so a step costs the item's
+    /// parse and little else; an item that touched the end of the window is
+    /// parsed again in the next.
+    pub fn items<F>(
         &mut self,
         rules: &[&'static str],
-        index: usize,
+        n: &mut usize,
         mut f: F,
     ) -> Result<bool, ParseError>
     where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<bool, Fail>,
     {
-        let r = self.run(rules, &mut f, Some(index));
-        Ok(self.finished(r)?.unwrap_or(false))
+        let r = self.items_once(rules, n, &mut f);
+        self.finished(r)
+    }
+
+    fn items_once<F>(
+        &mut self,
+        rules: &[&'static str],
+        n: &mut usize,
+        f: &mut F,
+    ) -> Result<bool, ParseError>
+    where
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<bool, Fail>,
+    {
+        enum Stop {
+            Refill,
+            TooFar,
+            Ended,
+            Failed(Fail),
+        }
+        let mode = self.context().diagnose;
+        let zst = std::mem::size_of::<S>() == 0;
+        let lazy = zst || mode == Diagnose::Replay;
+        if lazy {
+            if self.visible == self.pos && !self.eof {
+                self.read_once(0)?;
+            }
+        } else {
+            while self.visible - self.pos < self.lookahead && !self.eof {
+                self.read_once(self.lookahead - (self.visible - self.pos))?;
+            }
+        }
+        let last = self.eof && self.visible == self.buf.len();
+        let pass = Pass {
+            diagnose: mode == Diagnose::Eager,
+            last,
+            replay: false,
+        };
+        let origin = self.base + self.pos;
+        let window = self.visible - self.pos;
+        let lookahead = self.lookahead;
+        let mut ctx = self.ctx.take().expect("the context is back between steps");
+        let recovered = ctx.recovered.len();
+        ctx.touched = false;
+        ctx.trivia_memo = TRIVIA_UNSEEN;
+        ctx.last_trivia = (usize::MAX, usize::MAX);
+        ctx.furthest = None;
+        ctx.origin = origin;
+        ctx.rules.clear();
+        if pass.diagnose {
+            ctx.rules.extend_from_slice(rules);
+        }
+        let mut prev = None;
+        let (stop, at, mut ctx) = {
+            let mut input = Input {
+                input: winnow::stream::LocatingSlice::new(K::view(
+                    &self.buf.bytes()[self.pos..self.visible],
+                )),
+                state: ctx,
+            };
+            let stop = loop {
+                let at = input.current_token_start();
+                // Filled to the lookahead, every item gets all of it: one that
+                // would start with less waits for the next window.
+                if !lazy && !last && window - at < lookahead {
+                    break Stop::Refill;
+                }
+                let snapshot = (!zst && (mode == Diagnose::Replay || (lazy && !last)))
+                    .then(|| input.state.user_state.clone());
+                let saved = (input.state.recoveries, input.state.recovered.len());
+                input.state.touched = false;
+                let cp = input.checkpoint();
+                let r = f(&mut input, &pass);
+                if input.state.touched && !last {
+                    input.reset(&cp);
+                    if let Some(s) = snapshot {
+                        input.state.user_state = s;
+                    }
+                    input.state.recoveries = saved.0;
+                    input.state.recovered.truncate(saved.1);
+                    break if window - at >= lookahead {
+                        Stop::TooFar
+                    } else {
+                        Stop::Refill
+                    };
+                }
+                match r {
+                    Ok(true) => {
+                        *n += 1;
+                        prev = Some(at);
+                    }
+                    Ok(false) => break Stop::Ended,
+                    Err(Fail::Backtrack(e)) => {
+                        input.reset(&cp);
+                        if let Some(e) = e {
+                            e.item(*n + 1).record(&mut input.state, at);
+                        }
+                        break Stop::Ended;
+                    }
+                    Err(fail) => {
+                        input.reset(&cp);
+                        if let Some(s) = snapshot {
+                            input.state.user_state = s;
+                        }
+                        break Stop::Failed(fail);
+                    }
+                }
+            };
+            (stop, input.current_token_start(), input.state)
+        };
+        ctx.rules.clear();
+        ctx.origin = 0;
+        let recorded = ctx.furthest.take().map(|e| shift(e, origin));
+        self.furthest = match (self.furthest.take(), recorded) {
+            (Some(a), Some(b)) => Some(a.merge(b)),
+            (a, b) => a.or(b),
+        };
+        for e in &mut ctx.recovered[recovered..] {
+            *e = shift(e.clone(), origin);
+        }
+        self.ctx = Some(ctx);
+        if let Some(p) = prev {
+            self.prev_item = Some(self.pos + p);
+        }
+        self.pos += at;
+        let diagnose = Pass {
+            diagnose: true,
+            last,
+            replay: false,
+        };
+        match stop {
+            Stop::Refill => {
+                let more = (self.visible - self.pos).max(self.block);
+                let before = self.visible;
+                while self.visible == before && !self.eof {
+                    self.read_once(more)?;
+                }
+                Ok(true)
+            }
+            Stop::TooFar => Err(self.too_far()),
+            Stop::Ended => {
+                // What the item expected is kept for an error further on, as
+                // the fold keeps it - and so is what the item before it
+                // recorded, which the parse in memory would have recorded on
+                // its way here.
+                if !pass.diagnose && mode != Diagnose::Off {
+                    let saved = {
+                        let c = self.context();
+                        (c.recoveries, c.recovered.len())
+                    };
+                    let keep = self.context().user_state.clone();
+                    self.replay_prev(rules, f, Some(*n + 1), last);
+                    let _ = self.attempt(self.pos, rules, f, diagnose, Some(*n + 1));
+                    self.context().user_state = keep;
+                    self.roll_back(None, saved);
+                }
+                Ok(false)
+            }
+            Stop::Failed(fail) if pass.diagnose => {
+                let e = fail.error().map(|mut e| {
+                    for r in rules.iter().rev() {
+                        e.push_rule(r);
+                    }
+                    let e = shift(e, self.base + self.pos);
+                    match &self.furthest {
+                        Some(f) => f.clone().merge(e),
+                        None => e,
+                    }
+                });
+                Err(e.unwrap_or_else(ParseError::undiagnosed))
+            }
+            Stop::Failed(_) if mode == Diagnose::Off => Err(ParseError::undiagnosed()),
+            Stop::Failed(_) => {
+                let keep = self.context().user_state.clone();
+                self.replay_prev(rules, f, Some(*n + 1), last);
+                self.context().user_state = keep;
+                match self.attempt(self.pos, rules, f, diagnose, Some(*n + 1)).0 {
+                    // The diagnosing pass took what the fast one did not.
+                    Ok(_) => Ok(true),
+                    Err(fail) => Err(fail.error().unwrap_or_else(ParseError::undiagnosed)),
+                }
+            }
+        }
     }
 
     /// The end: `f` skips what the entry point skips after its rule, and then

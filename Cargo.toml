@@ -78,3 +78,7 @@ harness = false
 [[bench]]
 name = "deferred"
 harness = false
+
+[[bench]]
+name = "stream"
+harness = false

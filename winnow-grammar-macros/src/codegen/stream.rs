@@ -407,27 +407,21 @@ impl Codegen<'_> {
             let mut __acc = ::core::option::Option::Some((#init)());
             let mut __step = #step_fn(&__acc, #step);
             let mut __n = 0usize;
-            loop {
-                __n += 1;
-                let __took = __stream.item(&[#(#rules),*], __n, |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass| {
-                    let __v = if pass.diagnose() {
-                        #item_fn::<S, ::winnow_grammar::ParseError>(input, #(#args),*)
-                            .map_err(::winnow_grammar::rt::stream::Fail::from)?
-                    } else {
-                        #item_fn::<S, ::winnow::error::EmptyError>(input, #(#args),*)
-                            .map_err(::winnow_grammar::rt::stream::Fail::from)?
-                    };
-                    if ::winnow_grammar::rt::stream::commit(input, pass) {
-                        #apply
-                        ::core::result::Result::Ok(true)
-                    } else {
-                        ::core::result::Result::Ok(false)
-                    }
-                })?;
-                if !__took {
-                    break;
+            while __stream.items(&[#(#rules),*], &mut __n, |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass| {
+                let __v = if pass.diagnose() {
+                    #item_fn::<S, ::winnow_grammar::ParseError>(input, #(#args),*)
+                        .map_err(::winnow_grammar::rt::stream::Fail::from)?
+                } else {
+                    #item_fn::<S, ::winnow::error::EmptyError>(input, #(#args),*)
+                        .map_err(::winnow_grammar::rt::stream::Fail::from)?
+                };
+                if ::winnow_grammar::rt::stream::commit(input, pass) {
+                    #apply
+                    ::core::result::Result::Ok(true)
+                } else {
+                    ::core::result::Result::Ok(false)
                 }
-            }
+            })? {}
             let __path = __acc.take().expect("the accumulator is there");
         }
     }
