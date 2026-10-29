@@ -341,7 +341,7 @@ impl<'a> Codegen<'a> {
                     // cannot outlive it (ADR 27 §1).
                     quote! {}
                 } else {
-                    self.generate_reader_fns(rule, &boundary, &pieces_with_fn, &merge_fn)
+                    self.generate_reader_fns(rule, &boundary, &inner_fn, &merge_fn)
                 };
                 quote_spanned! {span=>
                     #reader
@@ -431,10 +431,17 @@ impl<'a> Codegen<'a> {
         &self,
         rule: &Rule,
         boundary: &str,
-        pieces_with_fn: &proc_macro2::Ident,
+        inner_fn: &proc_macro2::Ident,
         merge_fn: &proc_macro2::Ident,
     ) -> TokenStream {
         let span = Span::mixed_site();
+        // The input of a block, whose lifetime is the block's: the result
+        // does not borrow it.
+        let input_ty_elided = if self.is_bytes() {
+            quote! { ::winnow_grammar::ParseBytes<'_, S> }
+        } else {
+            quote! { ::winnow_grammar::ParseInput<'_, S> }
+        };
         let state_bound = self.state_bound();
         let vis = if rule.is_pub {
             quote! { pub }
@@ -490,7 +497,19 @@ impl<'a> Codegen<'a> {
                     reading,
                     |block: &[u8]| {
                         #view
-                        #pieces_with_fn(block, &new_context, how)
+                        ::winnow_grammar::rt::fold_pieces_counted(
+                            block,
+                            #boundary,
+                            how,
+                            &new_context,
+                            |piece: &mut #input_ty_elided| -> ::winnow::Result<#ret_type, ::winnow::error::ErrMode<::winnow::error::EmptyError>> {
+                                #inner_fn(piece)
+                            },
+                            |piece: &mut #input_ty_elided| -> ::winnow::Result<#ret_type, ::winnow::error::ErrMode<::winnow_grammar::ParseError>> {
+                                #inner_fn(piece)
+                            },
+                            #merge_fn,
+                        )
                     },
                     |a, b| #merge_fn(a, b),
                 )

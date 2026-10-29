@@ -153,6 +153,11 @@ fn an_error_is_at_its_offset_in_the_stream() {
         let got = totals_read(&input, 5, block, Parallelism::Off).unwrap_err();
         assert_eq!(got.offset, expected.offset, "block {block}");
         assert_eq!(got.headline(), expected.headline(), "block {block}");
+        assert_eq!(
+            got.render_excerpt(),
+            expected.render(&input),
+            "block {block}"
+        );
     }
 }
 

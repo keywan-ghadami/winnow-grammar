@@ -848,3 +848,27 @@ fn a_character_decoded_from_bytes_waits_for_all_of_its_bytes() {
         single_any_bytes::check(leak(input));
     }
 }
+
+#[test]
+fn an_error_of_a_stream_renders_as_the_parse_in_memory_renders_it() {
+    let mut inputs: Vec<String> = pieces(0xe7, 300, LEAF_PIECES, 10);
+    inputs.push("abc\nabc\n  ab x\nabc".to_string());
+    inputs.push("abc abc\n\n\"open\nmore".to_string());
+    let mut compared = 0;
+    for input in inputs {
+        let input = leak(input);
+        let Err(mem) = mem_text(&mut Leaves::parse_file(), input, Diagnose::default()) else {
+            continue;
+        };
+        for step in [1, 5] {
+            let got = leaves_read(input, step, 1, BIG).unwrap_err();
+            assert_eq!(
+                mem.render(input),
+                got.render_excerpt(),
+                "{input:?}, step {step}"
+            );
+            compared += 1;
+        }
+    }
+    assert!(compared > 100, "{compared}");
+}

@@ -14,10 +14,19 @@ use winnow::stream::{LocatingSlice, Stream};
 /// A read buffer: `data[..filled]` is what has been read. The rest of
 /// `data` is zeroed once, when it grows, so that a read of a few bytes does
 /// not clear a block's worth first.
+///
+/// It also keeps count of the lines it has dropped, so that an error can say
+/// where it is when its input is gone ([`Buf::excerpt`]).
 #[derive(Default)]
 pub(crate) struct Buf {
     data: Vec<u8>,
     filled: usize,
+    /// Bytes dropped so far: the stream's offset of `data[0]`.
+    pub(crate) dropped: usize,
+    /// `\n` among them.
+    lines: usize,
+    /// The stream's offset where the line `data[0]` is on begins.
+    line_start: usize,
 }
 
 impl Buf {
@@ -41,10 +50,67 @@ impl Buf {
         Ok(got)
     }
 
+    /// How much of the first `k` bytes may go while the line the `k`-th is
+    /// on stays, for an error's excerpt: all of them, unless that line began
+    /// within `limit` bytes before - a line longer than that is cut, so the
+    /// bound on memory holds for one long line too.
+    pub(crate) fn droppable(&self, k: usize, limit: usize) -> usize {
+        match memchr::memrchr(b'\n', &self.data[..k]) {
+            Some(i) if k - (i + 1) <= limit => i + 1,
+            Some(_) => k,
+            None if self.line_start == self.dropped && k <= limit => 0,
+            None => k,
+        }
+    }
+
     /// Drops the first `k` bytes.
     pub(crate) fn drop_front(&mut self, k: usize) {
+        let gone = &self.data[..k];
+        self.lines += memchr::memchr_iter(b'\n', gone).count();
+        if let Some(i) = memchr::memrchr(b'\n', gone) {
+            self.line_start = self.dropped + i + 1;
+        }
+        self.dropped += k;
         self.data.copy_within(k..self.filled, 0);
         self.filled -= k;
+    }
+
+    /// The line the stream position `offset` is on, if the buffer still
+    /// holds it.
+    pub(crate) fn excerpt(&self, offset: usize) -> Option<crate::error::Excerpt> {
+        let at = offset.checked_sub(self.dropped)?;
+        let bytes = self.bytes();
+        if at > bytes.len() {
+            return None;
+        }
+        let before = &bytes[..at];
+        let line = self.lines + memchr::memchr_iter(b'\n', before).count() + 1;
+        let (start, whole) = match memchr::memrchr(b'\n', before) {
+            Some(i) => (i + 1, true),
+            None => (0, self.line_start == self.dropped),
+        };
+        let end = memchr::memchr(b'\n', &bytes[at..]).map_or(bytes.len(), |i| at + i);
+        let mut line_bytes = &bytes[start..end];
+        if let [rest @ .., b'\r'] = line_bytes {
+            line_bytes = rest;
+        }
+        let text = String::from_utf8_lossy(line_bytes).into_owned();
+        let prefix = String::from_utf8_lossy(&bytes[start..at.min(start + line_bytes.len())]);
+        let mut pos = prefix.len().min(text.len());
+        while !text.is_char_boundary(pos) {
+            pos -= 1;
+        }
+        let column = if whole {
+            text[..pos].chars().count() + 1
+        } else {
+            offset - self.line_start + 1
+        };
+        Some(crate::error::Excerpt {
+            line,
+            column,
+            text,
+            at: pos,
+        })
     }
 }
 
@@ -76,8 +142,9 @@ impl Default for Reading {
 /// each run of whole frames - the bytes up to just past the last `boundary` -
 /// to `parse`, and fold the results with `merge`, in input order.
 ///
-/// `parse` gets the bytes alone; an error it returns is moved from the
-/// block's offsets to the stream's. At the end the rest is parsed whether or
+/// `parse` gets the bytes alone and answers with its value and the number of
+/// items it accepted; an error it returns is moved from the block's offsets
+/// and item numbers to the stream's. At the end the rest is parsed whether or
 /// not it ends in a boundary, as the last piece of an input is; a rest left
 /// empty is not parsed, unless the whole input was empty.
 pub fn fold_reader<R, T, P, M>(
@@ -89,17 +156,20 @@ pub fn fold_reader<R, T, P, M>(
 ) -> Result<T, ParseError>
 where
     R: Read,
-    P: FnMut(&[u8]) -> Result<T, ParseError>,
+    P: FnMut(&[u8]) -> Result<(T, usize), ParseError>,
     M: Fn(T, T) -> T,
 {
     let boundary = boundary.as_bytes();
     let block = reading.block.max(1);
     let mut buf = Buf::default();
-    // The stream's offset of `buf[0]`.
-    let mut base = 0usize;
-    // No boundary starts in `buf` before this: what was searched already.
+    // Where what is not parsed yet begins in `buf`; before it, at most the
+    // start of its line, kept for an error's excerpt.
+    let mut start = 0usize;
+    // No boundary starts in `buf[start..]` before this: what was searched.
     let mut searched = 0usize;
     let mut acc: Option<T> = None;
+    // Items accepted in the blocks before, to number an error's from.
+    let mut items = 0usize;
     let mut eof = false;
     loop {
         let target = buf.len() + block;
@@ -109,35 +179,39 @@ where
                 Ok(0) => eof = true,
                 Ok(_) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(e) => return Err(at(base + len, format_args!("read failed: {e}"))),
+                Err(e) => return Err(at(buf.dropped + len, format_args!("read failed: {e}"))),
             }
         }
+        let rest = buf.len() - start;
         let cut = if eof {
-            buf.len()
+            rest
         } else {
-            match memchr::memmem::rfind(&buf.bytes()[searched..], boundary) {
+            match memchr::memmem::rfind(&buf.bytes()[start + searched..], boundary) {
                 Some(i) => searched + i + boundary.len(),
                 None => {
-                    if buf.len() > reading.max_frame {
-                        return Err(no_boundary(base, reading.max_frame));
+                    if rest > reading.max_frame {
+                        return Err(no_boundary(buf.dropped + start, reading.max_frame));
                     }
                     // A boundary may begin in the last bytes and end in the
                     // next block.
-                    searched = buf.len().saturating_sub(boundary.len().saturating_sub(1));
+                    searched = rest.saturating_sub(boundary.len().saturating_sub(1));
                     continue;
                 }
             }
         };
-        if buf.len() - cut > reading.max_frame {
-            return Err(no_boundary(base + cut, reading.max_frame));
+        if rest - cut > reading.max_frame {
+            return Err(no_boundary(buf.dropped + start + cut, reading.max_frame));
         }
         if cut > 0 || (eof && acc.is_none()) {
-            let v = parse(&buf.bytes()[..cut]).map_err(|mut e| {
+            let origin = buf.dropped + start;
+            let (v, n) = parse(&buf.bytes()[start..start + cut]).map_err(|mut e| {
                 if !e.is_undiagnosed() {
-                    e.offset += base;
+                    e.offset += origin;
+                    e.excerpt = buf.excerpt(e.offset);
                 }
-                e
+                super::renumber(e, items)
             })?;
+            items += n;
             acc = Some(match acc {
                 Some(a) => merge(a, v),
                 None => v,
@@ -146,9 +220,11 @@ where
         if eof {
             return Ok(acc.expect("the last step parses when nothing was parsed before"));
         }
-        buf.drop_front(cut);
-        base += cut;
+        start += cut;
         searched = 0;
+        let gone = buf.droppable(start, reading.max_frame);
+        buf.drop_front(gone);
+        start -= gone;
     }
 }
 

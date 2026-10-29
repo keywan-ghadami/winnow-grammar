@@ -60,6 +60,7 @@ static NOTHING: ErrorCore = ErrorCore {
     lookahead: false,
     begun_at: None,
     invalid_utf8: None,
+    excerpt: None,
 };
 
 impl std::ops::Deref for ParseError {
@@ -132,6 +133,27 @@ pub struct ErrorCore {
     /// made from it and the offset when it is read, so it stays right when a
     /// piece's error is moved to its place in the whole input.
     pub invalid_utf8: Option<u8>,
+    /// Where the error is, for an input that is gone by the time the error
+    /// is read: an error of `parse_<rule>_reader` (ADR 27). See
+    /// [`ParseError::render_excerpt`].
+    pub excerpt: Option<Excerpt>,
+}
+
+/// The line an error of a stream is on, taken while it was still in the
+/// buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Excerpt {
+    /// 1-based, counted in `\n`.
+    pub line: usize,
+    /// 1-based, in characters - or in bytes where the line began in input
+    /// the stream had already dropped, which a line longer than the buffer
+    /// can.
+    pub column: usize,
+    /// The line, without its ending, from its start or from the oldest byte
+    /// the stream still had; shown lossily where it is not UTF-8.
+    pub text: String,
+    /// Where the error is in `text`, on a character boundary.
+    pub at: usize,
 }
 
 impl ParseError {
@@ -151,6 +173,7 @@ impl ParseError {
             lookahead: false,
             begun_at: None,
             invalid_utf8: None,
+            excerpt: None,
         })))
     }
 
@@ -197,6 +220,7 @@ impl ParseError {
             lookahead: false,
             begun_at: None,
             invalid_utf8: None,
+            excerpt: None,
         })))
     }
 
@@ -483,6 +507,27 @@ impl ParseError {
                 s
             }
         }
+    }
+
+    /// [`render`](Self::render) for an error that carries its own line - an
+    /// error of `parse_<rule>_reader`, whose input is gone by the time the
+    /// error is read (ADR 27). Without an excerpt, the message and the
+    /// notes.
+    pub fn render_excerpt(&self) -> String {
+        let mut s = self.headline();
+        if let (false, Some(x)) = (self.undiagnosed, &self.excerpt) {
+            s = format!("{s} at line {}, column {}", x.line, x.column);
+            let width = match &self.found {
+                Some(f) if x.text[x.at..].starts_with(f.as_str()) => f.chars().count(),
+                _ => 1,
+            };
+            s.push('\n');
+            s.push_str(&crate::span::caret_line(&x.text, x.line, x.at, width));
+        }
+        if !self.undiagnosed {
+            self.push_notes(&mut s);
+        }
+        s
     }
 
     fn render_text(&self, source: &str) -> String {

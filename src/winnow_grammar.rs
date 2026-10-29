@@ -25,7 +25,7 @@ pub mod test_result;
 pub mod testing;
 
 pub use error::{
-    Diagnostics, ParseError, PRIO_AGGREGATED, PRIO_LABELED, PRIO_NORMAL, PRIO_STRUCTURAL,
+    Diagnostics, Excerpt, ParseError, PRIO_AGGREGATED, PRIO_LABELED, PRIO_NORMAL, PRIO_STRUCTURAL,
 };
 
 pub use interner::{InternerContext, Symbol};

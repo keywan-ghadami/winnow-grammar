@@ -499,16 +499,42 @@ where
     D: Fn(&mut Input<B, S>) -> Result<T, ErrMode<ParseError>>,
     M: Fn(T, T) -> T,
 {
+    fold_pieces_counted(input, boundary, how, new_context, fast, diagnose, merge).map(|(v, _)| v)
+}
+
+/// [`fold_pieces`], with the number of items the fold accepted - what the
+/// reader of a stream numbers the items of its next block from.
+#[cfg(not(feature = "rayon"))]
+pub fn fold_pieces_counted<B, S, T, F, D, M, C>(
+    input: B,
+    boundary: &str,
+    how: Parallelism,
+    new_context: C,
+    fast: F,
+    diagnose: D,
+    merge: M,
+) -> Result<(T, usize), ParseError>
+where
+    S: Clone + std::fmt::Debug,
+    C: Fn() -> crate::ParseContext<S>,
+    B: Slice,
+    F: Fn(&mut Input<B, S>) -> Result<T, ErrMode<EmptyError>>,
+    D: Fn(&mut Input<B, S>) -> Result<T, ErrMode<ParseError>>,
+    M: Fn(T, T) -> T,
+{
     let ranges = piece_ranges(input.as_bstr(), boundary, how);
     let mut acc: Option<T> = None;
+    let mut items = 0;
     for r in ranges {
-        let v = parse_piece(input.clone(), r, &new_context, &fast, &diagnose)?;
+        let (v, n) = parse_piece(input.clone(), r, &new_context, &fast, &diagnose)
+            .map_err(|e| renumber(e, items))?;
+        items += n;
         acc = Some(match acc {
             Some(a) => merge(a, v),
             None => v,
         });
     }
-    Ok(acc.expect("at least one piece"))
+    Ok((acc.expect("at least one piece"), items))
 }
 
 /// See the sequential definition; this one runs the pieces on rayon's
@@ -524,6 +550,30 @@ pub fn fold_pieces<B, S, T, F, D, M, C>(
     diagnose: D,
     merge: M,
 ) -> Result<T, ParseError>
+where
+    S: Clone + std::fmt::Debug,
+    T: Send,
+    C: Fn() -> crate::ParseContext<S> + Sync,
+    B: Slice + Sync,
+    F: Fn(&mut Input<B, S>) -> Result<T, ErrMode<EmptyError>> + Sync,
+    D: Fn(&mut Input<B, S>) -> Result<T, ErrMode<ParseError>> + Sync,
+    M: Fn(T, T) -> T + Sync,
+{
+    fold_pieces_counted(input, boundary, how, new_context, fast, diagnose, merge).map(|(v, _)| v)
+}
+
+/// [`fold_pieces`], with the number of items the fold accepted - what the
+/// reader of a stream numbers the items of its next block from.
+#[cfg(feature = "rayon")]
+pub fn fold_pieces_counted<B, S, T, F, D, M, C>(
+    input: B,
+    boundary: &str,
+    how: Parallelism,
+    new_context: C,
+    fast: F,
+    diagnose: D,
+    merge: M,
+) -> Result<(T, usize), ParseError>
 where
     S: Clone + std::fmt::Debug,
     T: Send,
@@ -550,7 +600,7 @@ where
             &diagnose,
         );
     }
-    let one = |k: usize| -> Option<(usize, Result<T, ParseError>)> {
+    let one = |k: usize| -> Option<(usize, Result<(T, usize), ParseError>)> {
         let range = piece_range(bytes, boundary.as_bytes(), how, count, k);
         if range.is_empty() {
             return None;
@@ -564,13 +614,16 @@ where
     let claims = (0..count).into_par_iter().with_max_len(1);
     match how.order() {
         // **Merged in input order**: rayon's `reduce_with` joins neighbours,
-        // and the earlier of two failures wins.
+        // and the earlier of two failures wins. The left side of a join is
+        // every piece before the right one, so its count numbers the right
+        // side's items.
         Order::Kept => claims
             .filter_map(one)
             .map(|(_, parsed)| parsed)
             .reduce_with(|a, b| match (a, b) {
-                (Ok(a), Ok(b)) => Ok(merge(a, b)),
-                (Err(e), _) | (Ok(_), Err(e)) => Err(e),
+                (Ok((a, n)), Ok((b, m))) => Ok((merge(a, b), n + m)),
+                (Ok((_, n)), Err(e)) => Err(renumber(e, n)),
+                (Err(e), _) => Err(e),
             })
             .expect("input that is not empty has a piece that is not"),
         // **One result per worker**: a piece's result is merged into the slot
@@ -579,6 +632,9 @@ where
             let threads = rayon::current_num_threads().max(1);
             let slots: Vec<Mutex<Option<T>>> = (0..threads).map(|_| Mutex::new(None)).collect();
             let first: Mutex<Option<(usize, ParseError)>> = Mutex::new(None);
+            // Where each piece began and how many items it had, to number
+            // the items of the one that failed.
+            let counts: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
             claims.for_each(|k| match one(k) {
                 None => {}
                 Some((start, Err(e))) => {
@@ -587,7 +643,11 @@ where
                         *first = Some((start, e));
                     }
                 }
-                Some((_, Ok(mut v))) => {
+                Some((start, Ok((mut v, n)))) => {
+                    counts
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .push((start, n));
                     let slot = &slots[rayon::current_thread_index().unwrap_or(0) % threads];
                     loop {
                         let before = {
@@ -604,16 +664,39 @@ where
                     }
                 }
             });
-            if let Some((_, e)) = first.into_inner().unwrap_or_else(|p| p.into_inner()) {
-                return Err(e);
+            let counts = counts.into_inner().unwrap_or_else(|p| p.into_inner());
+            if let Some((at, e)) = first.into_inner().unwrap_or_else(|p| p.into_inner()) {
+                let before = counts.iter().filter(|(s, _)| *s < at).map(|(_, n)| n).sum();
+                return Err(renumber(e, before));
             }
-            Ok(slots
-                .into_iter()
-                .filter_map(|m| m.into_inner().unwrap_or_else(|p| p.into_inner()))
-                .reduce(&merge)
-                .expect("input that is not empty has a piece that is not"))
+            let items = counts.iter().map(|(_, n)| n).sum();
+            Ok((
+                slots
+                    .into_iter()
+                    .filter_map(|m| m.into_inner().unwrap_or_else(|p| p.into_inner()))
+                    .reduce(&merge)
+                    .expect("input that is not empty has a piece that is not"),
+                items,
+            ))
         }
     }
+}
+
+/// An error of a piece whose items were numbered from 1, numbered as the
+/// items of the whole input: `by` items came before the piece.
+pub(crate) fn renumber(mut e: ParseError, by: usize) -> ParseError {
+    if by == 0 || e.is_undiagnosed() {
+        return e;
+    }
+    for r in &mut e.rule_stack {
+        if let Some(n) = r
+            .strip_prefix("item ")
+            .and_then(|n| n.parse::<usize>().ok())
+        {
+            *r = format!("item {}", n + by);
+        }
+    }
+    e
 }
 
 /// The byte ranges of the pieces `how` cuts `input` into that are not empty,
@@ -639,7 +722,7 @@ fn parse_piece<B, S, T, F, D, C>(
     new_context: &C,
     fast: &F,
     diagnose: &D,
-) -> Result<T, ParseError>
+) -> Result<(T, usize), ParseError>
 where
     S: Clone + std::fmt::Debug,
     C: Fn() -> crate::ParseContext<S>,
@@ -652,12 +735,15 @@ where
         input: winnow::stream::LocatingSlice::new(input.piece(range)),
         state: new_context(),
     };
-    entry_framed(&mut piece, fast, diagnose).map_err(|mut e| {
-        if !e.is_undiagnosed() {
-            e.offset += start;
-        }
-        e
-    })
+    // The fold writes how many items it accepted on its way out.
+    entry_framed(&mut piece, fast, diagnose)
+        .map(|v| (v, piece.state.fold.seen))
+        .map_err(|mut e| {
+            if !e.is_undiagnosed() {
+                e.offset += start;
+            }
+            e
+        })
 }
 
 /// The byte ranges of `n` pieces of `input`, each beginning right after a

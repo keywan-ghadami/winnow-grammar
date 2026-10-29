@@ -316,8 +316,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
         if self.context().diagnose == Diagnose::Off {
             return Err(ParseError::undiagnosed());
         }
-        let mut ctx = self.ctx.take().expect("the context is back between steps");
-        ctx.furthest = self.local_furthest(self.base + self.pos);
+        let ctx = self.ctx.take().expect("the context is back between steps");
         let (e, ctx) = {
             let input = Input {
                 input: winnow::stream::LocatingSlice::new(K::view(
@@ -326,10 +325,14 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
                 state: ctx,
             };
             let e = ParseError::from_stream(&input).add_expected("end of input");
-            (input.state.best(e), input.state)
+            (e, input.state)
         };
         self.ctx = Some(ctx);
         let e = self.absolute(e);
+        let e = match &self.furthest {
+            Some(f) => f.clone().merge(e),
+            None => e,
+        };
         self.finished(Err(e))
     }
 
@@ -353,6 +356,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
         if at <= self.visible {
             e.found = crate::error::next_word(&self.buf.bytes()[at..self.visible]);
         }
+        e.excerpt = self.buf.excerpt(e.offset);
         Err(e)
     }
 
@@ -510,7 +514,10 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
         ctx.touched = false;
         ctx.trivia_memo = TRIVIA_UNSEEN;
         ctx.last_trivia = (usize::MAX, usize::MAX);
-        ctx.furthest = self.local_furthest(origin);
+        // What earlier steps recorded stays in stream positions and is
+        // merged outside: moved into the window, a failure that began before
+        // it would lose the order of where attempts began.
+        ctx.furthest = None;
         ctx.origin = origin;
         ctx.rules.clear();
         if pass.diagnose {
@@ -537,7 +544,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
                     for r in rules.iter().rev() {
                         e.push_rule(r);
                     }
-                    input.state.best(e)
+                    e
                 });
                 Err(if cut {
                     Fail::Cut(e)
@@ -550,32 +557,24 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
         let mut ctx = input.state;
         ctx.rules.clear();
         ctx.origin = 0;
-        self.furthest = ctx.furthest.take().map(|e| shift(e, origin));
+        let recorded = ctx.furthest.take().map(|e| shift(e, origin));
+        self.furthest = match (self.furthest.take(), recorded) {
+            (Some(a), Some(b)) => Some(a.merge(b)),
+            (a, b) => a.or(b),
+        };
         for e in &mut ctx.recovered[recovered..] {
             *e = shift(e.clone(), origin);
         }
         self.ctx = Some(ctx);
+        let best = |e: ParseError| match &self.furthest {
+            Some(f) => f.clone().merge(shift(e, origin)),
+            None => shift(e, origin),
+        };
         let r = r.map_err(|fail| match fail {
-            Fail::Backtrack(e) => Fail::Backtrack(e.map(|e| shift(e, origin))),
-            Fail::Cut(e) => Fail::Cut(e.map(|e| shift(e, origin))),
+            Fail::Backtrack(e) => Fail::Backtrack(e.map(best)),
+            Fail::Cut(e) => Fail::Cut(e.map(best)),
         });
         (r, touched)
-    }
-
-    /// What was recorded, at the positions of a window that starts at
-    /// stream position `origin`; what lies before it cannot win on progress
-    /// and is dropped.
-    fn local_furthest(&self, origin: usize) -> Option<ParseError> {
-        self.furthest.clone().and_then(|mut e| {
-            if e.offset < origin {
-                return None;
-            }
-            e.offset -= origin;
-            if let Some(b) = e.begun_at {
-                e.begun_at = Some(b.saturating_sub(origin));
-            }
-            Some(e)
-        })
     }
 
     fn absolute(&self, e: ParseError) -> ParseError {
@@ -606,6 +605,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
     /// dropping what lies before the next step when that is a block or more.
     fn read_once(&mut self, want: usize) -> Result<(), ParseError> {
         let keep = self.prev_item.unwrap_or(self.pos).min(self.pos);
+        let keep = self.buf.droppable(keep, self.max_frame);
         if keep >= self.block {
             self.buf.drop_front(keep);
             self.base += keep;
