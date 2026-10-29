@@ -11,6 +11,43 @@ use crate::error::{Diagnostics, ParseError};
 use std::io::Read;
 use winnow::stream::{LocatingSlice, Stream};
 
+/// A read buffer: `data[..filled]` is what has been read. The rest of
+/// `data` is zeroed once, when it grows, so that a read of a few bytes does
+/// not clear a block's worth first.
+#[derive(Default)]
+pub(crate) struct Buf {
+    data: Vec<u8>,
+    filled: usize,
+}
+
+impl Buf {
+    pub(crate) fn len(&self) -> usize {
+        self.filled
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.data[..self.filled]
+    }
+
+    /// One read of up to `n` bytes, appended; `Ok(0)` is the end.
+    pub(crate) fn read_from(&mut self, reader: &mut impl Read, n: usize) -> std::io::Result<usize> {
+        let need = self.filled + n.max(1);
+        if self.data.len() < need {
+            self.data.resize(need.max(self.data.len() * 2), 0);
+        }
+        let end = (self.filled + n.max(1)).min(self.data.len());
+        let got = reader.read(&mut self.data[self.filled..end])?;
+        self.filled += got;
+        Ok(got)
+    }
+
+    /// Drops the first `k` bytes.
+    pub(crate) fn drop_front(&mut self, k: usize) {
+        self.data.copy_within(k..self.filled, 0);
+        self.filled -= k;
+    }
+}
+
 /// How `parse_<rule>_reader` reads: the size of a read, and the bound on what
 /// may follow the last boundary.
 ///
@@ -57,7 +94,7 @@ where
 {
     let boundary = boundary.as_bytes();
     let block = reading.block.max(1);
-    let mut buf: Vec<u8> = Vec::new();
+    let mut buf = Buf::default();
     // The stream's offset of `buf[0]`.
     let mut base = 0usize;
     // No boundary starts in `buf` before this: what was searched already.
@@ -68,21 +105,17 @@ where
         let target = buf.len() + block;
         while buf.len() < target && !eof {
             let len = buf.len();
-            buf.resize(target, 0);
-            match reader.read(&mut buf[len..]) {
-                Ok(0) => {
-                    buf.truncate(len);
-                    eof = true;
-                }
-                Ok(n) => buf.truncate(len + n),
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => buf.truncate(len),
+            match buf.read_from(&mut reader, target - len) {
+                Ok(0) => eof = true,
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(e) => return Err(at(base + len, format_args!("read failed: {e}"))),
             }
         }
         let cut = if eof {
             buf.len()
         } else {
-            match memchr::memmem::rfind(&buf[searched..], boundary) {
+            match memchr::memmem::rfind(&buf.bytes()[searched..], boundary) {
                 Some(i) => searched + i + boundary.len(),
                 None => {
                     if buf.len() > reading.max_frame {
@@ -99,7 +132,7 @@ where
             return Err(no_boundary(base + cut, reading.max_frame));
         }
         if cut > 0 || (eof && acc.is_none()) {
-            let v = parse(&buf[..cut]).map_err(|mut e| {
+            let v = parse(&buf.bytes()[..cut]).map_err(|mut e| {
                 if !e.is_undiagnosed() {
                     e.offset += base;
                 }
@@ -113,7 +146,7 @@ where
         if eof {
             return Ok(acc.expect("the last step parses when nothing was parsed before"));
         }
-        buf.drain(..cut);
+        buf.drop_front(cut);
         base += cut;
         searched = 0;
     }

@@ -1,0 +1,53 @@
+error: rule `list` has 2 alternatives, and a rule on a stream's path has one: an item handed out cannot be taken back by an alternative that loses; the stream rule `list` passes through it (ADR 27 §3)
+ --> tests/ui/stream.rs:8:13
+  |
+8 |         pub list -> usize = "[" n:fold(item, || 0usize, |n: usize, _x: ()| n + 1) "]" -> { n }
+  |             ^^^^
+
+error: rule `list` neither holds a `fold(…)` as an element of its own nor calls a rule that leads to one; the stream rule `list` passes through it (ADR 27 §3)
+  --> tests/ui/stream.rs:18:13
+   |
+18 |         pub list -> usize = "[" "]" -> { 0 }
+   |             ^^^^
+
+error: rule `list` has more than one element that leads to a `fold(…)`; a stream goes through exactly one; the stream rule `list` passes through it (ADR 27 §3)
+  --> tests/ui/stream.rs:26:13
+   |
+26 |         pub list -> usize =
+   |             ^^^^
+
+error: `h` is kept from one block of input to the next, so its type must be known: bind a call of a rule (its declared type) or a built-in of fixed type (`ident`, `u32`, `dec<T>(…)`, `count(…)`, …); the stream rule `list` passes through it (ADR 27 §3)
+  --> tests/ui/stream.rs:38:29
+   |
+38 |         pub list -> usize = h:"head" n:fold(item, || 0usize, |n: usize, _x: ()| n + 1) -> { n + h.len() }
+   |                             ^
+
+error: `h` is kept from one block of input to the next, and its type `&'a str` borrows the input; the stream rule `list` passes through it (ADR 27 §3)
+  --> tests/ui/stream.rs:47:29
+   |
+47 |         pub list -> usize = h:head n:fold(item, || 0usize, |n: usize, _x: ()| n + 1) -> { n + h.len() }
+   |                             ^
+
+error: `n`, the fold's value, is used by an element after the fold; it is known only to the action; the stream rule `list` passes through it (ADR 27 §3)
+  --> tests/ui/stream.rs:57:29
+   |
+57 |         pub list -> usize = n:fold(item, || 0usize, |n: usize, _x: ()| n + 1) if(n > 0) -> { n }
+   |                             ^
+
+error: the item of a streamed `fold` is a call of a rule of the grammar, whose declared type is what the step receives; the stream rule `list` passes through it (ADR 27 §3)
+  --> tests/ui/stream.rs:66:36
+   |
+66 |         pub list -> usize = n:fold("x", || 0usize, |n: usize, _x: &str| n + 1) -> { n }
+   |                                    ^^^
+
+error: rule `list` returns a type that borrows the input, and its value is made after the input it was read from is gone; the stream rule `list` passes through it (ADR 27 §3)
+  --> tests/ui/stream.rs:74:13
+   |
+74 |         pub list -> &'a str = "[" fold(item, || 0usize, |n: usize, _x: ()| n + 1) "]" -> { "" }
+   |             ^^^^
+
+error: `#[stream]` takes no arguments: the path to the fold is found, not named
+  --> tests/ui/stream.rs:82:9
+   |
+82 |         #[stream(item)]
+   |         ^^^^^^^^^^^^^^^

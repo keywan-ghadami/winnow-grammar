@@ -214,7 +214,7 @@ pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> {
     /// an error: `max_frame` plus the grammar's own lookahead.
     lookahead: usize,
     max_frame: usize,
-    buf: Vec<u8>,
+    buf: reader::Buf,
     /// The start of the next step, in `buf`.
     pos: usize,
     /// The start of the last item taken, in `buf`: kept, so that a failure
@@ -249,7 +249,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
             block: reading.block.max(1),
             lookahead: reading.max_frame.saturating_add(k),
             max_frame: reading.max_frame,
-            buf: Vec::new(),
+            buf: reader::Buf::default(),
             pos: 0,
             prev_item: None,
             base: 0,
@@ -321,7 +321,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
         let (e, ctx) = {
             let input = Input {
                 input: winnow::stream::LocatingSlice::new(K::view(
-                    &self.buf[self.pos..self.visible],
+                    &self.buf.bytes()[self.pos..self.visible],
                 )),
                 state: ctx,
             };
@@ -351,7 +351,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
         }
         let at = e.offset - self.base;
         if at <= self.visible {
-            e.found = crate::error::next_word(&self.buf[at..self.visible]);
+            e.found = crate::error::next_word(&self.buf.bytes()[at..self.visible]);
         }
         Err(e)
     }
@@ -517,7 +517,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
             ctx.rules.extend_from_slice(rules);
         }
         let mut input = Input {
-            input: winnow::stream::LocatingSlice::new(K::view(&self.buf[start..self.visible])),
+            input: winnow::stream::LocatingSlice::new(K::view(
+                &self.buf.bytes()[start..self.visible],
+            )),
             state: ctx,
         };
         let r = f(&mut input, &pass);
@@ -605,28 +607,22 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
     fn read_once(&mut self, want: usize) -> Result<(), ParseError> {
         let keep = self.prev_item.unwrap_or(self.pos).min(self.pos);
         if keep >= self.block {
-            self.buf.drain(..keep);
+            self.buf.drop_front(keep);
             self.base += keep;
             self.visible -= keep;
             self.pos -= keep;
             self.prev_item = self.prev_item.map(|p| p - keep);
         }
         let len = self.buf.len();
-        self.buf.resize(len + want.max(self.block), 0);
         loop {
-            match self.reader.read(&mut self.buf[len..]) {
+            match self.buf.read_from(&mut self.reader, want.max(self.block)) {
                 Ok(0) => {
-                    self.buf.truncate(len);
                     self.eof = true;
                     break;
                 }
-                Ok(n) => {
-                    self.buf.truncate(len + n);
-                    break;
-                }
+                Ok(_) => break,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(e) => {
-                    self.buf.truncate(len);
                     return Err(reader::at(
                         self.base + len,
                         format_args!("read failed: {e}"),
@@ -644,13 +640,13 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
             self.visible = self.buf.len();
             return Ok(());
         }
-        match std::str::from_utf8(&self.buf[self.visible..]) {
+        match std::str::from_utf8(&self.buf.bytes()[self.visible..]) {
             Ok(_) => self.visible = self.buf.len(),
             Err(e) => {
                 self.visible += e.valid_up_to();
                 if e.error_len().is_some() || self.eof {
                     let mut err = reader::at(self.base + self.visible, "invalid UTF-8");
-                    err.invalid_utf8 = Some(self.buf[self.visible]);
+                    err.invalid_utf8 = Some(self.buf.bytes()[self.visible]);
                     return Err(err);
                 }
             }

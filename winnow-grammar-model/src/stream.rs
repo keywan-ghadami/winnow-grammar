@@ -299,7 +299,7 @@ fn crossings(
                         format!(
                             "`{id}` is kept from one block of input to the next, and its type \
                              `{}` borrows the input",
-                            ty.to_token_stream()
+                            ty.to_token_stream().to_string().replace("& '", "&'")
                         ),
                     ))
                 }
