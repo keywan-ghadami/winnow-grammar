@@ -131,7 +131,7 @@ pub fn text_block(block: &[u8]) -> Result<&str, ParseError> {
     })
 }
 
-fn at(offset: usize, message: impl std::fmt::Display) -> ParseError {
+pub(crate) fn at(offset: usize, message: impl std::fmt::Display) -> ParseError {
     let mut e = ParseError::external(&LocatingSlice::new(&b""[..]), message);
     e.offset = offset;
     e

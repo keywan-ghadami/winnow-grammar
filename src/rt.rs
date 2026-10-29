@@ -23,9 +23,11 @@ use winnow::Parser;
 pub mod bytes;
 mod find;
 mod reader;
+pub mod stream;
 
 pub use find::{FindBytes, FindBytes2, FindBytes3};
 pub use reader::{fold_reader, text_block, Reading};
+pub use stream::{edge, edge_quoted, span_at, touch};
 
 /// What a grammar reads: `&'a str` ([`ParseInput`]) or, with `input bytes;`,
 /// `&'a [u8]` ([`ParseBytes`](crate::ParseBytes)) - ADR 25. Sealed: the two

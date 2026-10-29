@@ -259,11 +259,13 @@ impl<'a> Codegen<'a> {
         };
 
         let frame_fns = self.generate_frame_fns(rule);
+        let stream_fns = self.generate_stream_fns(rule);
 
         quote! {
             #inner_fn
             #outer_fn
             #frame_fns
+            #stream_fns
         }
     }
 

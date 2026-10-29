@@ -168,6 +168,17 @@ pub struct ParseContext<S = ()> {
     /// [`ParseError::from_input`] and so builds an error only when one is
     /// wanted. `true` outside a parse, where nothing has said otherwise.
     pub diagnosing: bool,
+    /// Set when the parse may have depended on where its input ends: a
+    /// parser stopped, or failed, within the grammar's lookahead of the end
+    /// (ADR 27 §3). Only grammars with a `#[stream]` rule write it; the
+    /// stream driver reads it to tell a result that more input could have
+    /// changed from one it could not.
+    #[doc(hidden)]
+    pub touched: bool,
+    /// Where the input of this parse begins in the whole input: `0`, except
+    /// for a block of a stream, whose spans are moved by it (ADR 27 §3).
+    #[doc(hidden)]
+    pub origin: usize,
 }
 
 impl<S: Default> Default for ParseContext<S> {
@@ -187,6 +198,8 @@ impl<S: Default> Default for ParseContext<S> {
             last_trivia: (usize::MAX, usize::MAX),
             trivia_memo: rt::TRIVIA_UNSEEN,
             diagnosing: true,
+            touched: false,
+            origin: 0,
         }
     }
 }
@@ -214,6 +227,8 @@ impl<S> ParseContext<S> {
             last_trivia: (usize::MAX, usize::MAX),
             trivia_memo: rt::TRIVIA_UNSEEN,
             diagnosing: true,
+            touched: false,
+            origin: 0,
         }
     }
 

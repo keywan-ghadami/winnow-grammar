@@ -1,16 +1,16 @@
-error: unknown attribute `frmae` on rule `ROW`; a rule takes `#[frame(…)]` and doc comments, and nothing else here reads an attribute
+error: unknown attribute `frmae` on rule `ROW`; a rule takes `#[frame(…)]`, `#[stream]` and doc comments, and nothing else here reads an attribute
  --> tests/ui/attrs.rs:8:11
   |
 8 |         #[frmae(boundary = "\n")]
   |           ^^^^^
 
-error: unknown attribute `allow` on rule `A`; a rule takes `#[frame(…)]` and doc comments, and nothing else here reads an attribute
+error: unknown attribute `allow` on rule `A`; a rule takes `#[frame(…)]`, `#[stream]` and doc comments, and nothing else here reads an attribute
   --> tests/ui/attrs.rs:15:11
    |
 15 |         #[allow(dead_code)]
    |           ^^^^^
 
-error: unknown attribute `frmae` on extern rule `outside`; a rule takes `#[frame(…)]` and doc comments, and nothing else here reads an attribute
+error: unknown attribute `frmae` on extern rule `outside`; a rule takes `#[frame(…)]`, `#[stream]` and doc comments, and nothing else here reads an attribute
   --> tests/ui/attrs.rs:24:11
    |
 24 |         #[frmae(boundary = "\n")]

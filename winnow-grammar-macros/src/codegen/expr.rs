@@ -325,7 +325,9 @@ impl<'a> Codegen<'a> {
     ) -> TokenStream {
         // A lexical sequence skips nothing between its elements, so a run of
         // fixed-shape ones can be matched by index (ADR 24 §8).
-        if is_lexical {
+        // Not where edges are tracked: a run reads by index, past every
+        // parser that would note the end (ADR 27 §3).
+        if is_lexical && !self.streaming {
             if let Some(steps) = self.fixed_sequence_steps(patterns, in_cut) {
                 return steps;
             }
@@ -387,9 +389,13 @@ impl<'a> Codegen<'a> {
 
         match binding {
             Some(name) => match pattern {
-                ModelPattern::SpanBinding(_, span_var, _) => quote_spanned! {span=>
-                    let (#name, #span_var) = #parser_expr.with_span().parse_next(#input)?;
-                },
+                ModelPattern::SpanBinding(_, span_var, _) => {
+                    let moved = self.span_moved(span_var);
+                    quote_spanned! {span=>
+                        let (#name, #span_var) = #parser_expr.with_span().parse_next(#input)?;
+                        #moved
+                    }
+                }
                 // A repetition collects, so the annotation helps inference -
                 // unless it is a run of characters, which is text.
                 ModelPattern::Repeat(inner, _)
@@ -412,9 +418,13 @@ impl<'a> Codegen<'a> {
                 },
             },
             None => match pattern {
-                ModelPattern::SpanBinding(_, span_var, _) => quote_spanned! {span=>
-                    let (_, #span_var) = #parser_expr.with_span().parse_next(#input)?;
-                },
+                ModelPattern::SpanBinding(_, span_var, _) => {
+                    let moved = self.span_moved(span_var);
+                    quote_spanned! {span=>
+                        let (_, #span_var) = #parser_expr.with_span().parse_next(#input)?;
+                        #moved
+                    }
+                }
                 // Explicitly discard result for unbinded repetitions to help type inference (e.g. Accumulate<()>)
                 ModelPattern::Repeat(_, _)
                 | ModelPattern::Plus(_, _)
@@ -425,6 +435,18 @@ impl<'a> Codegen<'a> {
                     let _ = #parser_expr.parse_next(#input)?;
                 },
             },
+        }
+    }
+
+    /// In a stream's steps, a span bound with `@` is moved to the whole
+    /// input's positions.
+    fn span_moved(&self, span_var: &syn::Ident) -> TokenStream {
+        if !self.streaming {
+            return TokenStream::new();
+        }
+        let input = &self.input_ident;
+        quote_spanned! {Span::mixed_site()=>
+            let #span_var = ::winnow_grammar::rt::span_at(#input, #span_var);
         }
     }
 
@@ -441,7 +463,7 @@ impl<'a> Codegen<'a> {
 
         // Sequence: Open, (ws), Inner, (ws), Close
 
-        let open_parser = quote_spanned! {span=> literal(#open) };
+        let open_parser = self.edge(quote_spanned! {span=> literal(#open) }, None);
         let open_stmt = if in_cut {
             quote_spanned! {span=> let _ = ::winnow::combinator::cut_err(#open_parser).parse_next(#input)?; }
         } else {
@@ -467,7 +489,7 @@ impl<'a> Codegen<'a> {
             quote! {}
         };
 
-        let close_parser = quote_spanned! {span=> literal(#close) };
+        let close_parser = self.edge(quote_spanned! {span=> literal(#close) }, None);
         let close_stmt = if final_cut {
             quote_spanned! {span=> let _ = ::winnow::combinator::cut_err(#close_parser).parse_next(#input)?; }
         } else {
@@ -1538,7 +1560,19 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// The parser for `pattern` - in a grammar that tracks edges, wrapped in
+    /// `rt::edge` at every level (ADR 27 §3).
     pub fn generate_parser_expr(
+        &self,
+        pattern: &ModelPattern,
+        is_lexical: bool,
+        is_discarded: bool,
+    ) -> TokenStream {
+        let p = self.parser_expr_node(pattern, is_lexical, is_discarded);
+        self.edge(p, Some(pattern))
+    }
+
+    fn parser_expr_node(
         &self,
         pattern: &ModelPattern,
         is_lexical: bool,
@@ -1685,7 +1719,7 @@ impl<'a> Codegen<'a> {
                 // Skipping to the synchronization point is the expensive half of
                 // recovery: it is what runs over the broken region, and it is
                 // reached exactly when a file has many errors.
-                let skip = self.generate_skip_to(sync, is_lexical);
+                let skip = self.edge(self.generate_skip_to(sync, is_lexical), None);
                 quote_spanned! {span=>
                     ::winnow_grammar::rt::recover_recording(
                         #body_parser,
@@ -1837,8 +1871,8 @@ impl<'a> Codegen<'a> {
         let span = Span::mixed_site();
         let inner_parser = self.generate_sequence_parser(inner, is_lexical);
 
-        let open_p = quote_spanned! {span=> literal(#open) };
-        let close_p = quote_spanned! {span=> literal(#close) };
+        let open_p = self.edge(quote_spanned! {span=> literal(#open) }, None);
+        let close_p = self.edge(quote_spanned! {span=> literal(#close) }, None);
 
         if is_lexical {
             quote_spanned! {span=>

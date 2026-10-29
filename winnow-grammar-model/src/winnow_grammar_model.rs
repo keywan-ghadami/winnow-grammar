@@ -22,6 +22,7 @@
 //! 4. **[analysis]**: Extract information (keywords, recursion) for code generation.
 //! 5. **[frame]**: Check `#[frame]` rules and `par_fold`; tell the code
 //!    generator which skips to bound.
+//! 6. **[stream]**: Find and check the path of every `#[stream]` rule.
 
 use proc_macro2::TokenStream;
 use syn::Result;
@@ -31,6 +32,7 @@ pub mod first_bytes;
 pub mod frame;
 pub mod model;
 pub mod parser;
+pub mod stream;
 pub mod validator;
 
 pub use model::backend::{Backend, BuiltIn};
@@ -49,6 +51,7 @@ pub struct ParsedGrammar {
     pub grammar: model::GrammarDefinition,
     pub frames: frame::Frames,
     pub analysis: analysis::GrammarAnalysis,
+    pub streams: stream::Streams,
 }
 
 pub fn parse_grammar<B: Backend>(input: TokenStream) -> Result<ParsedGrammar> {
@@ -59,11 +62,16 @@ pub fn parse_grammar<B: Backend>(input: TokenStream) -> Result<ParsedGrammar> {
     let grammar: model::GrammarDefinition = p_ast.into();
 
     // 3. Validation: semantic errors out, the analysis kept for generation
-    let validator::Validated { frames, analysis } = validator::validate::<B>(&grammar)?;
+    let validator::Validated {
+        frames,
+        analysis,
+        streams,
+    } = validator::validate::<B>(&grammar)?;
 
     Ok(ParsedGrammar {
         grammar,
         frames,
         analysis,
+        streams,
     })
 }

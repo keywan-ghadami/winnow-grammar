@@ -1,6 +1,8 @@
+pub mod edge;
 pub mod expr;
 pub mod fixed;
 pub mod rule;
+pub mod stream;
 pub mod variants;
 
 use proc_macro2::{Span, TokenStream};
@@ -9,6 +11,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use winnow_grammar_model::frame::Frames;
 use winnow_grammar_model::model::{GrammarDefinition, InputKind};
+use winnow_grammar_model::stream::Streams;
 use winnow_grammar_model::ParsedGrammar;
 
 /// Is the rule a template that is not generated as a function of its own but
@@ -41,9 +44,12 @@ pub fn generate_rust(parsed: ParsedGrammar) -> syn::Result<TokenStream> {
     // Validation ran the frame check once and hands its result over; the
     // generator does not run it again.
     let ParsedGrammar {
-        grammar, frames, ..
+        grammar,
+        frames,
+        streams,
+        ..
     } = parsed;
-    let mut codegen = Codegen::new(&grammar, frames);
+    let mut codegen = Codegen::new(&grammar, frames, streams);
     codegen.generate()
 }
 
@@ -66,6 +72,16 @@ pub struct Codegen<'a> {
     /// The bytes each alternative can begin with, where that is known - the
     /// fast pass's guard on a rule's alternatives (`rt::first_byte`).
     pub first_bytes: winnow_grammar_model::first_bytes::FirstBytes<'a>,
+    /// `#[stream]` rules and their paths (ADR 27 §3).
+    pub streams: Streams,
+    /// Whether every parser is wrapped in `rt::edge`: in a grammar with a
+    /// `#[stream]` rule, or where `WINNOW_GRAMMAR_EDGES` is set when the
+    /// macro expands - which is how the whole test suite is run once with
+    /// the wrapping on, to show that it changes no result.
+    pub streaming: bool,
+    /// How far past where it stops, or where it began when it fails, any
+    /// parser of this grammar looks - `rt::edge`'s `k`.
+    pub edge_k: usize,
 }
 
 impl Codegen<'_> {
@@ -123,9 +139,13 @@ impl Codegen<'_> {
 }
 
 impl<'a> Codegen<'a> {
-    pub fn new(grammar: &'a GrammarDefinition, frames: Frames) -> Self {
+    pub fn new(grammar: &'a GrammarDefinition, frames: Frames, streams: Streams) -> Self {
         let user_rules = grammar.rules.iter().map(|r| r.name.to_string()).collect();
+        let streaming = streams.any() || std::env::var_os("WINNOW_GRAMMAR_EDGES").is_some();
         Self {
+            streams,
+            streaming,
+            edge_k: edge::lookahead(grammar),
             grammar,
             user_rules,
             input_ident: format_ident!("input", span = Span::call_site()),
@@ -184,6 +204,13 @@ impl<'a> Codegen<'a> {
             None => quote! {},
         };
 
+        let default_ws = self.edge(
+            quote_spanned! {span=>
+                #rts::class::<S, E>(::winnow_grammar::ascii::AsciiClass::MULTISPACE, 0)
+            },
+            None,
+        );
+
         // If user defined WS, we alias WS to parse_WS_inner so that internal usage (and wrappers) call the inner parser directly.
         let ws_parser = if has_user_ws {
             quote_spanned! {span=>
@@ -202,10 +229,7 @@ impl<'a> Codegen<'a> {
                     // tokens, so it is the hottest scan in a generated parser
                     // - and a word at a time (`src/ascii.rs`), not a
                     // character at a time.
-                    #rts::class::<S, E>(
-                        ::winnow_grammar::ascii::AsciiClass::MULTISPACE,
-                        0,
-                    )
+                    #default_ws
                     .parse_next(#input)
                     .map(|_| ())
                 }

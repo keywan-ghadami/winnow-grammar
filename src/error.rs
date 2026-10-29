@@ -558,7 +558,7 @@ impl<'s> Source<'s> {
 }
 
 /// The next word (letters, digits, `_`) or the next character.
-fn next_word(rest: &[u8]) -> Option<String> {
+pub(crate) fn next_word(rest: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(&rest[..rest.len().min(64)]);
     let first = text.chars().next()?;
     if first.is_alphanumeric() || first == '_' {

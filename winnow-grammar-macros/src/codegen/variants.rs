@@ -15,6 +15,7 @@ impl<'a> Codegen<'a> {
         let input_ty = self.input_ty();
         let span = Span::mixed_site();
         let input = &self.input_ident;
+        let origin = self.origin();
 
         // A rule-level `# "…"` substitutes for the expectations of *every*
         // alternative, and only when the rule failed where it began. So the
@@ -45,7 +46,7 @@ impl<'a> Codegen<'a> {
             // 2. Capture Start
             if use_with_span {
                 steps_code
-                    .extend(quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; });
+                    .extend(quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; });
             }
 
             // 3. Parse Steps
@@ -55,7 +56,7 @@ impl<'a> Codegen<'a> {
             // 4. Capture End and Define _span
             if use_with_span {
                 steps_code
-                    .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; });
+                    .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; });
                 steps_code.extend(quote! { #[allow(unused_variables)] let _span = start..end; });
             }
 
@@ -128,14 +129,14 @@ impl<'a> Codegen<'a> {
 
             if use_with_span {
                 steps_code
-                    .extend(quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; });
+                    .extend(quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; });
             }
 
             steps_code.extend(self.generate_sequence_steps(&v.pattern, false, is_lexical));
 
             if use_with_span {
                 steps_code
-                    .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; });
+                    .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; });
                 steps_code.extend(quote! { #[allow(unused_variables)] let _span = start..end; });
             }
 
@@ -260,6 +261,7 @@ impl<'a> Codegen<'a> {
     ) -> TokenStream {
         let span = Span::mixed_site();
         let input = &self.input_ident;
+        let origin = self.origin();
 
         let arms = variants.iter().map(|v| {
             let lhs_binding = match &v.pattern[0] {
@@ -293,7 +295,7 @@ impl<'a> Codegen<'a> {
             // Capture end and define _span
             if use_with_span {
                 steps_code
-                    .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; });
+                    .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; });
                 // For recursive steps, _span refers to the suffix extension.
                 steps_code.extend(quote! { #[allow(unused_variables)] let _span = start..end; });
             }
@@ -343,7 +345,7 @@ impl<'a> Codegen<'a> {
             // Start capture needs to happen before steps_code
             // 'start' here refers to start of suffix
             let start_capture = if use_with_span {
-                 quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)?; }
+                 quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; }
             } else {
                 quote! {}
             };

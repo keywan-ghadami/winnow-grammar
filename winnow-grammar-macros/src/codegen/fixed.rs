@@ -680,7 +680,7 @@ mod tests {
             grammar G { #rules }
         })
         .unwrap();
-        let cg = Codegen::new(&parsed.grammar, parsed.frames);
+        let cg = Codegen::new(&parsed.grammar, parsed.frames, parsed.streams);
         let rule = cg.grammar.rules.iter().find(|r| r.name == callee).unwrap();
         cg.inlined_rule(rule).is_some()
     }

@@ -15,6 +15,8 @@ pub struct Validated {
     pub frames: crate::frame::Frames,
     /// Nullability, first sets, cycles and unused rules.
     pub analysis: crate::analysis::GrammarAnalysis,
+    /// `#[stream]` rules and their paths - see [`crate::stream`].
+    pub streams: crate::stream::Streams,
 }
 
 /// The built-in that yields bytes, and exists only in a byte grammar.
@@ -89,6 +91,9 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<Validate
     // Frames: `#[frame]` rules, what they reach, and `par_fold`.
     let frames = crate::frame::check(grammar, &builtin_names)?;
 
+    // Streams: `#[stream]` rules and the path to their fold (ADR 27 §3).
+    let streams = crate::stream::check(grammar, &frames)?;
+
     // Perform advanced analysis
     let analysis = crate::analysis::analyze_grammar(grammar);
 
@@ -153,14 +158,18 @@ pub fn validate<B: Backend>(grammar: &GrammarDefinition) -> syn::Result<Validate
         }
     }
 
-    Ok(Validated { frames, analysis })
+    Ok(Validated {
+        frames,
+        analysis,
+        streams,
+    })
 }
 
 /// The attributes a rule may carry. `frame` is read by [`crate::frame::check`];
 /// `doc` is forwarded to the generated parser. Anything else is a mistake:
 /// nothing in the generator would look at it, so accepting it silently turns a
 /// typo (`#[frmae(boundary = "\n")]`) into a rule that quietly is not a frame.
-const RULE_ATTRS: &[&str] = &["frame", "doc"];
+const RULE_ATTRS: &[&str] = &["frame", "stream", "doc"];
 
 fn validate_attributes(grammar: &GrammarDefinition) -> syn::Result<()> {
     let check = |attrs: &[syn::Attribute], what: &str| -> syn::Result<()> {
@@ -178,7 +187,7 @@ fn validate_attributes(grammar: &GrammarDefinition) -> syn::Result<()> {
             return Err(syn::Error::new(
                 attr.path().span(),
                 format!(
-                    "unknown attribute `{name}` on {what}; a rule takes `#[frame(…)]` and doc comments, \
+                    "unknown attribute `{name}` on {what}; a rule takes `#[frame(…)]`, `#[stream]` and doc comments, \
                      and nothing else here reads an attribute"
                 ),
             ));
