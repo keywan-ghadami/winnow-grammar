@@ -137,6 +137,27 @@ performance trade bought with a certain regression in messages is not a trade.
 
 ---
 
+## 8. Streaming input, after stage 0
+
+`docs/adr/adr27-streaming-input.md`. Stage 0 - `parse_<rule>_reader` over the
+frames of a `par_fold` rule - is built. Next, in this order:
+
+1. **Measure `Partial` on the complete path** (§2): what `Partial<&str>` with
+   `partial = false` costs a parse of complete input. It decides whether
+   streaming needs a declaration at all.
+2. **A1 with the path designed in** (§3): every scanner of `rt` and every
+   inline fast path answers `Incomplete` at a buffer's edge, pinned by a test
+   that splits every input of the suite at every byte; restart between the
+   elements of a repetition at the top of the entry rule, then of one marked
+   repetition further down a static path - one large JSON array, one XML
+   root, one YAML document with a sequence at the top. YAML's stream of
+   documents is the test case.
+
+Reading the next block while the current one is parsed is open inside
+`rt::fold_reader` and needs no new surface.
+
+---
+
 ## 6. Release readiness for 0.1.0
 
 `CHANGELOG.md` has collected real breaking changes under *Unreleased* -

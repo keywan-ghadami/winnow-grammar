@@ -20,6 +20,7 @@ all: twice this week a stale sentence sent someone down the wrong path.
 | 4 | `ident (group)` read as a call | **fixed** |
 | 5 | `fail` built-in | **built** |
 | 6 | type-inference help | no case on file |
+| 7 | streaming input | stage 0 **built**; A1 with a marked path planned (ADR 27) |
 
 ## 1. Support Arguments for Built-in Rules
 
@@ -181,3 +182,32 @@ rule example -> () = x:(i32: u32) -> { ... }
 > annotation syntax for sub-patterns is not proposed on the strength of a
 > report that predates them; a grammar that still hits it is what would
 > justify one, and would be welcome here.
+
+## 7. Streaming Input
+
+**Context:**
+Input that arrives piece by piece - from a pipe, a socket, or a file larger
+than memory - parsed in memory that stays bounded however long the input is.
+The first case is a YAML stream of many documents; the usual large YAML file is
+one document with a sequence of millions of entries at the top.
+
+**Request:**
+Admit winnow's `Partial` and an entry point over `Read` that resumes between
+the elements of the entry rule (A1); resumption points at every level, derived
+by the generator (A2); a block buffer whose views keep their block alive (B); a
+recognise-only version of every rule (C); frames parsed in parallel from a
+reader (D); chosen by a declaration (`input stream;`,
+`input complete, stream;`).
+
+> **Status: stage 0 built, A1 planned with the path in it.**
+> `docs/adr/adr27-streaming-input.md` has the reasoning. A `par_fold` rule now
+> gets `parse_<rule>_reader` (§1): blocks cut at the last frame boundary,
+> parsed with the pieces driver - D included - in bounded memory, with no
+> `Partial` and no declaration; `tests/reader_test.rs` pins it against the
+> parse in memory. Next: measure what `Partial` costs complete input (§2),
+> which decides whether a declaration is needed at all; then A1, designed with
+> a path so that one marked repetition below the top - the large YAML, JSON
+> or XML document - is the same stage (§3). The requester's YAML stream of
+> documents is A1's test case, not stage 0's: the frame check rejects `---`
+> as a boundary, and §3 says why. A2 in full is deferred, B rejected, C
+> deferred (§4) - accepted by the requester.

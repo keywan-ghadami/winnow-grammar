@@ -334,7 +334,16 @@ impl<'a> Codegen<'a> {
                 let pieces_with_fn = format_ident!("parse_{}_pieces_with", rule.name, span = span);
                 let inner_fn = format_ident!("parse_{}_inner", rule.name, span = span);
                 let ret_type = &rule.return_type;
+                let reader = if borrows_input(&quote! { #ret_type }) {
+                    // A block lives for one step; a result that borrows it
+                    // cannot outlive it (ADR 27 §1).
+                    quote! {}
+                } else {
+                    self.generate_reader_fns(rule, &boundary, &pieces_with_fn, &merge_fn)
+                };
                 quote_spanned! {span=>
+                    #reader
+
                     /// The merge given to `par_fold`: combines the results of
                     /// two pieces.
                     #[allow(dead_code)]
@@ -411,4 +420,100 @@ impl<'a> Codegen<'a> {
             #driver
         }
     }
+
+    /// `parse_<rule>_reader` and `parse_<rule>_reader_with` on a `par_fold`
+    /// rule: its input read from a `std::io::Read` in blocks, each cut at
+    /// the last boundary in it and parsed with `parse_<rule>_pieces_with`
+    /// (ADR 27 §1). A text grammar's block is checked as UTF-8 first.
+    fn generate_reader_fns(
+        &self,
+        rule: &Rule,
+        boundary: &str,
+        pieces_with_fn: &proc_macro2::Ident,
+        merge_fn: &proc_macro2::Ident,
+    ) -> TokenStream {
+        let span = Span::mixed_site();
+        let state_bound = self.state_bound();
+        let vis = if rule.is_pub {
+            quote! { pub }
+        } else {
+            quote! {}
+        };
+        let ret_type = &rule.return_type;
+        let reader_fn = format_ident!("parse_{}_reader", rule.name, span = span);
+        let reader_with_fn = format_ident!("parse_{}_reader_with", rule.name, span = span);
+        let view = if self.is_bytes() {
+            quote! {}
+        } else {
+            quote_spanned! {span=> let block = ::winnow_grammar::rt::text_block(block)?; }
+        };
+        quote_spanned! {span=>
+            /// Parses what `reader` yields, in blocks of `reading.block`
+            /// bytes: each block is cut just past the last frame boundary in
+            /// it and parsed as `parse_…_pieces` parses its input, with
+            /// `how`; the rest waits for the next block. The results are
+            /// merged in order, so the answer is the parse of the whole input
+            /// in memory, in a buffer of at most `reading.max_frame` plus one
+            /// block. An error is at its offset in the stream - ADR 27.
+            #[allow(dead_code)]
+            #vis fn #reader_fn<S: std::fmt::Debug + Clone #state_bound>(
+                reader: impl ::std::io::Read,
+                context: &::winnow_grammar::ParseContext<S>,
+                how: ::winnow_grammar::rt::Parallelism,
+                reading: ::winnow_grammar::rt::Reading,
+            ) -> ::core::result::Result<#ret_type, ::winnow_grammar::ParseError>
+            where
+                S: ::std::fmt::Debug + Clone + Sync,
+                #ret_type: Send,
+            {
+                #reader_with_fn(reader, || context.clone(), how, reading)
+            }
+
+            /// [`#reader_fn`] with a context *built* per piece rather than
+            /// cloned - see `parse_…_pieces_with`.
+            #[allow(dead_code)]
+            #vis fn #reader_with_fn<S: std::fmt::Debug + Clone #state_bound>(
+                reader: impl ::std::io::Read,
+                new_context: impl Fn() -> ::winnow_grammar::ParseContext<S> + Sync,
+                how: ::winnow_grammar::rt::Parallelism,
+                reading: ::winnow_grammar::rt::Reading,
+            ) -> ::core::result::Result<#ret_type, ::winnow_grammar::ParseError>
+            where
+                S: ::std::fmt::Debug + Clone,
+                #ret_type: Send,
+            {
+                ::winnow_grammar::rt::fold_reader(
+                    reader,
+                    #boundary,
+                    reading,
+                    |block: &[u8]| {
+                        #view
+                        #pieces_with_fn(block, &new_context, how)
+                    },
+                    |a, b| #merge_fn(a, b),
+                )
+            }
+        }
+    }
+}
+
+/// Does the type name a lifetime other than `'static` - in a rule's return
+/// type, the input's `'a`?
+fn borrows_input(ty: &TokenStream) -> bool {
+    use proc_macro2::TokenTree;
+    let mut tokens = ty.clone().into_iter().peekable();
+    while let Some(t) = tokens.next() {
+        match t {
+            TokenTree::Punct(p) if p.as_char() == '\'' => {
+                if let Some(TokenTree::Ident(id)) = tokens.peek() {
+                    if id != "static" {
+                        return true;
+                    }
+                }
+            }
+            TokenTree::Group(g) if borrows_input(&g.stream()) => return true,
+            _ => {}
+        }
+    }
+    false
 }

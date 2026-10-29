@@ -1,0 +1,14 @@
+error[E0425]: cannot find function `parse_FILE_reader` in module `Borrowing`
+  --> tests/ui/reader.rs:19:24
+   |
+ 5 | grammar! {
+   | -------- similarly named function `parse_FILE_inner` defined here
+...
+19 |     let _ = Borrowing::parse_FILE_reader(
+   |                        ^^^^^^^^^^^^^^^^^
+   |
+help: a function with a similar name exists
+   |
+19 -     let _ = Borrowing::parse_FILE_reader(
+19 +     let _ = Borrowing::parse_FILE_inner(
+   |

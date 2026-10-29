@@ -980,6 +980,35 @@ expressible today; `docs/adr/adr21-merging-across-pieces.md` says what it would
 take. `tests/shared_interner_test.rs` shows both halves of the interner case
 side by side.
 
+**Reading from a stream.** A `par_fold` rule whose type does not borrow the
+input also gets `parse_<RULE>_reader(reader, &context, how, reading)` and
+`parse_<RULE>_reader_with(reader, new_context, how, reading)`, for input that
+arrives from a `std::io::Read` - a pipe, a socket, a file larger than memory
+(ADR 27 §1). It reads a block, cuts it just past the last boundary in it,
+parses what lies before the cut as `_pieces` would (with `how`), and keeps the
+rest for the next block; the results are merged in order, so the answer is the
+parse of the whole input in memory.
+
+```rust,ignore
+use winnow_grammar::rt::{Parallelism, Reading};
+
+let file = std::fs::File::open("measurements.txt")?;
+let totals = Measurements::parse_FILE_reader(file, &context, Parallelism::Auto, Reading::default())?;
+```
+
+`Reading { block, max_frame }` sizes the read (1 MiB by default) and bounds the
+memory: the buffer holds at most `max_frame` (16 MiB by default) plus one
+block, and more than `max_frame` bytes without a boundary is an error at the
+offset where they begin. A text grammar's bytes are checked as UTF-8 block by
+block; a bad byte is the error of `input bytes;` at its offset in the stream.
+An error is at its offset in the stream, and `render` needs the source, which
+a stream no longer has - read `offset` and `headline()` instead.
+
+What the fold returns outlives the block it was read from, so a rule whose
+type names `'a` has no `_reader`: copy what you keep, or `intern(…)` it. A
+format whose units cannot be found by a byte search - YAML's documents among
+them - is not a frame; ADR 27 §3 is the stage planned for it.
+
 **What a frame cannot say yet.** A boundary is a byte string. A format whose
 cut points need more than a search — CSV with quoted newlines (quote parity),
 records recognisable by how they *start*, escaped boundaries, a scanner of

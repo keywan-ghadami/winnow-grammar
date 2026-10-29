@@ -5,6 +5,16 @@
 
 ### Parallelism
 
+- **A `par_fold` rule reads from a `Read`** (ADR 27 §1):
+  `parse_<rule>_reader(reader, &context, how, reading)` and
+  `parse_<rule>_reader_with(…)` read the input in blocks, cut each just past
+  the last frame boundary in it, parse what lies before the cut as
+  `_pieces` does and merge in order - the answer of the parse in memory, in a
+  buffer of at most `reading.max_frame` plus one block. A text grammar's
+  bytes are checked as UTF-8 per block; errors are at their offset in the
+  stream. Generated only where the rule's type does not borrow the input.
+  New in `rt`: `Reading`, `fold_reader`, `text_block`.
+
 - **`par_fold` pieces are claimed while the work runs** (Nikaia ADR-372 D4,
   D5, D8): `Parallelism::Claimed { piece, order }` cuts the input near every
   `piece` bytes, each piece repairing its start to just past the first

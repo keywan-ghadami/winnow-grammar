@@ -12,4 +12,5 @@ fn ui() {
     t.compile_fail("tests/ui/attrs.rs");
     t.compile_fail("tests/ui/input.rs");
     t.compile_fail("tests/ui/values.rs");
+    t.compile_fail("tests/ui/reader.rs");
 }
