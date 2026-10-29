@@ -10,6 +10,10 @@ This crate is built on top of `syn-grammar-model` but targets the `winnow` parse
 
 ## Documentation
 
+- [SYNTAX.md](SYNTAX.md) - the grammar language, the generated entry points,
+  frames and parallel parsing, reading from a stream, error messages.
+- [docs/adr/](docs/adr/) - why things are as they are, and what was measured.
+- [CHANGELOG.md](CHANGELOG.md) - what changed.
 
 ## Features
 
@@ -18,6 +22,8 @@ This crate is built on top of `syn-grammar-model` but targets the `winnow` parse
 - **Winnow Integration**: Generates efficient `winnow` parsers that work with standard `winnow` traits.
 - **Whitespace Handling**: Automatic whitespace skipping (configurable).
 - **Span Tracking**: Support for `LocatingSlice` to track source positions (e.g., `rule @ span`).
+- **Parallel parsing**: `par_fold` over a `#[frame]` cuts a large input into pieces parsed on every core.
+- **Streaming input**: parse from any `std::io::Read` - a pipe, a socket, a file larger than memory - in bounded memory, with the answer of the parse in memory.
 
 ## Installation
 
@@ -296,6 +302,33 @@ A `Symbol` is a 4-byte id; `ctx.interner.resolve(sym)` gives the text back, and
 row number for a caller's own `Vec` of accumulated data. Symbols and indices
 are only meaningful against the interner that made them - see the `par_fold`
 note in [SYNTAX.md](SYNTAX.md).
+
+## Reading from a stream
+
+A grammar's input does not have to be in memory. Mark the rule whose `fold`
+holds the many items, and read from anything that implements `Read`:
+
+```rust,ignore
+grammar! {
+    grammar Rows {
+        #[stream]
+        pub file -> u64 = s:fold(row, || 0u64, |a: u64, v: u64| a + v) -> { s }
+        row -> u64 = name:raw_ident ";" v:u64 -> { v }
+    }
+}
+
+let mut context = ParseContext::<()>::default();
+let sum = Rows::parse_file_reader(std::io::stdin(), &mut context, Reading::default())
+    .map_err(|e| e.render_excerpt())?;
+```
+
+Memory stays at about `Reading::max_frame` (16 MiB by default) however long
+the input is, and the result - or the error, at its offset in the stream - is
+the one the parse in memory gives. Records a byte search can find (lines)
+can also be read by a `par_fold` rule, in parallel. See *Reading from a
+stream* in [SYNTAX.md](SYNTAX.md) for which to use, what a `#[stream]` rule may
+look like, what it costs, and what a hand-written parser must do in such a
+grammar.
 
 ## Diagnostics
 

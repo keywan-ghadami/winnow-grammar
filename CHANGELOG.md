@@ -25,7 +25,8 @@
   in `rt::edge`, which notes when a parse touched the end of its input, and
   gives up the indexed runs of ADR 24 §8 (+14 % instructions in memory); a
   grammar without one generates what it did. `rt::touch` is for a
-  hand-written parser that looks further ahead.
+  hand-written parser that looks further ahead, `rt::span_at` for a position
+  it takes itself; SYNTAX.md, *Reading from a stream*, says when.
 
 - **Errors of a stream carry their line**: `ParseError::excerpt` and
   `render_excerpt()`, which renders as `render(source)` does in memory.

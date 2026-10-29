@@ -4,10 +4,13 @@
 without `Partial` - see there). §4 records what is deferred or rejected, §5
 the numbers. **Date:** 2026-10-29.
 **Tests:** `tests/reader_test.rs` (stage 0), `tests/stream_test.rs`,
-`tests/stream_yaml_test.rs`, `tests/stream_memory_test.rs`,
+`tests/stream_yaml_test.rs`, `tests/stream_extern_test.rs`,
+`tests/stream_memory_test.rs`,
 `tests/ui/reader.rs`, `tests/ui/stream.rs`; the whole suite once more with
 `WINNOW_GRAMMAR_EDGES=1` (`scripts/test-edges.sh`). **Measured:**
-`benches/stream.rs`, and callgrind (§5).
+`benches/stream.rs`, and callgrind (`scripts/profile-stream.sh`, §5).
+§6 is for whoever changes this: where it lives, what a change must keep,
+how to check and measure it.
 **Raised by:** a feature request for input that arrives piece by piece - from a
 pipe, a socket, or a file larger than memory - parsed in memory that stays
 bounded however long the input is. Its first case is a YAML stream of many
@@ -327,7 +330,7 @@ it is the reliable one; 400 000 rows of `station12;345\n` and a list of
 | list `[1, 2, …]`, `#[stream]` | 152 MiB/s | 115 MiB/s |
 | reading alone | | 12 GiB/s |
 
-Callgrind, instructions per row, 200 000 rows:
+Callgrind, instructions per row, 200 000 rows (`scripts/profile-stream.sh`):
 
 | | per row |
 |---|---|
@@ -344,6 +347,68 @@ for as many items as it decides ~30 instructions. The edge tracking costs
 14 % on rows and 20 % on the list in wall time (`edges`), and a grammar pays it
 only when it has a `#[stream]` rule.
 
+## 6. For whoever changes this
+
+### Where it lives
+
+| | |
+|---|---|
+| `winnow-grammar-model/src/stream.rs` | `#[stream]`: finds the path, checks it, says what crosses each stop (`Streams`, `StreamPath`, `Level`) |
+| `winnow-grammar-macros/src/codegen/edge.rs` | `k` of a grammar (`lookahead`), the `rt::edge` wrapper, `origin()` for spans |
+| `winnow-grammar-macros/src/codegen/stream.rs` | `parse_<rule>_reader`: the path cut into prefix, item and suffix steps |
+| `winnow-grammar-macros/src/codegen/rule.rs` | stage 0's `parse_<RULE>_reader(_with)` (`generate_reader_fns`) |
+| `src/rt/stream.rs` | `edge`, `edge_quoted`, `touch`, `span_at`; the driver `Stream` (windows, retries, positions, the diagnosing replay) |
+| `src/rt/reader.rs` | `Reading`, `Buf` (the read buffer, line counting, excerpts), stage 0's `fold_reader` |
+| `src/error.rs` | `Excerpt`, `render_excerpt` |
+
+`codegen::Codegen::streaming` is the one switch: true in a grammar with a
+`#[stream]` rule (or under `WINNOW_GRAMMAR_EDGES`), and every difference in
+generated code hangs off it - `edge()`, `origin()`, `span_moved()`, and the
+fixed runs of ADR 24 §8 turned off.
+
+### What a change must keep
+
+- **Every parser the generator writes goes through `generate_parser_expr`**,
+  which wraps it in `edge()`. A new construct that builds a parser elsewhere
+  (as delimiters and `recover`'s skip do) wraps it itself.
+- **A new built-in gets its entry in `edge::lookahead`** - how far it looks
+  past where it stops, or past where it began when it fails - and a
+  `single_<name>` grammar in `tests/stream_test.rs`, so that its entry is the
+  grammar's `k` and lowering it fails a test. A built-in whose scan has no
+  bound (`string`) needs a check of its own, as `edge_quoted` is.
+- **A parser that reads past the wrappers** - an indexed run, an inline fast
+  path that looks ahead - is not generated when `streaming` is set, or notes
+  the end itself (`rt::touch`).
+- **A grammar without `#[stream]` generates what it did.** Nothing outside
+  `if self.streaming` may change; the ordinary suite and the benches of
+  ADR 24 hold that line.
+
+### How to check a change
+
+- `cargo test --workspace`, with and without `--features rayon`.
+- `scripts/test-edges.sh`: the whole suite once more with every grammar
+  wrapped. Every result must stay what it was; a test that changes says the
+  wrapping changed a parse, not only noted one.
+- `tests/stream_test.rs` compares every reader with the parse in memory,
+  read a byte at a time - the read that cuts every item - in odd sizes and
+  whole, under every `Diagnose` mode; a new case belongs there in the same
+  form (`agree`). `tests/ui/stream.rs` holds every rejection of the path.
+- `tests/stream_memory_test.rs` is the bound on memory; it uses a counting
+  global allocator and must stay a test binary of its own.
+
+### How to measure
+
+- `cargo bench --bench stream` - wall time, the first table of §5. On a
+  shared machine, read only differences larger than run-to-run noise.
+- `scripts/profile-stream.sh` - instructions per row under callgrind, the
+  second table, from `examples/stream_profile.rs`. This is the number to
+  compare before and after a change of the driver or of the wrapping.
+
+### Open
+
+TODO §8: a failure recorded two items back is not replayed; the per-item loop
+(~30 instructions); frame keys for parallel cutting.
+
 ## Consequences
 
 * A `par_fold` rule whose type does not borrow the input has
@@ -351,5 +416,7 @@ only when it has a `#[stream]` rule.
   `rt::fold_reader`, `rt::fold_pieces_counted`, `rt::stream`, `rt::edge`,
   `rt::touch`, `ParseError::render_excerpt` and `Excerpt` are new;
   `ParseContext` gains two hidden fields and `ErrorCore` the excerpt.
+* User documentation: `SYNTAX.md`, *Reading from a stream*, including what a
+  hand-written parser owes a stream grammar; the README's short version.
 * A grammar without `#[stream]` generates what it did.
 * Items of `_pieces` are numbered across pieces.

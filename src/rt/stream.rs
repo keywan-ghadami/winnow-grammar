@@ -17,7 +17,7 @@
 //! **The driver runs the grammar in steps.** The generated
 //! `parse_<rule>_reader` cuts the path from the stream rule to its `fold`
 //! into a prefix per rule, one step per item of the fold, and a suffix per
-//! rule; each step is a [`Stream::chunk`] or a [`Stream::item`]. Between two
+//! rule; each step is a [`Stream::chunk`] or one of [`Stream::items`]. Between two
 //! steps no view into the input is alive, so the input already parsed is
 //! dropped and the next block read. Positions are moved to the stream's own:
 //! errors, what the diagnosing pass recorded, spans (`ParseContext::origin`).
@@ -96,11 +96,37 @@ fn closes(b: &[u8], quote: u8) -> bool {
 /// For a hand-written parser in a grammar with a `#[stream]` rule that looks
 /// further past where it stops than the grammar's own parsers do: says that
 /// this parse depended on the end of its input.
+///
+/// The generated code already notes a parser that stopped, or failed where
+/// it began, within `k` bytes of the end - `k` being the grammar's longest
+/// literal, or up to 8 bytes for its built-ins. A parser that decides further
+/// away - a search for a closing delimiter, a scan to the next keyword - calls
+/// this when it reached the end of its input without deciding. Without it the
+/// reader takes a result that more input would have changed, and answers what
+/// the parse in memory does not.
+///
+/// ```rust,ignore
+/// match body.find("*/") {
+///     Some(n) => Ok(i.next_slice(2 + n + 2)),
+///     None => {
+///         rt::touch(i); // searched to the end: more input might close it
+///         Err(ParseError::from_stream(&i.input).add_expected("a closed comment"))
+///     }
+/// }
+/// ```
+///
+/// Outside a stream it changes nothing. See *Hand-written parsers in a stream
+/// grammar* in `SYNTAX.md`, and `tests/stream_extern_test.rs`.
 pub fn touch<B: Slice, S: Clone + std::fmt::Debug>(input: &mut Input<B, S>) {
     input.state.touched = true;
 }
 
 /// A span in the input of a step, moved to the whole input's positions.
+///
+/// A reader parses a window of the stream, so a position a hand-written
+/// parser takes itself (`current_token_start()`) counts from the window's
+/// start; this moves it to the stream's. Outside a stream it is the span
+/// unchanged. Spans bound with `@` are moved already.
 #[inline(always)]
 pub fn span_at<B: Slice, S: Clone + std::fmt::Debug>(
     input: &Input<B, S>,

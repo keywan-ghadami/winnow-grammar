@@ -639,6 +639,11 @@ tolerate running twice.
 Under a `#[frame]` the check cannot see into it, so whether it is safe to cut
 around is yours to know - see *Where the check stops* under Frames.
 
+In a grammar with a `#[stream]` rule, a hand-written parser that decides by
+looking far ahead - a search for a closing delimiter - calls `rt::touch` when
+it reached the end of its input, and a position it takes by hand is moved with
+`rt::span_at`: see *Hand-written parsers in a stream grammar*.
+
 ## Backends
 
 The DSL is shared with other backends in principle - the model crate
@@ -980,14 +985,48 @@ expressible today; `docs/adr/adr21-merging-across-pieces.md` says what it would
 take. `tests/shared_interner_test.rs` shows both halves of the interner case
 side by side.
 
-**Reading from a stream.** A `par_fold` rule whose type does not borrow the
-input also gets `parse_<RULE>_reader(reader, &context, how, reading)` and
-`parse_<RULE>_reader_with(reader, new_context, how, reading)`, for input that
-arrives from a `std::io::Read` - a pipe, a socket, a file larger than memory
-(ADR 27 §1). It reads a block, cuts it just past the last boundary in it,
-parses what lies before the cut as `_pieces` would (with `how`), and keeps the
-rest for the next block; the results are merged in order, so the answer is the
-parse of the whole input in memory.
+**Reading from a stream.** A `par_fold` rule also has a reader, for input
+that arrives from a `std::io::Read`: see *Reading from a stream* below.
+
+**What a frame cannot say yet.** A boundary is a byte string. A format whose
+cut points need more than a search — CSV with quoted newlines (quote parity),
+records recognisable by how they *start*, escaped boundaries, a scanner of
+your own — is not expressible, and `unchecked` is the way to parse it until it
+is. The attribute is a keyed list so that each of those is another key when it
+comes (`quote = …`, `start = …`, `escape = …`, `scan = …`); the positional
+forms `#[frame = "\n"]` and `#[frame("\n")]` are rejected for that reason.
+
+## Reading from a stream
+
+Every entry point above takes the whole input as a `&str` or `&[u8]`. Input
+that arrives from a `std::io::Read` - a pipe, a socket, a file larger than
+memory - can be parsed in memory that stays bounded however long it is, and
+the answer is the one the parse of the whole input in memory gives: the same
+value, or the same error at the same offset. There are two ways, and which
+one a grammar gets depends on what it says about its input. The decision
+record is `docs/adr/adr27-streaming-input.md`.
+
+| | `par_fold` reader | `#[stream]` reader |
+|---|---|---|
+| for | records a byte search finds: lines, `;`-terminated rows | items only the grammar can find: YAML documents, the entries of one large JSON array, a sequence at the top of a YAML document |
+| the grammar | a `par_fold` over a `#[frame]` (above) | a `#[stream]` rule that reaches a `fold` |
+| generated | `parse_<RULE>_reader`, `parse_<RULE>_reader_with` | `parse_<rule>_reader` |
+| parallel | yes, per block (`Parallelism`) | no |
+| cost | about 15-25 % over `_pieces` in memory | about 15 % on every parse of the grammar, a third more when read |
+| context | cloned (or built) per piece | one, yours, `&mut` |
+
+Both are sized by `rt::Reading { block, max_frame }`: `block` is the size of
+a read (1 MiB by default), `max_frame` the bound on memory (16 MiB by
+default) - the buffer holds at most about `max_frame` plus one block. What the
+parse returns outlives the block it was read from, so the result type must not
+borrow the input (`'a`): copy what you keep, or `intern(…)` it.
+
+### Records cut at a boundary: the `par_fold` reader
+
+A `par_fold` rule whose type does not borrow the input also gets
+`parse_<RULE>_reader(reader, &context, how, reading)` and
+`parse_<RULE>_reader_with(reader, new_context, how, reading)`, the readers of
+`_pieces` and `_pieces_with`. Nothing in the grammar changes:
 
 ```rust,ignore
 use winnow_grammar::rt::{Parallelism, Reading};
@@ -996,24 +1035,18 @@ let file = std::fs::File::open("measurements.txt")?;
 let totals = Measurements::parse_FILE_reader(file, &context, Parallelism::Auto, Reading::default())?;
 ```
 
-`Reading { block, max_frame }` sizes the read (1 MiB by default) and bounds the
-memory: the buffer holds at most `max_frame` (16 MiB by default) plus one
-block, and more than `max_frame` bytes without a boundary is an error at the
-offset where they begin. A text grammar's bytes are checked as UTF-8 block by
-block; a bad byte is the error of `input bytes;` at its offset in the stream.
-An error is at its offset in the stream, and `render` needs the source, which
-a stream no longer has - read `offset` and `headline()` instead.
+It reads a block, cuts it just past the last boundary in it, parses what lies
+before the cut as `_pieces` would (with `how`), and keeps the rest for the
+next block; the results are merged in order. More than `max_frame` bytes
+without a boundary is an error at the offset where they begin. A text
+grammar's bytes are checked as UTF-8 block by block; a bad byte is the error
+of `input bytes;` at its offset in the stream. Items are numbered across
+blocks, as in memory.
 
-What the fold returns outlives the block it was read from, so a rule whose
-type names `'a` has no `_reader`: copy what you keep, or `intern(…)` it. An
-error is at its offset in the stream and carries the line it is on:
-`e.render_excerpt()` prints it as `e.render(source)` would have.
+### Items only the grammar can find: `#[stream]`
 
-### Streams: `#[stream]`
-
-A format whose items cannot be found by searching for a boundary - YAML's
-documents, the entries of one large JSON array, the children of an XML root -
-streams one item of a `fold` at a time. Mark the rule:
+A format whose items cannot be found by searching for a boundary streams one
+item of a `fold` at a time. Mark the rule:
 
 ```rust,ignore
 grammar! {
@@ -1034,51 +1067,127 @@ let mut context = ParseContext::<()>::default();
 let doc = Records::parse_doc_reader(std::io::stdin(), &mut context, Reading::default())?;
 ```
 
-`parse_<rule>_reader(reader, &mut context, reading, params…)` gives the parse
-of the whole input in memory - the value, or the same error at the same
-offset - in a buffer of about `max_frame` bytes past the start of each item,
-plus a block. `context` is the parse's: its user state and recoveries are
-there afterwards.
+`parse_<rule>_reader(reader, &mut context, reading, params…)` holds about
+`max_frame` bytes past the start of the current item, plus a block. `context`
+is the parse's: its diagnose mode is used, and its user state and recoveries
+are there afterwards. The reader parses the whole input: what follows the
+rule is an error, `expected end of input`, as `Parser::parse` reports it in
+memory. The rule's parsers in memory (`parse_doc()`) are generated as before
+and give the same answers.
 
 **The path.** The rule holds the `fold`, or holds one call of a rule that
 does, and so on down. Every rule on that path has one alternative, no
 generics, and no span or label over its body: nothing may be open around an
 item once its step has run. The item is a call of a rule of the grammar, and
-its value may borrow the input - the step runs while the item is there. The
-fold's value is for the action only. A value that is bound before the call
-the path continues in and used after it, or bound after it and used by the
-action, is kept from one block to the next, so its type must be known - a
-rule's declared type, or a built-in of fixed type (`ident`, `u32`,
+its value may borrow the input - the fold's step runs while the item is
+there. The fold's value is for the action only. A value that is bound before
+the call the path continues in and used after it, or bound after it and used
+by the action, is kept from one block to the next, so its type must be known -
+a rule's declared type, or a built-in of fixed type (`ident`, `u32`,
 `dec<T>(…)`, `count(…)`) - and must not borrow the input; so must the path's
-parameters and return types. The compiler says which of these a rule breaks.
+parameters and return types. The compiler says which of these a rule breaks,
+and why.
+
+`tests/stream_yaml_test.rs` has both YAML cases: a stream of many documents,
+and one document whose top is a long sequence, three rules down with its
+indentation passed as an argument.
 
 **What it costs.** A grammar with a `#[stream]` rule notes, at every parser,
-whether the parse touched the end of what it was given, and gives up the
-indexed runs of fixed-shape elements: about 15 % on a parse in memory, paid
-only by such a grammar. Reading adds about a third over the parse in memory
-on short items; `benches/stream.rs` and ADR 27 §5 have the numbers.
+whether the parse touched the end of what it was given (below), and gives up
+the indexed runs of fixed-shape elements: about 15 % on a parse in memory,
+paid by such a grammar only - a grammar without `#[stream]` generates what it
+always did. Reading adds about a third over the parse in memory on short
+items. `benches/stream.rs` and ADR 27 §5 have the numbers.
 
 **Things to know.**
 
-- An item that the input read so far does not decide is parsed again once
-  more has arrived, so a user state of size 0 costs nothing extra. Any other
-  user state makes the reader fill its window to `max_frame` before each
-  window of items instead, unless the diagnose mode is `Replay`, which copies
-  the state per item; use `ReplayInPlace` for a large state.
+- How it works: an item is parsed over what has arrived. If the parse touched
+  the end of that - it could have gone differently with more input - the
+  result is thrown away, more is read, and the item is parsed again. A user
+  state of size 0 (`()`) makes that free. Any other user state makes the
+  reader fill its window to `max_frame` before each window of items instead,
+  so an item is parsed once and an action runs once - unless the diagnose mode
+  is `Replay`, which copies the state per item; use `ReplayInPlace` for a
+  large state.
 - An item that needs to look further ahead than `max_frame` is an error that
   says so; raise `Reading::max_frame`.
-- A hand-written parser (`extern rule`) that looks more than a few bytes past
-  where it stops calls `winnow_grammar::rt::touch(input)` when it reached the
-  end of its input.
 - Spans bound with `@` are positions in the whole stream.
+- A hand-written parser has two duties of its own: see below.
 
-**What a frame cannot say yet.** A boundary is a byte string. A format whose
-cut points need more than a search — CSV with quoted newlines (quote parity),
-records recognisable by how they *start*, escaped boundaries, a scanner of
-your own — is not expressible, and `unchecked` is the way to parse it until it
-is. The attribute is a keyed list so that each of those is another key when it
-comes (`quote = …`, `start = …`, `escape = …`, `scan = …`); the positional
-forms `#[frame = "\n"]` and `#[frame("\n")]` are rejected for that reason.
+### Errors of a stream
+
+An error of a reader is at its offset in the whole stream. `render(source)`
+needs the input, which a stream no longer has; the error carries the line it
+is on instead, taken while it was still in the buffer, and
+`render_excerpt()` prints it as `render(source)` would have:
+
+```rust,ignore
+match Records::parse_doc_reader(file, &mut context, Reading::default()) {
+    Ok(doc) => use_it(doc),
+    Err(e) => eprintln!("{}", e.render_excerpt()),   // line, column, the line, the caret
+}
+```
+
+`e.offset` and `e.headline()` are there as always; the excerpt itself is
+`e.excerpt` (`line`, `column`, `text`). A line longer than `max_frame` begins
+where the oldest byte still held does, and its column is then counted in
+bytes from the line's real start.
+
+### Hand-written parsers in a stream grammar
+
+An `extern rule` (or a parser reached by path) is called like every other
+parser, and in a `#[stream]` grammar it is wrapped like every other: the
+generated code notes that the parse touched the end when the parser stopped -
+or failed where it began - within `k` bytes of the end of its input. `k` is
+the furthest the grammar's own parsers look: its longest literal, and up to 8
+bytes for its built-ins (a float's `infinity`). For most hand-written parsers
+that is all, and nothing is to be done. Two cases need a line of code:
+
+**1. A parser that decides further away calls `rt::touch`.** A parser that
+looks past where it stops by more than `k` bytes, or fails because of
+something it did not find further on - a search for a closing delimiter, a
+scan to the next keyword, a parser that peeks ahead at a whole token - must
+say so when it reached the end of its input without deciding:
+
+```rust,ignore
+use winnow_grammar::rt;
+
+/// `/* … */`
+fn comment<'a, S: Clone + std::fmt::Debug>(i: &mut ParseInput<'a, S>) -> Result<&'a str, ParseError> {
+    let rest: &str = &i.input;
+    let Some(body) = rest.strip_prefix("/*") else {
+        return Err(ParseError::from_stream(&i.input).add_expected("a comment"));
+    };
+    match body.find("*/") {
+        Some(n) => Ok(i.next_slice(2 + n + 2)),
+        None => {
+            rt::touch(i); // searched to the end: more input might close it
+            Err(ParseError::from_stream(&i.input).add_expected("a closed comment"))
+        }
+    }
+}
+```
+
+Without the `touch`, a comment that the end of a block cuts in two is read as
+no comment at all, and the reader answers what the parse in memory does not -
+not an error that says so, a different result. In a grammar without
+`#[stream]`, `touch` does nothing that matters, so a parser can call it
+regardless of where it is used.
+
+The rule of thumb: ask what the parser would do if its input ended one byte
+later than it does now. If the answer can differ, and the place it looked at
+last is more than `k` bytes from where it stopped (or, failing, from where it
+began), call `touch` when it saw the end.
+
+**2. A position taken by hand is in the step's input.** The reader parses a
+window of the stream, so `i.current_token_start()` and the like count from the
+window's start. `rt::span_at(i, range)` moves a range to the stream's
+positions; spans bound with `@` already are.
+
+**Test it.** Read the input a byte at a time and compare with the parse in
+memory: every item then begins its first try cut short, which is where a
+missing `touch` shows. `tests/stream_extern_test.rs` does exactly that, with
+and without the `touch` above.
 
 ## Error Messages
 
