@@ -1,8 +1,13 @@
 # ADR 27: Streaming Input - Reading a Grammar's Input from a `Read`
 
-**Status:** Accepted. §1 (stage 0) is implemented; §2 and §3 are planned, in
-that order; §4 records what is deferred or rejected. **Date:** 2026-10-29.
-**Tests:** `tests/reader_test.rs` (stage 0).
+**Status:** Accepted, implemented: §1 (stage 0), §2 (measured), §3 (built,
+without `Partial` - see there). §4 records what is deferred or rejected, §5
+the numbers. **Date:** 2026-10-29.
+**Tests:** `tests/reader_test.rs` (stage 0), `tests/stream_test.rs`,
+`tests/stream_yaml_test.rs`, `tests/stream_memory_test.rs`,
+`tests/ui/reader.rs`, `tests/ui/stream.rs`; the whole suite once more with
+`WINNOW_GRAMMAR_EDGES=1` (`scripts/test-edges.sh`). **Measured:**
+`benches/stream.rs`, and callgrind (§5).
 **Raised by:** a feature request for input that arrives piece by piece - from a
 pipe, a socket, or a file larger than memory - parsed in memory that stays
 bounded however long the input is. Its first case is a YAML stream of many
@@ -71,9 +76,12 @@ fn parse_<rule>_reader<S>(
 
 and `parse_<rule>_reader_with(reader, new_context, how, reading)`, as for
 `_pieces` (ADR 19). `rt::Reading { block, max_frame }` sizes the read and
-bounds the memory: the buffer holds at most `block + max_frame` bytes, and an
-input in which more than `max_frame` bytes follow the last boundary is an
-error at that offset, not an allocation that grows with the input.
+bounds the memory: the buffer holds at most two `max_frame` and a block - the
+frame being waited for, the start of the line an error would be on, and the
+read - and an input in which more than `max_frame` bytes follow the last
+boundary is an error at that offset, not an allocation that grows with the
+input. `tests/stream_memory_test.rs` counts the heap: 16 MiB of rows peak at
+the same 192 KiB as 4 MiB.
 
 * **The answer is the sequential parse's.** A block is a piece in the sense of
   ADR 24 §1: it starts just past a boundary and ends just past one, so every
@@ -82,15 +90,23 @@ error at that offset, not an allocation that grows with the input.
   left empty at the end is not parsed, as an empty piece is not.
 * **D is part of it.** Each block is parsed with `fold_pieces` and the
   caller's `Parallelism`, so a block uses the cores as an input in memory
-  does. Reading the next block while the current one is parsed is not done
-  yet; it is a change inside `rt::fold_reader` and needs no new surface.
+  does. Reading the next block while the current one is parsed was measured
+  and is not done (§4).
 * **Text is checked per block.** A text grammar's block is checked as UTF-8
   before it is parsed - the check `&str` input implies, made where the bytes
   arrive. A block ends just past a boundary, which is whole characters, so the
   check never splits a character. A bad byte is the ADR 25 D5 error at its
   absolute offset. A byte grammar's block is not checked.
-* **Errors are at their absolute offset.** `render` needs the source, which a
-  stream no longer has; `offset` and the message are what the caller gets.
+* **Errors are where they are in the stream.** The offset is the stream's,
+  items are numbered across blocks (and, since this stage, across the pieces
+  of `_pieces`, which numbered each from 1: a piece hands out how many items
+  its fold accepted, which `ParseContext::fold.seen` held anyway, and a later
+  piece's error is renumbered by the count before it). `render` needs the
+  source, which a stream no longer has, so an error carries an `Excerpt` -
+  line, column and the text of the line, taken while it was in the buffer -
+  and `render_excerpt()` renders it exactly as `render(source)` renders the
+  same error in memory. Lines are counted as the buffer drops them; the count
+  is a vector loop (§5).
 * **What the fold returns must not borrow the input.** A block lives for one
   step. `_reader` is generated only for a rule whose return type does not name
   `'a`; a rule that returns views keeps `_pieces` and has no `_reader`. Names
@@ -102,52 +118,138 @@ What stage 0 is not: it does not cover a format whose cut points are not a
 byte string - YAML's documents are such a format (below) - nor a single large
 element. Those are §3 and §4.
 
-## 2. Measure `Partial` on the complete path - planned
+## 2. `Partial` on the complete path - measured
 
-Before anything takes `Partial`, measure what `Partial<&str>` with
-`partial = false` costs a parse of complete input: every edge check becomes a
-predictable branch on a field. If it costs nothing measurable, there is one
-code path, every grammar can stream, and there is **no declaration** - whether
-to stream is the caller's choice, as parallelism is (ADR 24 §3). If it costs,
-the declaration is orthogonal to `input bytes;` (`stream;` beside it) rather
-than a list in one declaration. A switch per entry rule is not needed either
-way: entry points are per rule already.
+`Partial<&str>` with `partial = false` costs a parser of winnow's own nothing
+measurable on complete input: 366 MiB/s against 359 for `&str`
+(`benches/stream.rs`, `partial`). The question was asked because `Partial`
+would have been the mechanism of §3. It is not - §3 found one that needs no
+new input type - so the answer decides no code. What it would have decided is
+settled the other way round: there is no `input stream;`. A rule is marked
+`#[stream]`, the caller decides whether to call its reader, and only a grammar
+with such a rule pays for what streaming needs (§3, §5).
 
-## 3. A1 with the path designed in - planned
+## 3. A fold reached through a path - built, without `Partial`
 
-A1 restarts between the elements of a repetition. It is designed with a
-**path**: the repetition may sit at the top of the entry rule
-(`prefix ELEM* suffix`, a path of length 0) or be one marked repetition further
-down, reached through a static chain of rules. The second is the typical large
-document - one JSON array of records, one XML root with millions of children,
-one YAML document whose top is a sequence - and is built in the same stage,
-after the path of length 0.
+### The mechanism: a parse that notes when it touched the end
 
-What makes it sound, every point checked at compile time:
+`Partial` asks every parser to say "I need more" at the edge of a buffer. That
+is the audit the request underestimated: the runtime's own scanners, the
+indexed runs, the inline fast paths - and a parser that is missed gives a
+wrong result. What streaming needs is less: to know whether a parse **could**
+have gone differently with more input. That is a property of where its
+parsers stopped, and it can be noted from outside them.
 
-* **every scanner of the runtime and every inline fast path answers
-  `Incomplete` at the edge of a buffer** - and a test feeds every input of the
-  suite split at every byte offset, and in one-byte chunks, against the parse
-  of the whole input;
-* the values that reach the marked repetition come from parameters or from the
-  prefix; a value one iteration hands to the next is a `fold`;
-* the repetition's value is unbound, or it is a `fold`: its elements go to a
-  callback (`for<'b> FnMut(Item<'b>)`), so the actions on the path never see a
-  `Vec` of them;
-* on the path, a cut precedes the repetition or no alternative is open:
-  elements handed out cannot be taken back;
-* an error in the suffix comes after elements already handed out; that is
-  documented, not hidden;
-* the diagnosing replay runs per element, from the element's checkpoint, while
-  the element is in the buffer; an error carries line, column and an excerpt
-  taken then; the default diagnose mode of a stream is `ReplayInPlace`, since
-  `Replay` would clone `user_state` per element;
-* an element longer than the limit is an error, not an allocation; the end of
-  the stream is announced by a last call that marks the input complete.
+In a grammar with a `#[stream]` rule every parser the generator writes - every
+node, not only the leaves - is wrapped in `rt::edge(k, p)`, which sets
+`ParseContext::touched` when `p` succeeded within `k` bytes of the end of its
+input, or failed where it began within `k` bytes of it. `k` is the furthest
+any parser of the grammar looks past where it stops, or past where it began
+when it fails: the longest literal, and per built-in what it reads - four
+bytes for a UTF-8 character, six for `char`, eight for a float's `infinity`,
+five for `false`, two for a signed integer or a line ending. The argument:
+every position a parse reaches it reaches through a parser that stopped
+there, which checked `k` bytes; whatever looks at most `k` bytes on was checked
+already. Only `string`'s search for its closing quote fails further away, and
+it is wrapped in `rt::edge_quoted`, which checks for an unescaped quote. The
+indexed runs of ADR 24 §8 read past every wrapper and are not generated in
+such a grammar. A hand-written parser that looks further calls `rt::touch`.
 
-**YAML is the test case for this stage**, not for stage 0: `STREAM = DOC*`
-restarts between documents, and the grammar itself decides where one ends -
-directives, `...` and the forbidden `---` at the start of a line included.
+A result whose parse did not touch the end is the result the whole input
+gives. One that did is thrown away and parsed again over more input - or,
+when the window already holds `max_frame + k` bytes, reported as looking
+further ahead than the bound on memory allows. Nothing about winnow's input
+type, the generated parsers' signatures, or a grammar without `#[stream]`
+changes; with `WINNOW_GRAMMAR_EDGES=1` the whole suite runs once more with
+every grammar wrapped, and every result stays what it was.
+
+### The path
+
+`#[stream]` marks a rule that reaches one `fold(ITEM, init, step)`: the rule
+holds it, or holds one call of a rule that does, and so on - a **path**,
+found by the model (`winnow-grammar-model/src/stream.rs`) and checked:
+
+* every rule on it has one alternative, no generics, no span or label over
+  its body; nothing is open around the fold, so an item handed out is never
+  taken back;
+* exactly one element of each rule continues the path;
+* the item is a call of a rule of the grammar, whose declared type is what
+  the step receives - and may borrow the input: the step runs while the item's
+  input is there;
+* the fold's value is used only by the action;
+* what crosses a stop - a value bound before the element the path continues
+  in and used after it, or bound after and used by the action - has a type
+  that is known (a rule's declared type, a built-in of fixed type) and does
+  not borrow the input; so do the rules' parameters and return types.
+
+`tests/ui/stream.rs` pins each refusal. The generator cuts the path into
+**steps**, each a function generic over the input's lifetime and the error
+type like any rule's: a prefix per rule (its elements before the path's,
+returning what crosses and the next rule's arguments), the item, and a suffix
+per rule. `parse_<rule>_reader(reader, &mut context, reading, params…)` runs
+them through `rt::stream::Stream`, with the fold's loop, its step and every
+action of the path in between, where no view into the input is alive - so
+the input before the step is dropped and the next block read.
+
+A fold below the top is the same stage: `SEQDOC -> TOPSEQ -> SEQ_COUNT` in
+`tests/stream_yaml_test.rs` passes the indentation it detected down as an
+argument (ADR 26), and `{"title": …, "items": [ … ], "tail": 7}` in
+`tests/stream_test.rs` keeps the title across the items.
+
+### Steps, windows, state
+
+* **One window serves every item it decides.** `Stream::items` parses items
+  until one touches the end of the window, then reads and goes on from that
+  item. One step per item cost 78 ns of bookkeeping on a 14-byte row; one
+  window for all of them made the reader 2.5 times faster (§5).
+* **Parsed again only where nothing is lost.** With a user state of size 0 -
+  `()`, the common case - an item that touched the end is simply parsed
+  again over more input: nothing it did is left over. With another state the
+  window is filled to `max_frame + k` first, so every item gets all of it and
+  is never parsed twice; `Diagnose::Replay`, which keeps a copy anyway, is
+  parsed lazily like a state of size 0. Reading asks for one read at a time,
+  so an item that has arrived is parsed before the next read blocks.
+* **Positions are the stream's.** Errors, what the diagnosing pass recorded
+  (merged outside the window, so that an attempt that began before it keeps
+  its place in the ranking of ADR 15), recovered errors, spans bound with `@`
+  (`ParseContext::origin`, added only in a grammar with a `#[stream]` rule).
+* **The text is checked where it arrives**, as UTF-8 up to the last whole
+  character; a window never ends inside a character, and a bad byte is the
+  error of ADR 25 D5 at its stream offset.
+
+### Errors, as the parse in memory reports them
+
+The parse in memory replays a failed fast pass from the start. A stream
+cannot, and does not need to: the failure that wins on progress is recorded
+at or near where the parse stopped. When the fold ends or an item fails, the
+item before it - kept in the buffer for this - is parsed again by the
+diagnosing pass for what it records, without its step and with the state put
+back, then the failing item; the suffixes and the end check merge with what
+that recorded. A failure recorded further back that reaches past a whole
+item is not seen; no test input produced one. The comparison with the parse
+in memory - value, or error offset, message and `render_excerpt()` against
+`render(source)` - is the test of every stream test, read a byte at a time,
+in odd sizes and whole, under every `Diagnose` mode.
+
+### How the edge tracking is tested
+
+`tests/stream_test.rs` parses every kind of parser as the items of one fold
+- literals that are prefixes of one another, keywords, floats, integers,
+strings with escapes, characters, `bool`, `until`, `not`, `peek`, `count`,
+`text`, spans, `ident` - over a corpus, 1 500 random inputs and every input up
+to four characters over a nine-letter alphabet, and each built-in alone in a
+grammar of its own, so that its own entry of `k` is the grammar's. Lowering
+that entry, or dropping `edge_quoted`, makes the test fail: every entry of
+the table has a test that needs it.
+
+### YAML
+
+**YAML is the test case of this stage**, not of stage 0: `STREAM` folds over
+documents, and the grammar itself decides where one ends - directives, `...`
+and c-forbidden, so that `---x` at the start of a line is content and `---`
+is a marker. `tests/stream_yaml_test.rs` reads a stream of documents and one
+document whose top is a sequence, on every prefix of each, against the parse
+in memory.
 
 ### Why the frame check rejects a YAML document framed by `---`
 
@@ -183,6 +285,11 @@ for YAML.
 
 ## 4. Deferred, rejected
 
+* **Reading the next block while this one is parsed - measured, not done.**
+  Reading from memory runs at 12 GiB/s against a parse of 0.5-0.8 GiB/s: at
+  most a few per cent to win, for a thread and a `Send` bound on every reader.
+  A source slower than the parse is the case where it would pay, and there
+  the parse waits for the source either way.
 * **A2 in full - deferred.** Resuming at every level turns the native call
   stack into an explicit state machine: a second code generator, at odds with
   the inlining and the fixed runs of ADR 23 and 24. Resetting `state` and the
@@ -198,18 +305,51 @@ for YAML.
   what a parse means; `until` and frames already skip fast. Built only when a
   measurement shows that building values dominates - and a user's own code
   generator can emit a recognising grammar itself.
-* **A declaration `input stream;` / `input complete, stream;`** - not now; §2
-  decides whether one is needed at all.
+* **A declaration `input stream;` / `input complete, stream;`** - not needed
+  (§2): `#[stream]` marks the rule, the caller chooses the reader.
+* **`Partial`** - not needed (§3), though it would have cost nothing (§2).
 * **The comparison in the request**, corrected: libyaml refills synchronously
   inside its scanner (`CACHE`, `yaml_parser_update_buffer`) and repeats
   nothing; Jackson's blocking parser pulls synchronously too, and only its
   non-blocking parser returns `NOT_AVAILABLE` from a hand-written state
   machine; with nom it is the caller that restarts.
 
+## 5. Numbers
+
+`benches/stream.rs`, one machine with four shared cores, so the table below
+it is the reliable one; 400 000 rows of `station12;345\n` and a list of
+200 000 integers:
+
+| | in memory | read |
+|---|---|---|
+| rows, `#[stream]` | 709 MiB/s | 449 MiB/s |
+| rows, `par_fold` | 788 MiB/s | 611 MiB/s |
+| list `[1, 2, …]`, `#[stream]` | 152 MiB/s | 115 MiB/s |
+| reading alone | | 12 GiB/s |
+
+Callgrind, instructions per row, 200 000 rows:
+
+| | per row |
+|---|---|
+| the fold in memory, no edge tracking | 176 |
+| the same with edge tracking | 200 (+14 %) |
+| its `#[stream]` reader | 266 (+33 %) |
+| `par_fold` in memory | 176 |
+| its reader | 203 (+15 %) |
+
+What went into the readers' share: counting lines for excerpts was 3.5
+instructions a byte as `filter().count()`, 0.4 as a count in `u8` over runs of
+255 bytes; one window per item was 78 ns per row of bookkeeping, one window
+for as many items as it decides ~30 instructions. The edge tracking costs
+14 % on rows and 20 % on the list in wall time (`edges`), and a grammar pays it
+only when it has a `#[stream]` rule.
+
 ## Consequences
 
-* Stage 0 adds two functions to a `par_fold` rule whose type does not borrow
-  the input, and `rt::Reading` and `rt::fold_reader`; nothing that exists
-  changes.
-* §3 touches every scanner of the runtime. Its differential test is a
-  condition of the stage, not a follow-up.
+* A `par_fold` rule whose type does not borrow the input has
+  `parse_<rule>_reader`; a `#[stream]` rule has its own. `rt::Reading`,
+  `rt::fold_reader`, `rt::fold_pieces_counted`, `rt::stream`, `rt::edge`,
+  `rt::touch`, `ParseError::render_excerpt` and `Excerpt` are new;
+  `ParseContext` gains two hidden fields and `ErrorCore` the excerpt.
+* A grammar without `#[stream]` generates what it did.
+* Items of `_pieces` are numbered across pieces.

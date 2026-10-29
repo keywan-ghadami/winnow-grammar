@@ -1005,9 +1005,72 @@ An error is at its offset in the stream, and `render` needs the source, which
 a stream no longer has - read `offset` and `headline()` instead.
 
 What the fold returns outlives the block it was read from, so a rule whose
-type names `'a` has no `_reader`: copy what you keep, or `intern(…)` it. A
-format whose units cannot be found by a byte search - YAML's documents among
-them - is not a frame; ADR 27 §3 is the stage planned for it.
+type names `'a` has no `_reader`: copy what you keep, or `intern(…)` it. An
+error is at its offset in the stream and carries the line it is on:
+`e.render_excerpt()` prints it as `e.render(source)` would have.
+
+### Streams: `#[stream]`
+
+A format whose items cannot be found by searching for a boundary - YAML's
+documents, the entries of one large JSON array, the children of an XML root -
+streams one item of a `fold` at a time. Mark the rule:
+
+```rust,ignore
+grammar! {
+    grammar Records {
+        #[stream]
+        pub doc -> Doc =
+            "{" t:title "," body:items(scale = 10) "}" -> { Doc { title: t, count: body.0, sum: body.1 } }
+        title -> String = "\"title\"" ":" s:string -> { s.to_string() }
+        items(scale: i64) -> (usize, i64) =
+            "\"items\"" ":" "["
+            r:fold(entry(scale = scale), || (0usize, 0i64), |(n, s): (usize, i64), v: i64| (n + 1, s + v))
+            "]" -> { r }
+        entry(scale: i64) -> i64 = n:i64 ","? -> { n * scale }
+    }
+}
+
+let mut context = ParseContext::<()>::default();
+let doc = Records::parse_doc_reader(std::io::stdin(), &mut context, Reading::default())?;
+```
+
+`parse_<rule>_reader(reader, &mut context, reading, params…)` gives the parse
+of the whole input in memory - the value, or the same error at the same
+offset - in a buffer of about `max_frame` bytes past the start of each item,
+plus a block. `context` is the parse's: its user state and recoveries are
+there afterwards.
+
+**The path.** The rule holds the `fold`, or holds one call of a rule that
+does, and so on down. Every rule on that path has one alternative, no
+generics, and no span or label over its body: nothing may be open around an
+item once its step has run. The item is a call of a rule of the grammar, and
+its value may borrow the input - the step runs while the item is there. The
+fold's value is for the action only. A value that is bound before the call
+the path continues in and used after it, or bound after it and used by the
+action, is kept from one block to the next, so its type must be known - a
+rule's declared type, or a built-in of fixed type (`ident`, `u32`,
+`dec<T>(…)`, `count(…)`) - and must not borrow the input; so must the path's
+parameters and return types. The compiler says which of these a rule breaks.
+
+**What it costs.** A grammar with a `#[stream]` rule notes, at every parser,
+whether the parse touched the end of what it was given, and gives up the
+indexed runs of fixed-shape elements: about 15 % on a parse in memory, paid
+only by such a grammar. Reading adds about a third over the parse in memory
+on short items; `benches/stream.rs` and ADR 27 §5 have the numbers.
+
+**Things to know.**
+
+- An item that the input read so far does not decide is parsed again once
+  more has arrived, so a user state of size 0 costs nothing extra. Any other
+  user state makes the reader fill its window to `max_frame` before each
+  window of items instead, unless the diagnose mode is `Replay`, which copies
+  the state per item; use `ReplayInPlace` for a large state.
+- An item that needs to look further ahead than `max_frame` is an error that
+  says so; raise `Reading::max_frame`.
+- A hand-written parser (`extern rule`) that looks more than a few bytes past
+  where it stops calls `winnow_grammar::rt::touch(input)` when it reached the
+  end of its input.
+- Spans bound with `@` are positions in the whole stream.
 
 **What a frame cannot say yet.** A boundary is a byte string. A format whose
 cut points need more than a search — CSV with quoted newlines (quote parity),

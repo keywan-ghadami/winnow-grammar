@@ -20,7 +20,7 @@ all: twice this week a stale sentence sent someone down the wrong path.
 | 4 | `ident (group)` read as a call | **fixed** |
 | 5 | `fail` built-in | **built** |
 | 6 | type-inference help | no case on file |
-| 7 | streaming input | stage 0 **built**; A1 with a marked path planned (ADR 27) |
+| 7 | streaming input | **built**: frames from a reader, `#[stream]` with a path (ADR 27) |
 
 ## 1. Support Arguments for Built-in Rules
 
@@ -199,15 +199,16 @@ recognise-only version of every rule (C); frames parsed in parallel from a
 reader (D); chosen by a declaration (`input stream;`,
 `input complete, stream;`).
 
-> **Status: stage 0 built, A1 planned with the path in it.**
-> `docs/adr/adr27-streaming-input.md` has the reasoning. A `par_fold` rule now
-> gets `parse_<rule>_reader` (§1): blocks cut at the last frame boundary,
-> parsed with the pieces driver - D included - in bounded memory, with no
-> `Partial` and no declaration; `tests/reader_test.rs` pins it against the
-> parse in memory. Next: measure what `Partial` costs complete input (§2),
-> which decides whether a declaration is needed at all; then A1, designed with
-> a path so that one marked repetition below the top - the large YAML, JSON
-> or XML document - is the same stage (§3). The requester's YAML stream of
-> documents is A1's test case, not stage 0's: the frame check rejects `---`
-> as a boundary, and §3 says why. A2 in full is deferred, B rejected, C
-> deferred (§4) - accepted by the requester.
+> **Status: built.** `docs/adr/adr27-streaming-input.md` has the reasoning
+> and the numbers. A `par_fold` rule gets `parse_<rule>_reader` (§1): blocks
+> cut at the last frame boundary, parsed with the pieces driver - D included.
+> A rule marked `#[stream]` gets one too (§3): it reaches a `fold` through a
+> static path of rules - the requested "middle way", built in the same stage
+> as A1 - and streams one item at a time, the top-level sequence of one large
+> YAML document included. It needs no `Partial`: every parser of such a
+> grammar notes when it touched the end of its input, and a step that did is
+> parsed again over more. `Partial` was measured anyway (§2) and costs
+> nothing on complete input; no declaration was needed. The requester's YAML
+> stream of documents is `tests/stream_yaml_test.rs`; memory is measured in
+> `tests/stream_memory_test.rs`. A2 in full is deferred, B rejected, C
+> deferred (§4); reading ahead in a second thread was measured and not done.

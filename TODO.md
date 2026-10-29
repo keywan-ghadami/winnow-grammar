@@ -137,24 +137,20 @@ performance trade bought with a certain regression in messages is not a trade.
 
 ---
 
-## 8. Streaming input, after stage 0
+## 8. Streaming input - what ADR 27 leaves
 
-`docs/adr/adr27-streaming-input.md`. Stage 0 - `parse_<rule>_reader` over the
-frames of a `par_fold` rule - is built. Next, in this order:
+Stage 0 and §3 are built and measured (`docs/adr/adr27-streaming-input.md`).
+Open, each for when a case asks:
 
-1. **Measure `Partial` on the complete path** (§2): what `Partial<&str>` with
-   `partial = false` costs a parse of complete input. It decides whether
-   streaming needs a declaration at all.
-2. **A1 with the path designed in** (§3): every scanner of `rt` and every
-   inline fast path answers `Incomplete` at a buffer's edge, pinned by a test
-   that splits every input of the suite at every byte; restart between the
-   elements of a repetition at the top of the entry rule, then of one marked
-   repetition further down a static path - one large JSON array, one XML
-   root, one YAML document with a sequence at the top. YAML's stream of
-   documents is the test case.
-
-Reading the next block while the current one is parsed is open inside
-`rt::fold_reader` and needs no new surface.
+1. **A failure recorded two items back.** A stream's diagnosing pass replays
+   the item before the one that failed; a failure recorded further back that
+   reaches past a whole item would win in memory and is not seen. No input of
+   the suite produces one.
+2. **The per-item loop** is ~30 instructions over the fold in memory
+   (`rt::stream::Stream::items`): a checkpoint, the touched flag, the commit
+   check, the accumulator through an `Option`. Measured, not yet worth more.
+3. **`start` and a condition on what follows the boundary** for frames
+   (ADR 24 §5), when parallel cutting needs them.
 
 ---
 

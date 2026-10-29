@@ -15,6 +15,26 @@
   stream. Generated only where the rule's type does not borrow the input.
   New in `rt`: `Reading`, `fold_reader`, `text_block`.
 
+- **`#[stream]`: a fold read from a `Read` one item at a time** (ADR 27 §3).
+  A rule marked `#[stream]` that reaches a `fold(ITEM, …)` through rules of one
+  alternative gets `parse_<rule>_reader(reader, &mut context, reading, …)`:
+  the parse of the whole input in memory - value, or the same error at the
+  same offset - in a buffer of about `max_frame` past each item. For YAML's
+  documents, one large JSON array, an XML root's children: formats whose
+  items no byte search finds. A grammar with such a rule wraps every parser
+  in `rt::edge`, which notes when a parse touched the end of its input, and
+  gives up the indexed runs of ADR 24 §8 (+14 % instructions in memory); a
+  grammar without one generates what it did. `rt::touch` is for a
+  hand-written parser that looks further ahead.
+
+- **Errors of a stream carry their line**: `ParseError::excerpt` and
+  `render_excerpt()`, which renders as `render(source)` does in memory.
+
+- **Items are numbered across pieces.** An error in a later piece of
+  `parse_<rule>_pieces` said `in item 3` for the third item *of its piece*;
+  it now counts the items before the piece. `rt::fold_pieces_counted` returns
+  the count.
+
 - **`par_fold` pieces are claimed while the work runs** (Nikaia ADR-372 D4,
   D5, D8): `Parallelism::Claimed { piece, order }` cuts the input near every
   `piece` bytes, each piece repairing its start to just past the first
