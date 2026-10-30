@@ -33,6 +33,9 @@ pub struct Streams {
 #[derive(Debug, Clone)]
 pub struct StreamPath {
     pub levels: Vec<Level>,
+    /// `#[stream(each)]`: the rule also gets `parse_<rule>_reader_each`,
+    /// which shows the caller every item as it is taken.
+    pub each: bool,
 }
 
 /// One rule of a path.
@@ -55,19 +58,25 @@ impl Streams {
     }
 }
 
-fn is_stream(rule: &Rule) -> syn::Result<bool> {
+/// `None` for a rule that is not a stream rule; `Some(each)` for one, `each`
+/// being whether `#[stream(each)]` asks for the reader that shows every item.
+fn is_stream(rule: &Rule) -> syn::Result<Option<bool>> {
     for a in &rule.attrs {
         if a.path().is_ident(ATTR) {
-            if !matches!(a.meta, syn::Meta::Path(_)) {
-                return Err(syn::Error::new_spanned(
+            return match &a.meta {
+                syn::Meta::Path(_) => Ok(Some(false)),
+                syn::Meta::List(l) if l.parse_args::<syn::Ident>().is_ok_and(|i| i == "each") => {
+                    Ok(Some(true))
+                }
+                _ => Err(syn::Error::new_spanned(
                     a,
-                    "`#[stream]` takes no arguments: the path to the fold is found, not named",
-                ));
-            }
-            return Ok(true);
+                    "`#[stream]` takes no arguments but `each`: the path to the fold is found, \
+                     not named; `#[stream(each)]` adds `parse_<rule>_reader_each`",
+                )),
+            };
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 /// Finds and checks the path of every `#[stream]` rule.
@@ -79,9 +88,9 @@ pub fn check(grammar: &GrammarDefinition, frames: &crate::frame::Frames) -> syn:
         .collect();
     let mut streams = Streams::default();
     for rule in &grammar.rules {
-        if !is_stream(rule)? {
+        let Some(each) = is_stream(rule)? else {
             continue;
-        }
+        };
         let name = rule.name.to_string();
         if frames.par_folds.contains_key(&name) || frames.frames.contains_key(&name) {
             return Err(syn::Error::new(
@@ -122,7 +131,7 @@ pub fn check(grammar: &GrammarDefinition, frames: &crate::frame::Frames) -> syn:
             level.carried = carried;
             level.returned = returned;
         }
-        streams.paths.insert(name, StreamPath { levels });
+        streams.paths.insert(name, StreamPath { levels, each });
     }
     Ok(streams)
 }

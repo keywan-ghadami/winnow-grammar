@@ -46,7 +46,7 @@ error: rule `list` returns a type that borrows the input, and its value is made 
 74 |         pub list -> &'a str = "[" fold(item, || 0usize, |n: usize, _x: ()| n + 1) "]" -> { "" }
    |             ^^^^
 
-error: `#[stream]` takes no arguments: the path to the fold is found, not named
+error: `#[stream]` takes no arguments but `each`: the path to the fold is found, not named; `#[stream(each)]` adds `parse_<rule>_reader_each`
   --> tests/ui/stream.rs:82:9
    |
 82 |         #[stream(item)]

@@ -1114,6 +1114,95 @@ items. `benches/stream.rs` and ADR 27 §5 have the numbers.
 - Spans bound with `@` are positions in the whole stream.
 - A hand-written parser has two duties of its own: see below.
 
+### Seeing the items as they come: `#[stream(each)]`
+
+The fold's step is grammar text: it sees the accumulator and the item, not
+the caller. A caller that wants each item - to filter, to write it somewhere,
+to stop at the first match - marks the rule `#[stream(each)]` and gets, next
+to `parse_<rule>_reader`,
+
+```text
+fn parse_<rule>_reader_each<S, B>(
+    reader: impl Read,
+    context: &mut ParseContext<S>,
+    reading: Reading,
+    params…,
+    each: impl FnMut(&Item) -> ControlFlow<B>,
+) -> Result<ControlFlow<B, T>, ParseError>
+```
+
+`each` sees every item of the fold once, in order, as it is taken and before
+the fold's step takes it - also where a failure makes the parse diagnose
+again. The fold runs as it always does, so the grammar means what it means
+without `each`: write a fold that keeps little (a count, `()`) when the items
+go to the caller. `Break(b)` ends the parse at that item with `Ok(Break(b))`:
+nothing after it is read, and nothing after it is checked. A parse that reads
+to the end is `Ok(Continue(value))`, or the error `parse_<rule>_reader` gives.
+The item is lent: it may borrow the input, and what is kept is copied.
+
+```rust,ignore
+grammar! {
+    grammar Manifests {
+        #[stream(each)]
+        pub stream -> usize = n:fold(document, || 0usize, |n: usize, _d: Doc| n + 1) eof -> { n }
+        // …
+    }
+}
+
+let found = Manifests::parse_stream_reader_each(file, &mut context, Reading::default(), |d: &Doc| {
+    if d.kind == "Secret" { ControlFlow::Break(d.name.clone()) } else { ControlFlow::Continue(()) }
+})?;
+```
+
+Only a rule marked `each` gets the second function, so a grammar that does not
+ask pays nothing for it, not even in compile time.
+
+**An iterator.** Put the reader on a thread of its own and hand the items
+through a bounded channel; a receiver that is dropped stops the parse:
+
+```rust,ignore
+let (tx, rx) = std::sync::mpsc::sync_channel(64);
+std::thread::scope(|s| {
+    s.spawn(|| {
+        let mut context = ParseContext::<()>::default();
+        Manifests::parse_stream_reader_each(file, &mut context, Reading::default(), |d: &Doc| {
+            match tx.send(d.clone()) {
+                Ok(()) => ControlFlow::Continue(()),
+                Err(_) => ControlFlow::Break(()),   // the receiver is gone
+            }
+        })
+    });
+    for doc in rx.iter().take(10) { /* … */ }
+});
+```
+
+The items cross threads, so they are owned and `Send`, and so is the user
+state. `tests/stream_each_test.rs` does exactly this.
+
+### A broken record: `recover` in the item
+
+A stream of many records should usually go on past a broken one. That is
+`recover(…)` inside the item, as anywhere else:
+
+```rust,ignore
+#[stream]
+pub records -> usize = n:fold(record, || 0usize, |n: usize, r: Option<Rec>| n + r.is_some() as usize) eof -> { n }
+record -> Option<Rec> = r:recover(entry, "\n") -> { r }
+```
+
+The reader agrees with the parse in memory here too: the value,
+`context.recoveries`, and - under `Diagnose::Eager`, which is what keeps the
+errors - `context.recovered`, at their offsets in the stream. The skip to the
+sync point is part of the item, so it must fit `max_frame`; one that does not
+is the error that says so. For YAML's documents the sync point is the next
+marker: `recover(document, peek(("---" (" " | "\n"))))`.
+
+**A cut is not recovered from** (see `recover` above): an item grammar that
+commits with `=>` - for its better messages - ends the whole stream at the
+first record that breaks after the cut. Write the items that should be
+skipped without a cut, or put the cut inside a rule that `recover` does not
+wrap.
+
 ### Errors of a stream
 
 An error of a reader is at its offset in the whole stream. `render(source)`

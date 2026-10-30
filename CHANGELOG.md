@@ -28,6 +28,13 @@
   hand-written parser that looks further ahead, `rt::span_at` for a position
   it takes itself; SYNTAX.md, *Reading from a stream*, says when.
 
+- **`#[stream(each)]`: the caller sees every item** (ADR 27 §3).
+  `parse_<rule>_reader_each(…, each: impl FnMut(&Item) -> ControlFlow<B>)`
+  shows each item of the fold once, in order, before the fold's step takes it;
+  `Break(b)` ends the parse there and returns `Ok(Break(b))` without reading
+  further. Generated only for rules that ask. SYNTAX.md has an iterator on top
+  of it (a thread and a bounded channel) and `recover` in a stream's item.
+
 - **A stream diagnoses with items further back**: an item whose abandoned
   attempt or lookahead recorded a failure past the items after it is replayed
   too, so the error is the parse in memory's here as well. Only grammars that

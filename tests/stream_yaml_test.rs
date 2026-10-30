@@ -46,6 +46,16 @@ grammar! {
             docs:fold(DOCUMENT, Vec::new, |mut v: Vec<Yaml>, d: Yaml| { v.push(d); v }) eof
             -> { docs }
 
+        // The same stream, going on past a broken document to the next
+        // marker - SYNTAX.md, *A broken record*.
+        #[stream]
+        pub RSTREAM -> (usize, usize) =
+            r:fold(RDOC, || (0usize, 0usize), |(ok, bad): (usize, usize), d: Option<Yaml>| {
+                if d.is_some() { (ok + 1, bad) } else { (ok, bad + 1) }
+            })
+            eof -> { r }
+        RDOC -> Option<Yaml> = r:recover(DOCUMENT, peek(("---" (" " | "\n")))) -> { r }
+
         DOCUMENT -> Yaml = DIRECTIVE* "---" "\n" v:BLOCK(n = -1, c = Ctx::BlockIn) END? -> { v }
         DIRECTIVE -> () = "%" until("\n") "\n" -> { () }
         END -> () = "..." "\n" -> { () }
@@ -275,5 +285,29 @@ fn every_prefix_of_a_sequence_document_agrees_with_the_parse_in_memory() {
                 &seqdoc(&v, step, Reading::default()),
             );
         }
+    }
+}
+
+#[test]
+fn a_broken_document_is_skipped_to_the_next_marker() {
+    // The second document is the scalar `-x` - plain, as `-` is not
+    // followed by a space - and then `- y`, which no document begins with:
+    // that one item fails, is skipped to the next marker, and the third
+    // document is read as if nothing had happened.
+    let input = "---\na: 1\n---\n-x\n- y\n---\n- z\n";
+    let mem = in_memory(&mut Yml::parse_RSTREAM(), input);
+    assert_eq!(mem.as_ref().unwrap(), &(3, 1), "{mem:?}");
+    for step in STEPS {
+        let mut ctx = ParseContext::<()>::default();
+        let got = Yml::parse_RSTREAM_reader(
+            Trickle {
+                data: input.as_bytes(),
+                step,
+            },
+            &mut ctx,
+            Reading::default(),
+        );
+        agree(&format!("step {step}"), &mem, &got);
+        assert_eq!(ctx.recoveries, 1);
     }
 }

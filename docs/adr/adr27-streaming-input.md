@@ -5,7 +5,7 @@ without `Partial` - see there). §4 records what is deferred or rejected, §5
 the numbers. **Date:** 2026-10-29.
 **Tests:** `tests/reader_test.rs` (stage 0), `tests/stream_test.rs`,
 `tests/stream_yaml_test.rs`, `tests/stream_extern_test.rs`,
-`tests/stream_diagnose_test.rs`,
+`tests/stream_diagnose_test.rs`, `tests/stream_each_test.rs`,
 `tests/stream_memory_test.rs`,
 `tests/ui/reader.rs`, `tests/ui/stream.rs`; the whole suite once more with
 `WINNOW_GRAMMAR_EDGES=1` (`scripts/test-edges.sh`). **Measured:**
@@ -272,6 +272,52 @@ loop takes the decision as a constant (`Stream<…, TRACK>`). Rows read by
 `#[stream]`: 265 instructions a row before, 268-272 after, the spread being
 inlining that moves from build to build; in wall time no difference beyond
 the noise of the machine on rows, and the list ran faster.
+
+### The caller sees the items: `#[stream(each)]`
+
+The fold's step is grammar text and sees only `(acc, item)`: it cannot reach
+the caller, a channel, or the context. So control over the items belongs to
+the reader, not to the fold: `#[stream(each)]` adds
+`parse_<rule>_reader_each(…, each: impl FnMut(&Item) -> ControlFlow<B>)`
+returning `Result<ControlFlow<B, T>, ParseError>`.
+
+* **The tap observes, it does not take.** `each` sees the item by reference
+  inside the item step, where `commit` holds and before the fold's step; the
+  fold runs as without it. Taking the item instead would leave the
+  accumulator at `init()`, and the rule's value would then depend on how it
+  was called.
+* **Once each.** `commit` is false in the diagnosing replays (`Pass::replay`)
+  and for an item that touched the end of its window, so neither a retry nor
+  a diagnosis shows an item twice.
+* **`Break` is `Fail::Stop`**: the item counts as taken, the driver stops -
+  never diagnosed, retried or replayed - and the generated code returns
+  before the suffixes and the end check, so what follows is neither read nor
+  checked.
+* **Only on request.** The function is generated for a rule marked `each`;
+  a stream rule without it, and every other grammar, generate what they did.
+
+Considered and not done: a `try_fold` whose step returns `ControlFlow` - in
+memory the fast pass's `EmptyError` cannot carry the user's value, and a step
+runs again when `Replay` re-parses after a cut, so a step with an effect
+would act twice; and a real iterator, which needs the path as a generated
+state machine - a second code generator, the objection of §4 to A2. A thread
+and a bounded channel over `_each` give an iterator today (SYNTAX.md).
+
+`recover(…)` inside an item is tested against the parse in memory too -
+value, `recoveries`, and `recovered` under `Eager` - and a skip longer than
+`max_frame` is the too-far error. A cut is not recovered from, there as
+anywhere: an item grammar with `=>` stops the stream at the first record
+broken after it. Whether a stream should diagnose a recovered item by itself
+under `Replay` - cheap here, impossible in memory, and so a divergence from
+the parse in memory that would have to be asked for - or whether a
+combinator that recovers from a cut is wanted, is left to the first real item
+grammar that needs one (TODO §8).
+
+`tests/stream_each_test.rs`: every item once and in order under every
+`Diagnose` mode, read a byte at a time and whole, with a user state of size 0
+and not; `Break` reads no further than its window and checks nothing after
+it; the channel iterator; `recover` in an item. Moving the tap before the
+`commit` check fails four of its tests.
 
 ### How the edge tracking is tested
 

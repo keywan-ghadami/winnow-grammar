@@ -44,13 +44,17 @@ impl Codegen<'_> {
         let reach = self.reach;
         let reader_fn = format_ident!("parse_{}_reader", rule.name, span = span);
         let ret = &rule.return_type;
-        let params = rule.params.iter().map(|p| {
-            let n = &p.name;
-            let t =
-                p.ty.as_ref()
-                    .expect("a stream rule's parameters are values");
-            quote! { #n: #t }
-        });
+        let params: Vec<TokenStream> = rule
+            .params
+            .iter()
+            .map(|p| {
+                let n = &p.name;
+                let t =
+                    p.ty.as_ref()
+                        .expect("a stream rule's parameters are values");
+                quote! { #n: #t }
+            })
+            .collect();
         let end_fn = format_ident!("__stream_{}_end", rule.name, span = span);
         let rt_error = self.rt_error();
         let mut helpers = quote_spanned! {span=>
@@ -61,7 +65,7 @@ impl Codegen<'_> {
                 ::winnow_grammar::rt::skip_trivia(WS, input)
             }
         };
-        let body = self.stream_level(path, 0, &view, &mut helpers);
+        let body = self.stream_level(path, 0, &view, &mut helpers, false);
         let call = |f: &syn::Ident, args: TokenStream| {
             quote_spanned! {span=>
                 |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass| {
@@ -76,8 +80,42 @@ impl Codegen<'_> {
             }
         };
         let finish = call(&end_fn, quote! {});
+        let each_fn = if path.each {
+            let each_fn = format_ident!("parse_{}_reader_each", rule.name, span = span);
+            let body = self.stream_level(path, 0, &view, &mut TokenStream::new(), true);
+            let item = self.stream_item_type(path);
+            let params = params.clone();
+            quote_spanned! {span=>
+                /// [`#reader_fn`], showing `each` every item of the fold as
+                /// it is taken, before the fold's step takes it. `each`
+                /// returning `Break(b)` ends the parse there - nothing after
+                /// that item is read - with `Ok(Break(b))`; a parse that
+                /// reads to the end is `Ok(Continue(value))`. Items are seen
+                /// once each, in order; the grammar's fold runs as it always
+                /// does (ADR 27 §3).
+                #[allow(dead_code, non_snake_case, unused_mut, unused_variables, clippy::let_unit_value)]
+                #vis fn #each_fn<S: ::std::fmt::Debug + Clone #state_bound, B>(
+                    reader: impl ::std::io::Read,
+                    context: &mut ::winnow_grammar::ParseContext<S>,
+                    reading: ::winnow_grammar::rt::Reading,
+                    #(#params,)*
+                    mut each: impl for<'a> FnMut(&#item) -> ::core::ops::ControlFlow<B>,
+                ) -> ::core::result::Result<::core::ops::ControlFlow<B, #ret>, ::winnow_grammar::ParseError> {
+                    let mut __broken: ::core::option::Option<B> = ::core::option::Option::None;
+                    let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, S, #reach>::new(
+                        reader, context, reading, #k,
+                    );
+                    let __value = #body;
+                    __stream.finish(#finish)?;
+                    ::core::result::Result::Ok(::core::ops::ControlFlow::Continue(__value))
+                }
+            }
+        } else {
+            quote! {}
+        };
         quote_spanned! {span=>
             #helpers
+            #each_fn
 
             /// Parses what `reader` yields, one item of the rule's `fold` at
             /// a time, in a buffer of at most `reading.max_frame` bytes past
@@ -110,6 +148,7 @@ impl Codegen<'_> {
         j: usize,
         view: &TokenStream,
         helpers: &mut TokenStream,
+        each: bool,
     ) -> TokenStream {
         let span = Span::mixed_site();
         let level: &Level = &path.levels[j];
@@ -219,11 +258,11 @@ impl Codegen<'_> {
         // --- The element at `at`: the next rule's level, or the fold.
         let (middle, middle_value) = match path.levels.get(j + 1) {
             Some(next) => {
-                let inner = self.stream_level(path, j + 1, view, helpers);
+                let inner = self.stream_level(path, j + 1, view, helpers, each);
                 let ty = self.rule(&next.rule).return_type.clone();
                 (quote_spanned! {span=> let __path: #ty = #inner; }, Some(ty))
             }
-            None => (self.stream_fold(path, j, view, helpers), None),
+            None => (self.stream_fold(path, j, view, helpers, each), None),
         };
         let (binding, path_param) = match &v.pattern[at] {
             ModelPattern::RuleCall { binding, .. } => (binding.clone(), middle_value),
@@ -307,6 +346,7 @@ impl Codegen<'_> {
         j: usize,
         view: &TokenStream,
         helpers: &mut TokenStream,
+        each: bool,
     ) -> TokenStream {
         let span = Span::mixed_site();
         let level = &path.levels[j];
@@ -404,6 +444,25 @@ impl Codegen<'_> {
                 __acc = ::core::option::Option::Some(__step(__a, __v));
             }
         };
+        // `_reader_each`: the caller sees the item before the step takes it,
+        // and may stop the parse there.
+        let (tap, stopped) = if each {
+            (
+                quote_spanned! {span=>
+                    if let ::core::ops::ControlFlow::Break(__b) = each(&__v) {
+                        __broken = ::core::option::Option::Some(__b);
+                        return ::core::result::Result::Err(::winnow_grammar::rt::stream::Fail::Stop);
+                    }
+                },
+                quote_spanned! {span=>
+                    if let ::core::option::Option::Some(__b) = __broken.take() {
+                        return ::core::result::Result::Ok(::core::ops::ControlFlow::Break(__b));
+                    }
+                },
+            )
+        } else {
+            (quote! {}, quote! {})
+        };
         quote_spanned! {span=>
             let mut __acc = ::core::option::Option::Some((#init)());
             let mut __step = #step_fn(&__acc, #step);
@@ -417,14 +476,32 @@ impl Codegen<'_> {
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 };
                 if ::winnow_grammar::rt::stream::commit(input, pass) {
+                    #tap
                     #apply
                     ::core::result::Result::Ok(true)
                 } else {
                     ::core::result::Result::Ok(false)
                 }
             })? {}
+            #stopped
             let __path = __acc.take().expect("the accumulator is there");
         }
+    }
+
+    /// The type of the items of a path's fold: its item rule's.
+    fn stream_item_type(&self, path: &StreamPath) -> syn::Type {
+        let level = path.levels.last().expect("a path has a level");
+        let ModelPattern::Fold { pattern, .. } =
+            &self.rule(&level.rule).variants[0].pattern[level.at]
+        else {
+            unreachable!("the model checked that the path ends in a fold")
+        };
+        let ModelPattern::RuleCall { rule_path, .. } = &**pattern else {
+            unreachable!("the model checked that a streamed fold's item is a rule call")
+        };
+        self.rule(&rule_path.segments.last().unwrap().ident.to_string())
+            .return_type
+            .clone()
     }
 
     fn rule(&self, name: &str) -> &Rule {

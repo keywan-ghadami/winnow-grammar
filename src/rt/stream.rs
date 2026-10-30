@@ -225,12 +225,16 @@ impl Pass {
 pub enum Fail {
     Backtrack(Option<ParseError>),
     Cut(Option<ParseError>),
+    /// Not a failure: the caller of `parse_<rule>_reader_each` stopped at
+    /// the item just taken. Never diagnosed, retried or replayed.
+    Stop,
 }
 
 impl Fail {
     fn error(self) -> Option<ParseError> {
         match self {
             Fail::Backtrack(e) | Fail::Cut(e) => e,
+            Fail::Stop => None,
         }
     }
 }
@@ -399,6 +403,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             Refill,
             TooFar,
             Ended,
+            Halted,
             Failed(Fail),
         }
         let mode = self.context().diagnose;
@@ -498,6 +503,12 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                         }
                     }
                     Ok(false) => break Stop::Ended,
+                    // Taken - `commit` held, so it did not touch the end -
+                    // and the caller wants no more.
+                    Err(Fail::Stop) => {
+                        *n += 1;
+                        break Stop::Halted;
+                    }
                     Err(Fail::Backtrack(e)) => {
                         input.reset(&cp);
                         if let Some(e) = e {
@@ -553,6 +564,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 Ok(true)
             }
             Stop::TooFar => Err(self.too_far()),
+            Stop::Halted => Ok(false),
             Stop::Ended => {
                 // What the item expected is kept for an error further on, as
                 // the fold keeps it - and so is what the item before it
@@ -592,6 +604,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 match self.attempt(self.pos, rules, f, diagnose, Some(*n + 1)).0 {
                     // The diagnosing pass took what the fast one did not.
                     Ok(_) => Ok(true),
+                    Err(Fail::Stop) => Ok(false),
                     Err(fail) => Err(fail.error().unwrap_or_else(ParseError::undiagnosed)),
                 }
             }
@@ -850,6 +863,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         let consumed = input.current_token_start();
         let r = match r {
             Ok(v) => Ok((v, consumed)),
+            Err(Fail::Stop) => Err(Fail::Stop),
             Err(Fail::Backtrack(Some(e))) if item.is_some() => {
                 let e = e.item(item.unwrap_or(0));
                 e.record(&mut input.state, 0);
@@ -890,6 +904,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         let r = r.map_err(|fail| match fail {
             Fail::Backtrack(e) => Fail::Backtrack(e.map(best)),
             Fail::Cut(e) => Fail::Cut(e.map(best)),
+            Fail::Stop => Fail::Stop,
         });
         (r, touched)
     }

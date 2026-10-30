@@ -154,7 +154,17 @@ Stage 0 and §3 are built and measured (`docs/adr/adr27-streaming-input.md`).
    2 % of the row, and their counts move by ±4 with inlining from build to
    build. Worth revisiting only with a grammar whose items are much shorter.
 3. **`start` and a condition on what follows the boundary** for frames
-   (ADR 24 §5), when parallel cutting needs them.
+   (ADR 24 §5), when parallel cutting needs them - the log-file track; for
+   YAML they would stay `unchecked` and add nothing to `recover`.
+4. **A broken record, when a real item grammar asks.** Either a stream that
+   diagnoses a recovered item itself under `Replay` (opt-in: the parse in
+   memory keeps no errors there), or a combinator that recovers from a cut,
+   so that items with `=>` can be skipped too (ADR 27 §3, *The caller sees
+   the items*).
+5. **Unordered keys on the path** - alternatives behind a cut and a
+   repetition of entries, on today's straight-line steps - when a format asks
+   (JSON or YAML written by hand; `kubectl` output has a fixed order and works
+   today).
 
 ---
 
