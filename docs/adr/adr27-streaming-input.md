@@ -5,6 +5,7 @@ without `Partial` - see there). §4 records what is deferred or rejected, §5
 the numbers. **Date:** 2026-10-29.
 **Tests:** `tests/reader_test.rs` (stage 0), `tests/stream_test.rs`,
 `tests/stream_yaml_test.rs`, `tests/stream_extern_test.rs`,
+`tests/stream_diagnose_test.rs`,
 `tests/stream_memory_test.rs`,
 `tests/ui/reader.rs`, `tests/ui/stream.rs`; the whole suite once more with
 `WINNOW_GRAMMAR_EDGES=1` (`scripts/test-edges.sh`). **Measured:**
@@ -228,11 +229,49 @@ at or near where the parse stopped. When the fold ends or an item fails, the
 item before it - kept in the buffer for this - is parsed again by the
 diagnosing pass for what it records, without its step and with the state put
 back, then the failing item; the suffixes and the end check merge with what
-that recorded. A failure recorded further back that reaches past a whole
-item is not seen; no test input produced one. The comparison with the parse
-in memory - value, or error offset, message and `render_excerpt()` against
-`render(source)` - is the test of every stream test, read a byte at a time,
-in odd sizes and whole, under every `Diagnose` mode.
+that recorded. The comparison with the parse in memory - value, or error
+offset, message and `render_excerpt()` against `render(source)` - is the test
+of every stream test, read a byte at a time, in odd sizes and whole, under
+every `Diagnose` mode.
+
+**Items further back.** An item can record a failure past the items after it:
+`ITEM = "a" "a" "a" "!" | "a"` tries four bytes at every `a` and keeps one, so
+the attempt at the first `a` of `aaab` fails at the `b` three items on - and
+in memory, begun earliest, it is the message (`expected `!``). Such a failure
+is recorded only where a repetition, an option, a `fold`, a `recover` or a
+rule's alternatives swallow it, and it lies past the item's end only when the
+attempt given up could read more than one token first. The generator decides
+that per grammar (`codegen::edge::reaches`): in what the stream rules reach,
+outside the stream's own fold, is there a swallowed attempt that is not a
+literal or a built-in token, or a rule alternative that can fail after its
+first element? Rows, `n:i64 ","?`, the `Records` grammar: no - they are
+generated as before. YAML, `Far`: yes - their parsers are wrapped in
+`rt::edge_reach` instead, which also notes how far a failure got
+(`ParseContext::reach`), and the driver keeps every item whose failures got
+within `k` of the next step, in the buffer and in a list, and replays them in
+order before the item before the failure. An item drops out of the list once
+the parse has moved past what it reached, so the buffer stays bounded.
+
+Found on the way, and fixed: under `Diagnose::Eager`, which records in the
+first pass, an item that touched the end of its window kept what it had
+recorded over the partial input when it was parsed again over more; its
+recordings are now put back with the rest of its state.
+
+`tests/stream_diagnose_test.rs` has both: the cases above, an option and a
+repetition whose attempt reads two tokens, a `not(…)` that looks across four
+items, built-in tokens under `?` (`u8` that overflows, `f64`, `raw_ident`) in a
+grammar the analysis leaves untracked, every input up to six or seven bytes
+over each grammar's alphabet, and 200 000 reaching items through a 4 KiB
+window. Turning the analysis off, emptying the list, or dropping the eager
+restore each fails a test.
+
+**Cost.** Tracking in every wrapper, measured first, cost 9-12 instructions a
+row on every parse of such a grammar, in memory too; with the analysis a
+grammar that does not need it pays nothing for the wrappers. The driver's
+loop takes the decision as a constant (`Stream<…, TRACK>`). Rows read by
+`#[stream]`: 265 instructions a row before, 268-272 after, the spread being
+inlining that moves from build to build; in wall time no difference beyond
+the noise of the machine on rows, and the list ran faster.
 
 ### How the edge tracking is tested
 
@@ -354,10 +393,10 @@ only when it has a `#[stream]` rule.
 | | |
 |---|---|
 | `winnow-grammar-model/src/stream.rs` | `#[stream]`: finds the path, checks it, says what crosses each stop (`Streams`, `StreamPath`, `Level`) |
-| `winnow-grammar-macros/src/codegen/edge.rs` | `k` of a grammar (`lookahead`), the `rt::edge` wrapper, `origin()` for spans |
+| `winnow-grammar-macros/src/codegen/edge.rs` | `k` of a grammar (`lookahead`), whether it needs `edge_reach` (`reaches`), the wrapper, `origin()` for spans |
 | `winnow-grammar-macros/src/codegen/stream.rs` | `parse_<rule>_reader`: the path cut into prefix, item and suffix steps |
 | `winnow-grammar-macros/src/codegen/rule.rs` | stage 0's `parse_<RULE>_reader(_with)` (`generate_reader_fns`) |
-| `src/rt/stream.rs` | `edge`, `edge_quoted`, `touch`, `span_at`; the driver `Stream` (windows, retries, positions, the diagnosing replay) |
+| `src/rt/stream.rs` | `edge`, `edge_reach`, `edge_quoted`, `touch`, `span_at`; the driver `Stream` (windows, retries, positions, the diagnosing replay and the items it keeps for it) |
 | `src/rt/reader.rs` | `Reading`, `Buf` (the read buffer, line counting, excerpts), stage 0's `fold_reader` |
 | `src/error.rs` | `Excerpt`, `render_excerpt` |
 
@@ -371,6 +410,12 @@ fixed runs of ADR 24 §8 turned off.
 - **Every parser the generator writes goes through `generate_parser_expr`**,
   which wraps it in `edge()`. A new construct that builds a parser elsewhere
   (as delimiters and `recover`'s skip do) wraps it itself.
+- **A new construct that swallows a failure** - one that records it with
+  `record`/`record_if_begun` and goes on - is a swallowing point for
+  `edge::reaches`, and a new built-in that can fail after it began is not
+  `atomic` there. Otherwise a grammar is generated without `edge_reach`, and
+  an error further on misses what that construct recorded
+  (`tests/stream_diagnose_test.rs`).
 - **A new built-in gets its entry in `edge::lookahead`** - how far it looks
   past where it stops, or past where it began when it fails - and a
   `single_<name>` grammar in `tests/stream_test.rs`, so that its entry is the
@@ -406,8 +451,8 @@ fixed runs of ADR 24 §8 turned off.
 
 ### Open
 
-TODO §8: a failure recorded two items back is not replayed; the per-item loop
-(~30 instructions); frame keys for parallel cutting.
+TODO §8: frame keys for parallel cutting. The per-item loop is measured
+and left as it is (TODO §8).
 
 ## Consequences
 

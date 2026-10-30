@@ -28,6 +28,14 @@
   hand-written parser that looks further ahead, `rt::span_at` for a position
   it takes itself; SYNTAX.md, *Reading from a stream*, says when.
 
+- **A stream diagnoses with items further back**: an item whose abandoned
+  attempt or lookahead recorded a failure past the items after it is replayed
+  too, so the error is the parse in memory's here as well. Only grammars that
+  can record such a failure (an option, repetition or alternative whose
+  attempt reads more than a token) track it, with `rt::edge_reach`; rows and
+  lists pay nothing. Under `Diagnose::Eager`, an item retried with more input
+  no longer keeps what it recorded over the partial input.
+
 - **Errors of a stream carry their line**: `ParseError::excerpt` and
   `render_excerpt()`, which renders as `render(source)` does in memory.
 

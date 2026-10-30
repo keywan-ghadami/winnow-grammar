@@ -140,15 +140,19 @@ performance trade bought with a certain regression in messages is not a trade.
 ## 8. Streaming input - what ADR 27 leaves
 
 Stage 0 and §3 are built and measured (`docs/adr/adr27-streaming-input.md`).
-Open, each for when a case asks:
 
-1. **A failure recorded two items back.** A stream's diagnosing pass replays
-   the item before the one that failed; a failure recorded further back that
-   reaches past a whole item would win in memory and is not seen. No input of
-   the suite produces one.
-2. **The per-item loop** is ~30 instructions over the fold in memory
-   (`rt::stream::Stream::items`): a checkpoint, the touched flag, the commit
-   check, the accumulator through an `Option`. Measured, not yet worth more.
+1. **A failure recorded two items back - closed.** The driver replays every
+   item whose failures reach the next step, in grammars whose analysis says
+   they can (`codegen::edge::reaches`, ADR 27 §3 *Items further back*); an
+   eager-pass leak of recordings from a retried item was fixed on the way.
+2. **The per-item loop - measured, left.** Of what a `#[stream]` reader
+   spends per row over the parse in memory (~68 instructions on rows of 14
+   bytes), about 27 is work per byte - the copy of the read, the UTF-8 check,
+   counting lines for excerpts - and the rest a handful of checks of a few
+   instructions each: the commit check, the touched flag, the item's own
+   wrapper, the accumulator through an `Option`. None is worth more than
+   2 % of the row, and their counts move by ±4 with inlining from build to
+   build. Worth revisiting only with a grammar whose items are much shorter.
 3. **`start` and a condition on what follows the boundary** for frames
    (ADR 24 §5), when parallel cutting needs them.
 

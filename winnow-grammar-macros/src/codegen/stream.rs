@@ -41,6 +41,7 @@ impl Codegen<'_> {
             )
         };
         let k = self.edge_k;
+        let reach = self.reach;
         let reader_fn = format_ident!("parse_{}_reader", rule.name, span = span);
         let ret = &rule.return_type;
         let params = rule.params.iter().map(|p| {
@@ -91,7 +92,7 @@ impl Codegen<'_> {
                 reading: ::winnow_grammar::rt::Reading,
                 #(#params),*
             ) -> ::core::result::Result<#ret, ::winnow_grammar::ParseError> {
-                let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, S>::new(
+                let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, S, #reach>::new(
                     reader, context, reading, #k,
                 );
                 let __value = #body;

@@ -82,6 +82,9 @@ pub struct Codegen<'a> {
     /// How far past where it stops, or where it began when it fails, any
     /// parser of this grammar looks - `rt::edge`'s `k`.
     pub edge_k: usize,
+    /// Whether an item of a stream may record a failure past its end, and
+    /// the parsers note how far failures reach (`edge::reaches`).
+    pub reach: bool,
 }
 
 impl Codegen<'_> {
@@ -142,10 +145,12 @@ impl<'a> Codegen<'a> {
     pub fn new(grammar: &'a GrammarDefinition, frames: Frames, streams: Streams) -> Self {
         let user_rules = grammar.rules.iter().map(|r| r.name.to_string()).collect();
         let streaming = streams.any() || std::env::var_os("WINNOW_GRAMMAR_EDGES").is_some();
+        let reach = edge::reaches(grammar, &streams);
         Self {
             streams,
             streaming,
             edge_k: edge::lookahead(grammar),
+            reach,
             grammar,
             user_rules,
             input_ident: format_ident!("input", span = Span::call_site()),

@@ -179,6 +179,13 @@ pub struct ParseContext<S = ()> {
     /// for a block of a stream, whose spans are moved by it (ADR 27 §3).
     #[doc(hidden)]
     pub origin: usize,
+    /// How much input was left where the furthest failure of the parse was
+    /// - a parser failed where it began, or where it got to. `usize::MAX`
+    /// before one. Written next to `touched` and only where it is; the
+    /// stream driver reads it per item, to know which items an error further
+    /// on has to be diagnosed with (ADR 27 §3).
+    #[doc(hidden)]
+    pub reach: usize,
 }
 
 impl<S: Default> Default for ParseContext<S> {
@@ -200,6 +207,7 @@ impl<S: Default> Default for ParseContext<S> {
             diagnosing: true,
             touched: false,
             origin: 0,
+            reach: usize::MAX,
         }
     }
 }
@@ -229,6 +237,7 @@ impl<S> ParseContext<S> {
             diagnosing: true,
             touched: false,
             origin: 0,
+            reach: usize::MAX,
         }
     }
 

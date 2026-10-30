@@ -57,6 +57,37 @@ where
     }
 }
 
+/// [`edge`] that also notes in the context how far a failure got
+/// (`ParseContext::reach`): for a grammar whose items may record a failure
+/// past their own end, which the stream's diagnosing pass then has to see.
+#[inline(always)]
+pub fn edge_reach<B: Slice, S: Clone + std::fmt::Debug, O, P, E>(
+    k: usize,
+    mut p: P,
+) -> impl FnMut(&mut Input<B, S>) -> Result<O, ErrMode<E>>
+where
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
+{
+    move |input| {
+        let before = input.eof_offset();
+        let r = p.parse_next(input);
+        let left = match r {
+            Ok(_) => input.eof_offset(),
+            Err(_) => {
+                let at = before.min(input.eof_offset());
+                if at < input.state.reach {
+                    input.state.reach = at;
+                }
+                before
+            }
+        };
+        if left < k {
+            input.state.touched = true;
+        }
+        r
+    }
+}
+
 /// [`edge`] for a quoted literal - `string`, whose scan for its closing
 /// quote has no bound: a failure is the end's doing when no closing `quote`
 /// follows the opening one in what the parser was given.
@@ -231,9 +262,18 @@ pub fn commit<B: Slice, S: Clone + std::fmt::Debug>(input: &Input<B, S>, pass: &
     !pass.replay && input.current_token_start() > 0 && (pass.last || !input.state.touched)
 }
 
+/// An item taken whose failures reached its own end: where it starts, the
+/// furthest a failure of it got, and its number - all in `buf`.
+#[derive(Debug, Clone, Copy)]
+struct Reaching {
+    start: usize,
+    reach: usize,
+    n: usize,
+}
+
 /// The reader, the buffer and the context of a stream parse. See the module
 /// documentation; the generated `parse_<rule>_reader` is its only user.
-pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> {
+pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool = false> {
     reader: R,
     block: usize,
     /// How far past the start of a step a parse may look before the step is
@@ -246,6 +286,14 @@ pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> {
     /// The start of the last item taken, in `buf`: kept, so that a failure
     /// after it can be diagnosed as the parse in memory would diagnose it.
     prev_item: Option<usize>,
+    /// Items taken before it whose failures reached their own end: an
+    /// alternative they tried and abandoned, or a lookahead, looked at what
+    /// follows them. The parse in memory records those on its way to an
+    /// error further on, so the diagnosing pass replays them too while what
+    /// they reached is not behind the next step. In `buf`, oldest first.
+    reaching: Vec<Reaching>,
+    /// The grammar's own lookahead.
+    k: usize,
     /// The stream's offset of `buf[0]`.
     base: usize,
     /// The end of what a step may see: for text, of what is checked as UTF-8.
@@ -258,10 +306,14 @@ pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> {
     _kind: PhantomData<K>,
 }
 
-impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
+impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
+    Stream<'c, K, R, S, TRACK>
+{
     /// A stream over `reader`, parsing with a copy of `context`, which gets
     /// the copy back - user state, recoveries and all - when the stream is
-    /// dropped. `k` is the grammar's own lookahead.
+    /// dropped. `k` is the grammar's own lookahead; `TRACK`, whether its
+    /// parsers note how far failures reach (`edge_reach`), so that the items
+    /// an error further on has to be diagnosed with are kept.
     pub fn new(
         reader: R,
         context: &'c mut ParseContext<S>,
@@ -278,6 +330,8 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
             buf: reader::Buf::default(),
             pos: 0,
             prev_item: None,
+            reaching: Vec::new(),
+            k,
             base: 0,
             visible: 0,
             eof: false,
@@ -380,6 +434,8 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
             ctx.rules.extend_from_slice(rules);
         }
         let mut prev = None;
+        let (k, track) = (self.k, TRACK);
+        let mut reaching = Vec::new();
         let (stop, at, mut ctx) = {
             let mut input = Input {
                 input: winnow::stream::LocatingSlice::new(K::view(
@@ -387,6 +443,8 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
                 )),
                 state: ctx,
             };
+            // What an eager pass recorded before the item being parsed.
+            let mut recorded = None;
             let stop = loop {
                 let at = input.current_token_start();
                 // Filled to the lookahead, every item gets all of it: one that
@@ -397,7 +455,15 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
                 let snapshot = (!zst && (mode == Diagnose::Replay || (lazy && !last)))
                     .then(|| input.state.user_state.clone());
                 let saved = (input.state.recoveries, input.state.recovered.len());
+                // What an eager pass recorded before this item: an attempt
+                // that is parsed again with more input records nothing.
+                if pass.diagnose {
+                    recorded = saved_furthest(&input.state);
+                }
                 input.state.touched = false;
+                if track {
+                    input.state.reach = usize::MAX;
+                }
                 let cp = input.checkpoint();
                 let r = f(&mut input, &pass);
                 if input.state.touched && !last {
@@ -407,6 +473,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
                     }
                     input.state.recoveries = saved.0;
                     input.state.recovered.truncate(saved.1);
+                    if pass.diagnose {
+                        input.state.furthest = recorded.take();
+                    }
                     break if window - at >= lookahead {
                         Stop::TooFar
                     } else {
@@ -417,6 +486,16 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
                     Ok(true) => {
                         *n += 1;
                         prev = Some(at);
+                        // A failure within `k` of where the item ended, or
+                        // past it: one of what follows may have to beat it.
+                        let reach = input.state.reach;
+                        if track && reach <= input.eof_offset() + k {
+                            reaching.push(Reaching {
+                                start: at,
+                                reach: window - reach,
+                                n: *n,
+                            });
+                        }
                     }
                     Ok(false) => break Stop::Ended,
                     Err(Fail::Backtrack(e)) => {
@@ -451,7 +530,14 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
         if let Some(p) = prev {
             self.prev_item = Some(self.pos + p);
         }
+        let pos = self.pos;
+        self.reaching.extend(reaching.into_iter().map(|r| Reaching {
+            start: pos + r.start,
+            reach: pos + r.reach,
+            n: r.n,
+        }));
         self.pos += at;
+        self.prune();
         let diagnose = Pass {
             diagnose: true,
             last,
@@ -676,9 +762,17 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
         }
     }
 
-    /// The last item taken, parsed again by the diagnosing pass for what it
-    /// records: a failure it looked past may be the one an error after it
-    /// has to beat.
+    /// Forgets the items whose failures lie behind the next step: an error
+    /// from there on is further, and beats them.
+    fn prune(&mut self) {
+        let (pos, k) = (self.pos, self.k);
+        self.reaching.retain(|r| r.reach + k >= pos);
+    }
+
+    /// The items taken whose failures may reach the next step, and the last
+    /// item taken, parsed again by the diagnosing pass for what they record,
+    /// oldest first as the parse in memory records them: a failure they
+    /// looked past may be the one an error after them has to beat.
     fn replay_prev<T, F>(
         &mut self,
         rules: &[&'static str],
@@ -688,19 +782,30 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
     ) where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<T, Fail>,
     {
-        if let (Some(at), Some(n)) = (self.prev_item, item) {
-            let saved = {
-                let c = self.context();
-                (c.recoveries, c.recovered.len())
-            };
-            let pass = Pass {
-                diagnose: true,
-                last,
-                replay: true,
-            };
-            let _ = self.attempt(at, rules, f, pass, Some(n.saturating_sub(1)));
-            self.roll_back(None, saved);
+        let (Some(prev), Some(n)) = (self.prev_item, item) else {
+            return;
+        };
+        let saved = {
+            let c = self.context();
+            (c.recoveries, c.recovered.len())
+        };
+        let pass = Pass {
+            diagnose: true,
+            last,
+            replay: true,
+        };
+        self.prune();
+        let earlier: Vec<Reaching> = self
+            .reaching
+            .iter()
+            .filter(|r| r.start < prev)
+            .copied()
+            .collect();
+        for r in earlier {
+            let _ = self.attempt(r.start, rules, f, pass, Some(r.n));
         }
+        let _ = self.attempt(prev, rules, f, pass, Some(n.saturating_sub(1)));
+        self.roll_back(None, saved);
     }
 
     /// Runs `f` once over the window: the context goes in with its positions
@@ -816,7 +921,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
     /// One read, of at least `want` bytes asked (at least a block), after
     /// dropping what lies before the next step when that is a block or more.
     fn read_once(&mut self, want: usize) -> Result<(), ParseError> {
-        let keep = self.prev_item.unwrap_or(self.pos).min(self.pos);
+        self.prune();
+        let oldest = self.reaching.first().map_or(self.pos, |r| r.start);
+        let keep = self.prev_item.unwrap_or(self.pos).min(self.pos).min(oldest);
         let keep = self.buf.droppable(keep, self.max_frame);
         if keep >= self.block {
             self.buf.drop_front(keep);
@@ -824,6 +931,10 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
             self.visible -= keep;
             self.pos -= keep;
             self.prev_item = self.prev_item.map(|p| p - keep);
+            for r in &mut self.reaching {
+                r.start -= keep;
+                r.reach -= keep;
+            }
         }
         let len = self.buf.len();
         loop {
@@ -867,7 +978,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug> Stream<'c, K, R, S> {
     }
 }
 
-impl<K: Kind, R: Read, S: Clone + std::fmt::Debug> Drop for Stream<'_, K, R, S> {
+impl<K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool> Drop
+    for Stream<'_, K, R, S, TRACK>
+{
     fn drop(&mut self) {
         if let Some(ctx) = self.ctx.take() {
             *self.out = ctx;
@@ -881,6 +994,13 @@ pub fn action_error(e: ErrMode<ParseError>) -> ParseError {
         ErrMode::Backtrack(e) | ErrMode::Cut(e) => e,
         ErrMode::Incomplete(_) => ParseError::undiagnosed(),
     }
+}
+
+/// What an eager pass recorded so far, kept aside: only that pass needs it.
+#[cold]
+#[inline(never)]
+fn saved_furthest<S>(ctx: &ParseContext<S>) -> Option<ParseError> {
+    ctx.furthest.clone()
 }
 
 fn shift(mut e: ParseError, by: usize) -> ParseError {
