@@ -271,7 +271,7 @@ fn builtin(name: &str) -> Start {
         ]),
         "digit" | "digit1" => ByteSet::of(&[(b'0', b'9')]),
         "alpha1" => ByteSet::of(&[(b'a', b'z'), (b'A', b'Z')]),
-        "hex_digit1" => ByteSet::of(&[(b'0', b'9'), (b'a', b'f'), (b'A', b'F')]),
+        "hex_digit" | "hex_digit1" => ByteSet::of(&[(b'0', b'9'), (b'a', b'f'), (b'A', b'F')]),
         "oct_digit1" => ByteSet::of(&[(b'0', b'7')]),
         "binary_digit1" => ByteSet::of(&[(b'0', b'1')]),
         "space1" => ByteSet::of(&[(b'\t', b'\t'), (b' ', b' ')]),

@@ -287,6 +287,18 @@ pub fn digit<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
     }
 }
 
+/// [`super::hex_digit`] over bytes.
+pub fn hex_digit<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
+) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<char, ErrMode<E>> {
+    move |input| match input.as_bstr().first() {
+        Some(&b) if b.is_ascii_hexdigit() => {
+            input.next_token();
+            Ok(b as char)
+        }
+        _ => Err(ErrMode::Backtrack(E::from_input(input))),
+    }
+}
+
 /// One UTF-8 character at the start of `b`: `Ok(None)` at the end, `Err(0)`
 /// where the sequence there is not valid (D3 - decoded with validation).
 #[inline]

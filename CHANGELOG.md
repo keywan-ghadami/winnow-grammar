@@ -694,6 +694,18 @@
 
 ### Added
 
+- **`hex_digit` built-in** — one hex digit (`0`-`9`, `a`-`f`, `A`-`F`) as a
+  `char`, next to `hex_digit0`/`hex_digit1`'s greedy runs, as `digit` stands
+  next to `digit1`. The greedy runs cannot express a fixed-width hex field;
+  `"\\x" hex_digit{2}`, `"\\u" hex_digit{4}` or a colour `"#" hex_digit{6}`
+  can. It is a character class like `digit`: `hex_digit*` and `hex_digit{m,n}`
+  yield the text they matched (`&'a str`), and it is tested as one byte
+  (`rt::hex_digit`) rather than decoded. In a lexical rule it takes the same
+  indexed match as `digit` (ADR 24 §8) - alone, optional (`hex_digit?`) or as
+  a bounded run - beside literals and decimal digits; `dec<T>` stays base 10
+  and keeps `rt::dec` over hex digits. A grammar's own rule named `hex_digit`
+  is still the one meant. Tests in `tests/hex_test.rs` and
+  `tests/fixed_run_test.rs`.
 - **Values in the grammar: arguments, bounds and guards** (ADR 26). A typed
   parameter and a binding written earlier in the sequence are values, and
   where one is named a call argument (`inner(m)`, `block(n = m + 1)`) or a

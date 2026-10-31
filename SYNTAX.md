@@ -171,7 +171,7 @@ not a list of characters, and a `Vec<char>` there would copy input the parser
 has already walked over. So `whole` above is a `&str`, and `digit*` is the
 `digit0` the built-in table never had, `digit+` the `digit1` it has.
 
-The character classes are `digit` and `any`: they consume exactly one
+The character classes are `digit`, `hex_digit` and `any`: they consume exactly one
 character and yield that character unchanged. `char` is **not** one, although
 it yields a `char` — it parses a character *literal*, so `'\n'` is four
 characters of input and one of value, and its text is not its value; `char{2}`
@@ -277,6 +277,8 @@ The following primitives are "portable" and expected to be available in all back
 | `alpha` | Alphabetic characters. |
 | `digit` | A single digit (`char`). |
 | `digit1` | One or more digits (`&str`). |
+| `hex_digit` | A single hex digit, `0`-`9`, `a`-`f`, `A`-`F` (`char`). |
+| `hex_digit0`, `hex_digit1` | Zero/one or more hex digits (`&str`). |
 | `whitespace` | Explicit whitespace matching. |
 | `eof` | End of input. |
 

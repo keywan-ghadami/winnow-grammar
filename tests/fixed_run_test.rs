@@ -109,6 +109,20 @@ grammar! {
         UNIT_REF -> () = "-" "" digit -> { let _ = _state.rules.len(); }
         pub CALLS_REF -> char = UNIT_REF "" "." d:digit UNIT_REF -> { d }
 
+        // `hex_digit` is matched by its byte as `digit` is: alone, optional
+        // and in a bounded run.
+        pub HEX -> (char, Option<char>, &'a str) =
+            a:hex_digit b:hex_digit? c:hex_digit{1,2} "." -> { (a, b, c) }
+        pub HEX_REF -> (char, Option<char>, &'a str) =
+            a:hex_digit "" b:hex_digit? "" c:hex_digit{1,2} "" "." -> { (a, b, c) }
+        pub HEX_BARE -> bool = "x" hex_digit{2} -> { true }
+        pub HEX_BARE_REF -> bool = "x" "" hex_digit{2} -> { true }
+        // Next to decimal digits, whose class is narrower.
+        pub HEX_MIXED -> (&'a str, char, &'a str) =
+            a:digit{1,2} b:hex_digit c:digit{1} -> { (a, b, c) }
+        pub HEX_MIXED_REF -> (&'a str, char, &'a str) =
+            a:digit{1,2} "" b:hex_digit "" c:digit{1} -> { (a, b, c) }
+
         // A rule with an alternative is called, not taken in.
         SIGN -> bool = "-" -> { true } | "+" -> { false }
         pub ALT -> (bool, char) = ";" s:SIGN d:digit -> { (s, d) }
@@ -124,6 +138,19 @@ grammar! {
                 let v = w * 10 + (f as i32 - '0' as i32);
                 (n, if neg.is_some() { -v } else { v })
             }
+    }
+}
+
+grammar! {
+    grammar HexB {
+        input bytes;
+        pub ESC -> (char, &'a str) = "x" a:hex_digit "-" b:hex_digit{1,2} -> { (a, b) }
+    }
+}
+
+grammar! {
+    grammar HexT {
+        pub ESC -> (char, &'a str) = "x" a:hex_digit "-" b:hex_digit{1,2} -> { (a, b) }
     }
 }
 
@@ -175,9 +202,16 @@ fn strings(alphabet: &[char], len: usize) -> Vec<String> {
 
 const ALPHABET: [char; 7] = ['-', '0', '9', '.', 'x', 'é', ';'];
 
+/// Hex digits of both cases, a decimal one, and the bytes just past the
+/// ranges (`g`, `G`), besides the separators.
+const HEX_ALPHABET: [char; 8] = ['0', '9', 'a', 'F', 'g', 'G', '.', 'x'];
+
 macro_rules! agree {
     ($fast:ident, $reference:ident) => {
-        for s in strings(&ALPHABET, 6) {
+        agree!($fast, $reference, ALPHABET)
+    };
+    ($fast:ident, $reference:ident, $alphabet:expr) => {
+        for s in strings(&$alphabet, 6) {
             let fast = run(Fixed::$fast(), &s);
             let reference = run(Fixed::$reference(), &s);
             assert_eq!(
@@ -388,4 +422,41 @@ fn an_unbound_call_of_a_rule_that_binds_nothing_agrees() {
 #[test]
 fn a_call_of_a_rule_with_an_alternative_agrees() {
     agree!(parse_ALT, parse_ALT_REF);
+}
+
+#[test]
+fn hex_digit_runs_agree() {
+    agree!(parse_HEX, parse_HEX_REF, HEX_ALPHABET);
+    agree!(parse_HEX_BARE, parse_HEX_BARE_REF, HEX_ALPHABET);
+    agree!(parse_HEX_MIXED, parse_HEX_MIXED_REF, HEX_ALPHABET);
+    agree!(parse_HEX, parse_HEX_REF);
+}
+
+#[test]
+fn hex_digit_yields_the_characters() {
+    assert_eq!(
+        run(Fixed::parse_HEX(), "aF09."),
+        (Ok(('a', Some('F'), "09")), 5)
+    );
+    assert_eq!(
+        run(Fixed::parse_HEX(), "a0b."),
+        (Ok(('a', Some('0'), "b")), 4)
+    );
+    // `hex_digit?` keeps its digit: none is left for `hex_digit{1,2}`.
+    assert!(run(Fixed::parse_HEX(), "a0.").0.is_err());
+    assert!(run(Fixed::parse_HEX(), "ag.").0.is_err());
+    assert_eq!(
+        run(Fixed::parse_HEX_MIXED(), "12a3"),
+        (Ok(("12", 'a', "3")), 4)
+    );
+}
+
+#[test]
+fn hex_digit_over_bytes_agrees_with_text() {
+    let alphabet = ['0', 'f', 'G', 'x', '-', 'é'];
+    for s in strings(&alphabet, 6) {
+        let text = run(HexT::parse_ESC(), &s);
+        let bytes = run_bytes(HexB::parse_ESC(), s.as_bytes());
+        assert_eq!(bytes, text, "{s:?}");
+    }
 }

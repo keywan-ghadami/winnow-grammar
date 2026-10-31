@@ -292,10 +292,10 @@ Portable built-ins map to specific `winnow` return types:
 | `raw_ident` | `&'a str` | The same characters, not interned. |
 | `intern(p)` | `Symbol` | Interns whatever `p` yields. |
 | `string` | `&'a str` | Borrowed from the input, quotes excluded. |
-| `alpha1`, `digit1` | `&'a str` | |
+| `alpha1`, `digit1`, `hex_digit1` | `&'a str` | |
 | `u32`, `i32`, `f64` | `u32`, `i32`, `f64` | |
 | `bool` | `bool` | |
-| `char`, `any`, `digit` | `char` | |
+| `char`, `any`, `digit`, `hex_digit` | `char` | |
 
 A `Symbol` is a 4-byte id; `ctx.interner.resolve(sym)` gives the text back, and
 `sym.index()` is its dense position in the interner (`0..interner.len()`) - the

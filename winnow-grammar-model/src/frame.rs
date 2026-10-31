@@ -707,7 +707,7 @@ fn builtin_may_consume(name: &str, c: char) -> bool {
     match name {
         "eof" | "empty" => false,
         "digit" | "digit1" => c.is_ascii_digit(),
-        "hex_digit0" | "hex_digit1" => c.is_ascii_hexdigit(),
+        "hex_digit" | "hex_digit0" | "hex_digit1" => c.is_ascii_hexdigit(),
         "oct_digit0" | "oct_digit1" => ('0'..='7').contains(&c),
         "binary_digit0" | "binary_digit1" => c == '0' || c == '1',
         "alpha1" => c.is_alphabetic(),

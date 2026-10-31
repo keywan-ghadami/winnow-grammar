@@ -77,6 +77,10 @@ impl Backend for WinnowBackend {
                 return_type: "&'a str",
             },
             BuiltIn {
+                name: "hex_digit",
+                return_type: "char",
+            },
+            BuiltIn {
                 name: "hex_digit0",
                 return_type: "&'a str",
             },

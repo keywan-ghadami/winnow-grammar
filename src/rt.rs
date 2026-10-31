@@ -1603,6 +1603,21 @@ pub fn digit<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
     }
 }
 
+/// `hex_digit` - one ASCII hex digit (`0`-`9`, `a`-`f`, `A`-`F`), as the
+/// `char` it is: [`digit`] for base 16, the same byte test and unchecked cut.
+pub fn hex_digit<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
+) -> impl FnMut(&mut ParseInput<'a, S>) -> Result<char, ErrMode<E>> {
+    move |input| match input.as_bstr().first() {
+        Some(&b) if b.is_ascii_hexdigit() => {
+            // SAFETY: the first byte is ASCII: offset 1 is a character
+            // boundary.
+            unsafe { take_on_boundary(input, 1) };
+            Ok(b as char)
+        }
+        _ => Err(ErrMode::Backtrack(E::from_input(input))),
+    }
+}
+
 /// `raw_ident` - [`class`] for the ASCII stretch, `wide` for a character that
 /// is not ASCII.
 ///

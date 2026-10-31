@@ -180,6 +180,7 @@ fn builtin_expectation(name: &str) -> Option<&'static str> {
         "alpha1" => "letters",
         "digit" => "a digit",
         "digit1" => "digits",
+        "hex_digit" => "a hex digit",
         "hex_digit0" | "hex_digit1" => "hex digits",
         "oct_digit0" | "oct_digit1" => "octal digits",
         "binary_digit0" | "binary_digit1" => "binary digits",
@@ -1200,6 +1201,11 @@ impl<'a> Codegen<'a> {
                     1,
                 )
             },
+            // One hex digit, for fixed-width hex fields (`hex_digit{2}`), as
+            // `digit` is for decimal ones.
+            "hex_digit" => quote_spanned! {span=>
+                #rts::hex_digit::<__WgS, __WgEr>()
+            },
             "hex_digit0" => quote_spanned! {span=>
                 #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::HEX_DIGIT,
@@ -1383,7 +1389,7 @@ impl<'a> Codegen<'a> {
     /// Shadowing counts: a grammar that defines its own `digit` means that
     /// one, and it is a rule like any other.
     fn is_char_class(&self, p: &ModelPattern) -> bool {
-        const CHAR_CLASSES: &[&str] = &["digit", "any", "byte"];
+        const CHAR_CLASSES: &[&str] = &["digit", "hex_digit", "any", "byte"];
         let ModelPattern::RuleCall {
             rule_path, args, ..
         } = p

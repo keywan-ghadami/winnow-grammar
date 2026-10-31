@@ -10,7 +10,9 @@
 //! **Only the fast pass's accepting path is new.** When the indexed match
 //! fails, the input is where it was and the elements run again as they always
 //! did, so a failure - its position, a `cut` after a `=>` - comes from exactly
-//! the code that produced it before. `dec<T>(digit{m,n})` joins a run when
+//! the code that produced it before. `hex_digit` is matched like `digit`, by
+//! its byte, alone, optional or in a bounded run (`hex_digit{2}`).
+//! `dec<T>(digit{m,n})` joins a run when
 //! `n` digits always fit in `T` (ADR 24 §8c): the value is accumulated as the
 //! digits are matched, and a wider bound keeps `rt::dec` and its overflow
 //! error. The diagnosing pass (ADR 17) does not
@@ -30,6 +32,44 @@ use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{format_ident, quote, quote_spanned};
 use winnow_grammar_model::model::{Argument, ModelPattern, Rule};
 
+/// The one-byte digit classes the indexed match tests: the built-ins `digit`
+/// and `hex_digit`.
+#[derive(Clone, Copy)]
+enum DigitClass {
+    Dec,
+    Hex,
+}
+
+impl DigitClass {
+    /// The built-in that is one digit of the class.
+    fn builtin(self) -> &'static str {
+        match self {
+            DigitClass::Dec => "digit",
+            DigitClass::Hex => "hex_digit",
+        }
+    }
+
+    /// `u8`'s test for the class, a path usable as `fn(&u8) -> bool`.
+    fn test(self) -> TokenStream {
+        let span = Span::mixed_site();
+        match self {
+            DigitClass::Dec => quote_spanned! {span=> u8::is_ascii_digit },
+            DigitClass::Hex => quote_spanned! {span=> u8::is_ascii_hexdigit },
+        }
+    }
+
+    /// The `AsciiClass` that makes a run of the class text over bytes.
+    fn ascii_class(self) -> TokenStream {
+        let span = Span::mixed_site();
+        match self {
+            DigitClass::Dec => quote_spanned! {span=> ::winnow_grammar::ascii::AsciiClass::DIGIT },
+            DigitClass::Hex => {
+                quote_spanned! {span=> ::winnow_grammar::ascii::AsciiClass::HEX_DIGIT }
+            }
+        }
+    }
+}
+
 /// One element the indexed match understands, and the value its binding gets
 /// - the same type the element's own parser yields.
 enum Fixed<'p> {
@@ -37,12 +77,13 @@ enum Fixed<'p> {
     Lit(Vec<u8>, Option<&'p syn::Ident>),
     /// `"…"?`: `Option<&'a str>`.
     OptLit(Vec<u8>, Option<&'p syn::Ident>),
-    /// The built-in `digit`: `char`.
-    Digit(Option<&'p syn::Ident>),
-    /// `digit?`: `Option<char>`.
-    OptDigit(Option<&'p syn::Ident>),
-    /// `digit{min,max}` with an upper bound: `&'a str` when bound.
-    Digits(usize, usize, Option<&'p syn::Ident>),
+    /// The built-in `digit` or `hex_digit`: `char`.
+    Digit(DigitClass, Option<&'p syn::Ident>),
+    /// `digit?`, `hex_digit?`: `Option<char>`.
+    OptDigit(DigitClass, Option<&'p syn::Ident>),
+    /// `digit{min,max}`, `hex_digit{min,max}` with an upper bound: `&'a str`
+    /// when bound.
+    Digits(DigitClass, usize, usize, Option<&'p syn::Ident>),
     /// `dec<T>(digit{min,max})` where `max` digits always fit in `T`: `T`.
     Dec(&'p syn::Type, usize, usize, Option<&'p syn::Ident>),
     /// `=>` between two elements: it matches nothing, and the elements as
@@ -59,9 +100,9 @@ impl Fixed<'_> {
         match self {
             Fixed::Lit(_, b)
             | Fixed::OptLit(_, b)
-            | Fixed::Digit(b)
-            | Fixed::OptDigit(b)
-            | Fixed::Digits(_, _, b)
+            | Fixed::Digit(_, b)
+            | Fixed::OptDigit(_, b)
+            | Fixed::Digits(_, _, _, b)
             | Fixed::Dec(_, _, _, b)
             | Fixed::Call(_, _, b) => *b,
             Fixed::Cut => None,
@@ -121,9 +162,12 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    /// Is `p` the built-in `digit` (not a rule of the grammar's own by that
-    /// name), and with what binding?
-    fn builtin_digit<'p>(&self, p: &'p ModelPattern) -> Option<Option<&'p syn::Ident>> {
+    /// Is `p` the built-in `digit` or `hex_digit` (not a rule of the
+    /// grammar's own by that name), which, and with what binding?
+    fn builtin_digit<'p>(
+        &self,
+        p: &'p ModelPattern,
+    ) -> Option<(DigitClass, Option<&'p syn::Ident>)> {
         match p {
             ModelPattern::RuleCall {
                 rule_path,
@@ -131,12 +175,11 @@ impl<'a> Codegen<'a> {
                 args,
                 binding,
                 ..
-            } if generics.is_empty()
-                && args.is_empty()
-                && rule_path.is_ident("digit")
-                && !self.user_rules.contains("digit") =>
-            {
-                Some(binding.as_ref())
+            } if generics.is_empty() && args.is_empty() => {
+                let class = [DigitClass::Dec, DigitClass::Hex]
+                    .into_iter()
+                    .find(|c| rule_path.is_ident(c.builtin()))?;
+                (!self.user_rules.contains(class.builtin())).then_some((class, binding.as_ref()))
             }
             _ => None,
         }
@@ -179,7 +222,7 @@ impl<'a> Codegen<'a> {
                     self.inlined_rule(rule)
                         .map(|elements| Fixed::Call(elements, rule, binding.as_ref()))
                 })
-                .or_else(|| self.builtin_digit(p).map(Fixed::Digit))
+                .or_else(|| self.builtin_digit(p).map(|(c, b)| Fixed::Digit(c, b)))
             }
             ModelPattern::Lit { lit, binding, .. } => {
                 let bytes = Self::literal_bytes(lit)?;
@@ -190,7 +233,9 @@ impl<'a> Codegen<'a> {
                     let bytes = Self::literal_bytes(lit)?;
                     (!bytes.is_empty()).then_some(Fixed::OptLit(bytes, binding.as_ref()))
                 }
-                other => self.builtin_digit(other).map(Fixed::OptDigit),
+                other => self
+                    .builtin_digit(other)
+                    .map(|(c, b)| Fixed::OptDigit(c, b)),
             },
             ModelPattern::Bounded {
                 pattern,
@@ -199,7 +244,7 @@ impl<'a> Codegen<'a> {
                 ..
             } if *max <= MAX_DIGITS && min <= max && *max > 0 => self
                 .builtin_digit(pattern)
-                .map(|b| Fixed::Digits(*min, *max, b)),
+                .map(|(c, b)| Fixed::Digits(c, *min, *max, b)),
             ModelPattern::RuleCall {
                 rule_path,
                 generics,
@@ -218,7 +263,10 @@ impl<'a> Codegen<'a> {
                 else {
                     return None;
                 };
-                self.builtin_digit(pattern)?;
+                // `dec` reads base 10: a run of hex digits is left to it.
+                let (DigitClass::Dec, _) = self.builtin_digit(pattern)? else {
+                    return None;
+                };
                 (min <= max && *max > 0 && *max <= digits_that_fit(ty)?).then_some(Fixed::Dec(
                     ty,
                     (*min).max(1),
@@ -226,7 +274,7 @@ impl<'a> Codegen<'a> {
                     binding.as_ref(),
                 ))
             }
-            other => self.builtin_digit(other).map(Fixed::Digit),
+            other => self.builtin_digit(other).map(|(c, b)| Fixed::Digit(c, b)),
         }
     }
 
@@ -461,31 +509,39 @@ impl<'a> Codegen<'a> {
                     };
                 }
             }
-            Fixed::Digit(_) => quote_spanned! {span=>
-                let #v_pat = match #b.get(#at) {
-                    ::core::option::Option::Some(&c) if c.is_ascii_digit() => { #at += 1; c as char }
-                    _ => break 'fixed #fail,
-                };
-            },
-            Fixed::OptDigit(_) => quote_spanned! {span=>
-                let #v_pat = match #b.get(#at) {
-                    ::core::option::Option::Some(&c) if c.is_ascii_digit() => { #at += 1; ::core::option::Option::Some(c as char) }
-                    _ => ::core::option::Option::None,
-                };
-            },
-            Fixed::Digits(min, max, b_) => {
+            Fixed::Digit(class, _) => {
+                let test = class.test();
+                quote_spanned! {span=>
+                    let #v_pat = match #b.get(#at) {
+                        ::core::option::Option::Some(c) if #test(c) => { #at += 1; *c as char }
+                        _ => break 'fixed #fail,
+                    };
+                }
+            }
+            Fixed::OptDigit(class, _) => {
+                let test = class.test();
+                quote_spanned! {span=>
+                    let #v_pat = match #b.get(#at) {
+                        ::core::option::Option::Some(c) if #test(c) => { #at += 1; ::core::option::Option::Some(*c as char) }
+                        _ => ::core::option::Option::None,
+                    };
+                }
+            }
+            Fixed::Digits(class, min, max, b_) => {
                 // A run of digits is text in both kinds of grammar; over
                 // bytes the class makes it so (ADR 25 D2).
+                let test = class.test();
+                let ascii = class.ascii_class();
                 let value = b_.map(|_| {
                     if self.is_bytes() {
-                        quote_spanned! {span=> let #v = ::winnow_grammar::rt::bytes::class_text(::winnow_grammar::ascii::AsciiClass::DIGIT, &#s[start..#at]); }
+                        quote_spanned! {span=> let #v = ::winnow_grammar::rt::bytes::class_text(#ascii, &#s[start..#at]); }
                     } else {
                         quote_spanned! {span=> let #v = &#s[start..#at]; }
                     }
                 });
                 quote_spanned! {span=>
                     let start = #at;
-                    while #at - start < #max && #b.get(#at).is_some_and(u8::is_ascii_digit) {
+                    while #at - start < #max && #b.get(#at).is_some_and(#test) {
                         #at += 1;
                     }
                     if #at - start < #min { break 'fixed #fail; }
@@ -698,6 +754,26 @@ mod tests {
             "T"
         ));
         assert!(inlined(quote! { S -> () = ";" => "x" -> { } }, "S"));
+    }
+
+    #[test]
+    fn hex_digit_is_a_fixed_element_unless_shadowed() {
+        assert!(inlined(
+            quote! { T -> (char, Option<char>, &'a str) = a:hex_digit b:hex_digit? c:hex_digit{2} -> { (a, b, c) } },
+            "T"
+        ));
+        assert!(!inlined(
+            quote! {
+                hex_digit -> char = "z" -> { 'z' }
+                T -> (char, char) = a:hex_digit b:hex_digit -> { (a, b) }
+            },
+            "T"
+        ));
+        // `dec` reads base 10; over hex digits it keeps `rt::dec`.
+        assert!(!inlined(
+            quote! { T -> u8 = "x" v:dec<u8>(hex_digit{2}) -> { v } },
+            "T"
+        ));
     }
 
     #[test]

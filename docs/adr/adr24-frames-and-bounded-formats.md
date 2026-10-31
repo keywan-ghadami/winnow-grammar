@@ -259,9 +259,9 @@ to each other —
 |---|---|
 | a string or char literal (non-empty) | `&'a str` |
 | `"…"?` | `Option<&'a str>` |
-| the built-in `digit` | `char` |
-| `digit?` | `Option<char>` |
-| `digit{m,n}` with `n ≤ 16` | `&'a str` |
+| the built-in `digit` or `hex_digit` | `char` |
+| `digit?`, `hex_digit?` | `Option<char>` |
+| `digit{m,n}`, `hex_digit{m,n}` with `n ≤ 16` | `&'a str` |
 | `dec<T>(digit{m,n})` where `n` digits always fit in `T` (§8c) | `T` |
 
 — the generator emits one indexed match over the unconsumed input's bytes
