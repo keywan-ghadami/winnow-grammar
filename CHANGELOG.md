@@ -398,6 +398,15 @@
 
 ### Fixed
 
+- **A user type named `S`, `E` or `B` is no longer hidden by the generated
+  code.** The generated functions named their state and error type
+  parameters `S` and `E`, and the callback's break value of
+  `parse_<rule>_reader_each` `B`; a user type of that name in a rule's type
+  or action meant the parameter instead - `struct S { a: i64 }` with
+  `top -> S = …` was rustc's "expected struct, found type parameter `S`".
+  They are now `__WgS`, `__WgEr` and `__WgB`, and a generic rule may name its
+  own parameter `S` or `E`. `tests/type_param_hygiene_test.rs`.
+
 - **A lowercase `par_fold` rule skips no whitespace either.** Its entry point
   already skipped none, so that pieces and the whole input agree; but a
   syntactic rule still skipped at its own start and before every item of the

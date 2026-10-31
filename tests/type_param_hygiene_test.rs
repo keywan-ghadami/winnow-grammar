@@ -24,6 +24,11 @@ grammar! {
         pub err -> E = n:u32 -> { E(n) }
         pub b -> B = "b" -> { B }
         pub all -> (S, E, B) = s:top "," e:err "," b:b -> { (s, e, b) }
+
+        // A generic rule may name its own type parameters `S` and `E`.
+        pair<S, E>(l: Rule<S>, r: Rule<E>) -> (S, E) = a:l "," b:r -> { (a, b) }
+        pub generic -> (u32, bool) = p:pair<u32, bool>(l=u32, r=flag) -> { p }
+        flag -> bool = "t" -> { true } | "f" -> { false }
     }
 }
 
@@ -45,4 +50,7 @@ fn user_types_named_like_type_parameters() {
     Hygiene::parse_all()
         .parse_test("1, 2, b")
         .assert_success_is((S { a: 1 }, E(2), B));
+    Hygiene::parse_generic()
+        .parse_test("3, t")
+        .assert_success_is((3, true));
 }

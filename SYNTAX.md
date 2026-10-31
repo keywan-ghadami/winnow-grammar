@@ -374,7 +374,7 @@ Every action gets `_state`, whether or not it names one; the `_` prefix keeps
 an unused one quiet, and an action may bind the name itself, which shadows it.
 
 **Reaching the user state: declare it.** A rule is generic over the state
-type, so `_state.user_state` has type `S` in an action and nothing can be done
+type, so `_state.user_state` has the type of a type parameter in an action and nothing can be done
 with it. A grammar that wants its own state says so - see
 [Declaring a state](#declaring-a-state-state-t) below - and then writes
 `_state.user()`.
@@ -1570,8 +1570,10 @@ explicit -> Vec<i32> = l:list<i32>(item=i32) -> { l }
 Declaring the parameter as `item: Rule<T>` ties its result type to `T`
 explicitly; both spellings are equivalent.
 
-The names `'a`, `S` and `E` are taken: the generated code uses them for the
-input lifetime, the user state and the error type of a rule.
+The lifetime `'a` is taken: it is the input's, the one a rule's type names in
+`&'a str`, so a rule cannot declare a lifetime parameter `'a` of its own. The
+generated code's type parameters are named `__WgS`, `__WgEr` and `__WgB`, so
+any other name - a rule's `<S>`, a user type `E` - is free.
 
 ### Left Recursion
 Direct left recursion is automatically detected and compiled into an iterative loop, making expression parsing natural.
