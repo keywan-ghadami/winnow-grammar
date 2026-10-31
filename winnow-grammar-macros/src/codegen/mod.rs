@@ -96,7 +96,7 @@ impl Codegen<'_> {
             Some(ty) => quote! { + ::winnow_grammar::StateOf<#ty> },
             None => quote! {},
         };
-        // `interner I;` rides on the same `S`, for the same reason - ADR 22.
+        // `interner I;` rides on the same `__WgS`, for the same reason - ADR 22.
         let interner = match &self.grammar.interner {
             Some(ty) => quote! { + ::winnow_grammar::InternerOf<#ty> },
             None => quote! {},
@@ -113,19 +113,19 @@ impl Codegen<'_> {
     /// `ParseBytes` under `input bytes;`.
     pub fn input_ty(&self) -> TokenStream {
         if self.is_bytes() {
-            quote! { ::winnow_grammar::ParseBytes<'a, S> }
+            quote! { ::winnow_grammar::ParseBytes<'a, __WgS> }
         } else {
-            quote! { ::winnow_grammar::ParseInput<'a, S> }
+            quote! { ::winnow_grammar::ParseInput<'a, __WgS> }
         }
     }
 
-    /// The bound on a rule's error type parameter `E`, for this grammar's
+    /// The bound on a rule's error type parameter `__WgEr`, for this grammar's
     /// input.
     pub fn rt_error(&self) -> TokenStream {
         if self.is_bytes() {
-            quote! { ::winnow_grammar::rt::RtError<'a, S, &'a [u8]> }
+            quote! { ::winnow_grammar::rt::RtError<'a, __WgS, &'a [u8]> }
         } else {
-            quote! { ::winnow_grammar::rt::RtError<'a, S> }
+            quote! { ::winnow_grammar::rt::RtError<'a, __WgS> }
         }
     }
 
@@ -182,8 +182,8 @@ impl<'a> Codegen<'a> {
         let interner_accessor = match &self.grammar.interner {
             Some(ty) => quote_spanned! {Span::call_site()=>
                 trait __DeclaredInterner { fn declared_interner(&mut self) -> &mut #ty; }
-                impl<S: ::winnow_grammar::InternerOf<#ty>> __DeclaredInterner
-                    for ::winnow_grammar::ParseContext<S>
+                impl<__WgS: ::winnow_grammar::InternerOf<#ty>> __DeclaredInterner
+                    for ::winnow_grammar::ParseContext<__WgS>
                 {
                     #[inline]
                     fn declared_interner(&mut self) -> &mut #ty {
@@ -197,8 +197,8 @@ impl<'a> Codegen<'a> {
         let state_accessor = match &self.grammar.state {
             Some(ty) => quote_spanned! {Span::call_site()=>
                 trait __UserState { fn user(&mut self) -> &mut #ty; }
-                impl<S: ::winnow_grammar::StateOf<#ty>> __UserState
-                    for ::winnow_grammar::ParseContext<S>
+                impl<__WgS: ::winnow_grammar::StateOf<#ty>> __UserState
+                    for ::winnow_grammar::ParseContext<__WgS>
                 {
                     #[inline]
                     fn user(&mut self) -> &mut #ty {
@@ -211,7 +211,7 @@ impl<'a> Codegen<'a> {
 
         let default_ws = self.edge(
             quote_spanned! {span=>
-                #rts::class::<S, E>(::winnow_grammar::ascii::AsciiClass::MULTISPACE, 0)
+                #rts::class::<__WgS, __WgEr>(::winnow_grammar::ascii::AsciiClass::MULTISPACE, 0)
             },
             None,
         );
@@ -226,9 +226,9 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 // Whitespace handling (similar to syn)
                 #[allow(dead_code)]
-                fn WS<'a, S: std::fmt::Debug + Clone, E: #rt_error>(
+                fn WS<'a, __WgS: std::fmt::Debug + Clone, __WgEr: #rt_error>(
                     #input: &mut #input_ty,
-                ) -> ::winnow::Result<(), ::winnow::error::ErrMode<E>> {
+                ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
                     use ::winnow::Parser;
                     // The default whitespace skip runs between every two
                     // tokens, so it is the hottest scan in a generated parser

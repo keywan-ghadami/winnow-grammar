@@ -603,7 +603,8 @@ impl<'a> Codegen<'a> {
         // The diagnosing pass keeps the elements: an optional one that did
         // not match leaves "also possible here" behind, which the indexed
         // match has no reason to know about.
-        let fast_pass = quote_spanned! {span=> !<E as ::winnow_grammar::Diagnostics>::RECORDING };
+        let fast_pass =
+            quote_spanned! {span=> !<__WgEr as ::winnow_grammar::Diagnostics>::RECORDING };
         if yields.is_empty() {
             // Nothing yielded: no tuple, so no `()` for Clippy to point at.
             return quote_spanned! {span=>

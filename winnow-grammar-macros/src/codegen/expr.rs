@@ -928,7 +928,7 @@ impl<'a> Codegen<'a> {
                     true,
                     target_rule.label.as_deref(),
                 );
-                let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<E> };
+                let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<__WgEr> };
                 let input_var = &self.input_ident; // <-- NEW: use the defined identifier
 
                 return quote_spanned! {span=>
@@ -954,13 +954,13 @@ impl<'a> Codegen<'a> {
             }
         }
 
-        let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<E> };
+        let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<__WgEr> };
         let input_type = quote_spanned! {span=> #input_ty };
 
         // `raw_ident`'s characters, shared with `ident` - which is
         // `intern(raw_ident)` and nothing else (ADR 18 §1).
         let raw_ident = quote_spanned! {span=>
-            #rts::class_or_wide::<S, E>(
+            #rts::class_or_wide::<__WgS, __WgEr>(
                 ::winnow_grammar::ascii::AsciiClass::IDENT,
                 |c| c.is_alphanumeric(),
                 1,
@@ -1182,7 +1182,7 @@ impl<'a> Codegen<'a> {
             }
             "any" => quote_spanned! {span=> ::winnow::token::any::<#input_type, #inner_err_type> },
             "alpha1" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::ALPHA,
                     1,
                 )
@@ -1192,70 +1192,70 @@ impl<'a> Codegen<'a> {
             // repetition (`digit{1,2}`), which a greedy terminal cannot express.
             // Tested as a byte rather than decoded as a `char` (`rt::digit`).
             "digit" => quote_spanned! {span=>
-                #rts::digit::<S, E>()
+                #rts::digit::<__WgS, __WgEr>()
             },
             "digit1" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::DIGIT,
                     1,
                 )
             },
             "hex_digit0" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::HEX_DIGIT,
                     0,
                 )
             },
             "hex_digit1" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::HEX_DIGIT,
                     1,
                 )
             },
             "oct_digit0" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::OCT_DIGIT,
                     0,
                 )
             },
             "oct_digit1" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::OCT_DIGIT,
                     1,
                 )
             },
             "binary_digit0" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::BINARY_DIGIT,
                     0,
                 )
             },
             "binary_digit1" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::BINARY_DIGIT,
                     1,
                 )
             },
             "space0" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::SPACE,
                     0,
                 )
             },
             "space1" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::SPACE,
                     1,
                 )
             },
             "multispace0" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::MULTISPACE,
                     0,
                 )
             },
             "multispace1" => quote_spanned! {span=>
-                #rts::class::<S, E>(
+                #rts::class::<__WgS, __WgEr>(
                     ::winnow_grammar::ascii::AsciiClass::MULTISPACE,
                     1,
                 )
@@ -1282,40 +1282,40 @@ impl<'a> Codegen<'a> {
             }
 
             "u8" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, u8, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, u8, __WgEr> }
             }
             "u16" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, u16, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, u16, __WgEr> }
             }
             "u32" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, u32, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, u32, __WgEr> }
             }
             "u64" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, u64, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, u64, __WgEr> }
             }
             "u128" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, u128, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, u128, __WgEr> }
             }
             "usize" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, S, usize, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, usize, __WgEr> }
             }
             "i8" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, i8, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, i8, __WgEr> }
             }
             "i16" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, i16, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, i16, __WgEr> }
             }
             "i32" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, i32, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, i32, __WgEr> }
             }
             "i64" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, i64, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, i64, __WgEr> }
             }
             "i128" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, i128, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, i128, __WgEr> }
             }
             "isize" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, S, isize, E> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, isize, __WgEr> }
             }
             "f32" => {
                 quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f32, #inner_err_type> }
@@ -1336,20 +1336,20 @@ impl<'a> Codegen<'a> {
                     // says so first, so that the parser need not build one
                     // (`ParseError::from_input`).
                     quote_spanned! {span=> (|i: &mut #input_ty| {
-                        let outer = ::core::mem::replace(&mut i.state.diagnosing, <E as ::winnow_grammar::Diagnostics>::RECORDING);
+                        let outer = ::core::mem::replace(&mut i.state.diagnosing, <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING);
                         let r = ::winnow::Parser::parse_next(&mut #rule_path, i);
                         i.state.diagnosing = outer;
-                        r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<E as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
+                        r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
                     }) }
                 } else {
                     let arg_exprs = args
                         .iter()
                         .map(|arg| self.generate_argument_expr(arg, is_lexical));
                     quote_spanned! {span=> (|i: &mut #input_ty| {
-                        let outer = ::core::mem::replace(&mut i.state.diagnosing, <E as ::winnow_grammar::Diagnostics>::RECORDING);
+                        let outer = ::core::mem::replace(&mut i.state.diagnosing, <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING);
                         let r = #rule_path(i, #(#arg_exprs),*);
                         i.state.diagnosing = outer;
-                        r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<E as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
+                        r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
                     }) }
                 }
             }
@@ -1695,7 +1695,7 @@ impl<'a> Codegen<'a> {
                     (|i: &mut #input_ty| match #bounds {
                         ::core::option::Option::Some((__lo, __hi)) => ::winnow::Parser::parse_next(&mut #rep, i),
                         ::core::option::Option::None => ::core::result::Result::Err(
-                            ::winnow::error::ErrMode::Backtrack(<E as ::winnow::error::ParserError<_>>::from_input(i)),
+                            ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow::error::ParserError<_>>::from_input(i)),
                         ),
                     })
                 }

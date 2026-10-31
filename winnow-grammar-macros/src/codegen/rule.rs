@@ -28,11 +28,11 @@ impl<'a> Codegen<'a> {
         let ret_type = &rule.return_type;
         let input = &self.input_ident;
         // The public parser reports `ParseError`; inside, the rule is generic
-        // over its error type `E` (ADR 17): the entry point instantiates it
+        // over its error type `__WgEr` (ADR 17): the entry point instantiates it
         // twice, once with `EmptyError` for the fast pass and once with
         // `ParseError` for the diagnosing one.
         let err_type = quote_spanned! { span=> ::winnow_grammar::ParseError };
-        let inner_err_type = quote_spanned! { span=> ::winnow::error::ErrMode<E> };
+        let inner_err_type = quote_spanned! { span=> ::winnow::error::ErrMode<__WgEr> };
 
         let mut params_tokens = Vec::new();
         let mut inner_params_tokens = Vec::new();
@@ -114,7 +114,8 @@ impl<'a> Codegen<'a> {
         let gen_params = &rule.generics.params;
         let gen_where = &rule.generics.where_clause;
 
-        let mut all_generics = quote! { 'a, S: std::fmt::Debug + Clone #state_bound, E: #rt_error };
+        let mut all_generics =
+            quote! { 'a, __WgS: std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error };
         if !gen_params.is_empty() {
             all_generics.extend(quote! {, #gen_params});
         }
@@ -129,7 +130,7 @@ impl<'a> Codegen<'a> {
         let ws_shadow = if is_ws_rule {
             quote_spanned! {span=>
                 #[allow(dead_code)]
-                fn WS<'a, S: std::fmt::Debug + Clone, E>(_: &mut #input_ty) -> ::winnow::Result<(), ::winnow::error::ErrMode<E>> {
+                fn WS<'a, __WgS: std::fmt::Debug + Clone, __WgEr>(_: &mut #input_ty) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
                     Ok(())
                 }
             }
@@ -157,7 +158,7 @@ impl<'a> Codegen<'a> {
                 // body, so that an error RECORDED along the way picks it up.
                 // Errors passed out collect it via `.context(Label)`. The fast
                 // pass records nothing and keeps no stack.
-                if <E as ::winnow_grammar::Diagnostics>::RECORDING {
+                if <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING {
                     #input.state.rules.push(#rule_name_str);
                 }
                 let result = {
@@ -170,14 +171,14 @@ impl<'a> Codegen<'a> {
                         parser.parse_next(#input)
                     }
                 };
-                if <E as ::winnow_grammar::Diagnostics>::RECORDING {
+                if <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING {
                     #input.state.rules.pop();
                 }
                 result
             }
         };
 
-        let mut outer_generics = quote! {'a, S: std::fmt::Debug + Clone #state_bound };
+        let mut outer_generics = quote! {'a, __WgS: std::fmt::Debug + Clone #state_bound };
         if !gen_params.is_empty() {
             outer_generics.extend(quote! {, #gen_params});
         }
@@ -367,13 +368,13 @@ impl<'a> Codegen<'a> {
                     /// must start empty per piece instead of being copied
                     /// wants `parse_…_pieces_with` - ADR 19.
                     #[allow(dead_code)]
-                    #vis fn #pieces_fn<'a, S: std::fmt::Debug + Clone #state_bound>(
+                    #vis fn #pieces_fn<'a, __WgS: std::fmt::Debug + Clone #state_bound>(
                         input: &'a #slice,
-                        context: &::winnow_grammar::ParseContext<S>,
+                        context: &::winnow_grammar::ParseContext<__WgS>,
                         how: ::winnow_grammar::rt::Parallelism,
                     ) -> ::core::result::Result<#ret_type, ::winnow_grammar::ParseError>
                     where
-                        S: ::std::fmt::Debug + Clone + Sync,
+                        __WgS: ::std::fmt::Debug + Clone + Sync,
                         #ret_type: Send,
                     {
                         #pieces_with_fn(input, || context.clone(), how)
@@ -389,13 +390,13 @@ impl<'a> Codegen<'a> {
                     /// interner gives every piece its own numbering, and
                     /// symbols from two pieces are then not comparable.
                     #[allow(dead_code)]
-                    #vis fn #pieces_with_fn<'a, S: std::fmt::Debug + Clone #state_bound>(
+                    #vis fn #pieces_with_fn<'a, __WgS: std::fmt::Debug + Clone #state_bound>(
                         input: &'a #slice,
-                        new_context: impl Fn() -> ::winnow_grammar::ParseContext<S> + Sync,
+                        new_context: impl Fn() -> ::winnow_grammar::ParseContext<__WgS> + Sync,
                         how: ::winnow_grammar::rt::Parallelism,
                     ) -> ::core::result::Result<#ret_type, ::winnow_grammar::ParseError>
                     where
-                        S: ::std::fmt::Debug + Clone,
+                        __WgS: ::std::fmt::Debug + Clone,
                         #ret_type: Send,
                     {
                         ::winnow_grammar::rt::fold_pieces(
@@ -438,9 +439,9 @@ impl<'a> Codegen<'a> {
         // The input of a block, whose lifetime is the block's: the result
         // does not borrow it.
         let input_ty_elided = if self.is_bytes() {
-            quote! { ::winnow_grammar::ParseBytes<'_, S> }
+            quote! { ::winnow_grammar::ParseBytes<'_, __WgS> }
         } else {
-            quote! { ::winnow_grammar::ParseInput<'_, S> }
+            quote! { ::winnow_grammar::ParseInput<'_, __WgS> }
         };
         let state_bound = self.state_bound();
         let vis = if rule.is_pub {
@@ -465,14 +466,14 @@ impl<'a> Codegen<'a> {
             /// in memory, in a buffer of at most `reading.max_frame` plus one
             /// block. An error is at its offset in the stream - ADR 27.
             #[allow(dead_code)]
-            #vis fn #reader_fn<S: std::fmt::Debug + Clone #state_bound>(
+            #vis fn #reader_fn<__WgS: std::fmt::Debug + Clone #state_bound>(
                 reader: impl ::std::io::Read,
-                context: &::winnow_grammar::ParseContext<S>,
+                context: &::winnow_grammar::ParseContext<__WgS>,
                 how: ::winnow_grammar::rt::Parallelism,
                 reading: ::winnow_grammar::rt::Reading,
             ) -> ::core::result::Result<#ret_type, ::winnow_grammar::ParseError>
             where
-                S: ::std::fmt::Debug + Clone + Sync,
+                __WgS: ::std::fmt::Debug + Clone + Sync,
                 #ret_type: Send,
             {
                 #reader_with_fn(reader, || context.clone(), how, reading)
@@ -481,14 +482,14 @@ impl<'a> Codegen<'a> {
             /// [`#reader_fn`] with a context *built* per piece rather than
             /// cloned - see `parse_…_pieces_with`.
             #[allow(dead_code)]
-            #vis fn #reader_with_fn<S: std::fmt::Debug + Clone #state_bound>(
+            #vis fn #reader_with_fn<__WgS: std::fmt::Debug + Clone #state_bound>(
                 reader: impl ::std::io::Read,
-                new_context: impl Fn() -> ::winnow_grammar::ParseContext<S> + Sync,
+                new_context: impl Fn() -> ::winnow_grammar::ParseContext<__WgS> + Sync,
                 how: ::winnow_grammar::rt::Parallelism,
                 reading: ::winnow_grammar::rt::Reading,
             ) -> ::core::result::Result<#ret_type, ::winnow_grammar::ParseError>
             where
-                S: ::std::fmt::Debug + Clone,
+                __WgS: ::std::fmt::Debug + Clone,
                 #ret_type: Send,
             {
                 ::winnow_grammar::rt::fold_reader(

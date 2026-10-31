@@ -32,12 +32,12 @@ impl Codegen<'_> {
         let (kind, view) = if self.is_bytes() {
             (
                 quote! { ::winnow_grammar::rt::stream::Bytes },
-                quote! { ::winnow_grammar::ParseBytes<'_, S> },
+                quote! { ::winnow_grammar::ParseBytes<'_, __WgS> },
             )
         } else {
             (
                 quote! { ::winnow_grammar::rt::stream::Text },
-                quote! { ::winnow_grammar::ParseInput<'_, S> },
+                quote! { ::winnow_grammar::ParseInput<'_, __WgS> },
             )
         };
         let k = self.edge_k;
@@ -59,9 +59,9 @@ impl Codegen<'_> {
         let rt_error = self.rt_error();
         let mut helpers = quote_spanned! {span=>
             #[allow(dead_code, non_snake_case)]
-            fn #end_fn<'a, S: ::std::fmt::Debug + Clone #state_bound, E: #rt_error>(
+            fn #end_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
                 input: &mut #input_ty,
-            ) -> ::winnow::Result<(), ::winnow::error::ErrMode<E>> {
+            ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
                 ::winnow_grammar::rt::skip_trivia(WS, input)
             }
         };
@@ -70,10 +70,10 @@ impl Codegen<'_> {
             quote_spanned! {span=>
                 |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass| {
                     if pass.diagnose() {
-                        #f::<S, ::winnow_grammar::ParseError>(input, #args)
+                        #f::<__WgS, ::winnow_grammar::ParseError>(input, #args)
                             .map_err(::winnow_grammar::rt::stream::Fail::from)
                     } else {
-                        #f::<S, ::winnow::error::EmptyError>(input, #args)
+                        #f::<__WgS, ::winnow::error::EmptyError>(input, #args)
                             .map_err(::winnow_grammar::rt::stream::Fail::from)
                     }
                 }
@@ -94,15 +94,15 @@ impl Codegen<'_> {
                 /// once each, in order; the grammar's fold runs as it always
                 /// does (ADR 27 §3).
                 #[allow(dead_code, non_snake_case, unused_mut, unused_variables, clippy::let_unit_value)]
-                #vis fn #each_fn<S: ::std::fmt::Debug + Clone #state_bound, B>(
+                #vis fn #each_fn<__WgS: ::std::fmt::Debug + Clone #state_bound, __WgB>(
                     reader: impl ::std::io::Read,
-                    context: &mut ::winnow_grammar::ParseContext<S>,
+                    context: &mut ::winnow_grammar::ParseContext<__WgS>,
                     reading: ::winnow_grammar::rt::Reading,
                     #(#params,)*
-                    mut each: impl for<'a> FnMut(&#item) -> ::core::ops::ControlFlow<B>,
-                ) -> ::core::result::Result<::core::ops::ControlFlow<B, #ret>, ::winnow_grammar::ParseError> {
-                    let mut __broken: ::core::option::Option<B> = ::core::option::Option::None;
-                    let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, S, #reach>::new(
+                    mut each: impl for<'a> FnMut(&#item) -> ::core::ops::ControlFlow<__WgB>,
+                ) -> ::core::result::Result<::core::ops::ControlFlow<__WgB, #ret>, ::winnow_grammar::ParseError> {
+                    let mut __broken: ::core::option::Option<__WgB> = ::core::option::Option::None;
+                    let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::new(
                         reader, context, reading, #k,
                     );
                     let __value = #body;
@@ -124,13 +124,13 @@ impl Codegen<'_> {
             /// offset in the stream. `context` is the parse's: its user state
             /// and its recoveries are there when the call returns.
             #[allow(dead_code, non_snake_case, unused_mut, unused_variables, clippy::let_unit_value)]
-            #vis fn #reader_fn<S: ::std::fmt::Debug + Clone #state_bound>(
+            #vis fn #reader_fn<__WgS: ::std::fmt::Debug + Clone #state_bound>(
                 reader: impl ::std::io::Read,
-                context: &mut ::winnow_grammar::ParseContext<S>,
+                context: &mut ::winnow_grammar::ParseContext<__WgS>,
                 reading: ::winnow_grammar::rt::Reading,
                 #(#params),*
             ) -> ::core::result::Result<#ret, ::winnow_grammar::ParseError> {
-                let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, S, #reach>::new(
+                let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::new(
                     reader, context, reading, #k,
                 );
                 let __value = #body;
@@ -192,10 +192,10 @@ impl Codegen<'_> {
             quote_spanned! {span=>
                 |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass| #ret {
                     if pass.diagnose() {
-                        #f::<S, ::winnow_grammar::ParseError>(input, #(#args),*)
+                        #f::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
                             .map_err(::winnow_grammar::rt::stream::Fail::from)
                     } else {
-                        #f::<S, ::winnow::error::EmptyError>(input, #(#args),*)
+                        #f::<__WgS, ::winnow::error::EmptyError>(input, #(#args),*)
                             .map_err(::winnow_grammar::rt::stream::Fail::from)
                     }
                 }
@@ -239,10 +239,10 @@ impl Codegen<'_> {
         let p_typed = typed(&params);
         helpers.extend(quote_spanned! {span=>
             #[allow(dead_code, non_snake_case, unused_variables, unused_mut, clippy::let_unit_value)]
-            fn #prefix_fn<'a, S: ::std::fmt::Debug + Clone #state_bound, E: #rt_error>(
+            fn #prefix_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
                 #input: &mut #input_ty,
                 #(#p_typed),*
-            ) -> ::winnow::Result<((#(#c_types,)*), (#(#a_types,)*)), ::winnow::error::ErrMode<E>> {
+            ) -> ::winnow::Result<((#(#c_types,)*), (#(#a_types,)*)), ::winnow::error::ErrMode<__WgEr>> {
                 use ::winnow::Parser;
                 use ::winnow::prelude::*;
                 #steps
@@ -297,10 +297,10 @@ impl Codegen<'_> {
         let s_typed = typed(&s_in);
         helpers.extend(quote_spanned! {span=>
             #[allow(dead_code, non_snake_case, unused_variables, unused_mut, clippy::let_unit_value)]
-            fn #suffix_fn<'a, S: ::std::fmt::Debug + Clone #state_bound, E: #rt_error>(
+            fn #suffix_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
                 #input: &mut #input_ty,
                 #(#s_typed),*
-            ) -> ::winnow::Result<(#(#r_types,)*), ::winnow::error::ErrMode<E>> {
+            ) -> ::winnow::Result<(#(#r_types,)*), ::winnow::error::ErrMode<__WgEr>> {
                 use ::winnow::Parser;
                 use ::winnow::prelude::*;
                 #steps
@@ -413,10 +413,10 @@ impl Codegen<'_> {
         };
         helpers.extend(quote_spanned! {span=>
             #[allow(dead_code, non_snake_case, unused_variables, unused_mut)]
-            fn #item_fn<'a, S: ::std::fmt::Debug + Clone #state_bound, E: #rt_error>(
+            fn #item_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
                 #input: &mut #input_ty,
                 #(#a_names: #a_types),*
-            ) -> ::winnow::Result<#item_ret, ::winnow::error::ErrMode<E>> {
+            ) -> ::winnow::Result<#item_ret, ::winnow::error::ErrMode<__WgEr>> {
                 use ::winnow::Parser;
                 #skip
                 let mut __p = #item_parser;
@@ -469,10 +469,10 @@ impl Codegen<'_> {
             let mut __n = 0usize;
             while __stream.items(&[#(#rules),*], &mut __n, |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass| {
                 let __v = if pass.diagnose() {
-                    #item_fn::<S, ::winnow_grammar::ParseError>(input, #(#args),*)
+                    #item_fn::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 } else {
-                    #item_fn::<S, ::winnow::error::EmptyError>(input, #(#args),*)
+                    #item_fn::<__WgS, ::winnow::error::EmptyError>(input, #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 };
                 if ::winnow_grammar::rt::stream::commit(input, pass) {
