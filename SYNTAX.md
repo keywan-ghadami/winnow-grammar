@@ -1122,13 +1122,13 @@ to stop at the first match - marks the rule `#[stream(each)]` and gets, next
 to `parse_<rule>_reader`,
 
 ```text
-fn parse_<rule>_reader_each<S, B>(
+fn parse_<rule>_reader_each<__WgS, __WgB>(
     reader: impl Read,
-    context: &mut ParseContext<S>,
+    context: &mut ParseContext<__WgS>,
     reading: Reading,
     params…,
-    each: impl FnMut(&Item) -> ControlFlow<B>,
-) -> Result<ControlFlow<B, T>, ParseError>
+    each: impl FnMut(&Item) -> ControlFlow<__WgB>,
+) -> Result<ControlFlow<__WgB, T>, ParseError>
 ```
 
 `each` sees every item of the fold once, in order, as it is taken and before
