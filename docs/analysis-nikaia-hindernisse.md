@@ -38,7 +38,7 @@ Nikaia-Repository.
 | H5 | Grammatiken ohne Zustand und ohne `extern rule` (ADR-339 D3) | Abwägung | Regel halten, Teilöffnung prüfen |
 | H6 | Fremde Rust-Traits implementieren (#928 Option b) | Abwägung | vorerst nein (Fassade), später neu fragen |
 | H7 | Rust-Bibliothek ausliefern (#978) | Vorteil | priorisieren |
-| H8 | ADR-290 D12/D17: Was der Compiler braucht, darf nicht über diesen Weg | Abwägung, klein | Ausnahme für den Generator |
+| H8 | ADR-290 D12/D17: Was der Compiler braucht, darf nicht über diesen Weg | Vorteil (Grund überholt durch ADR-294) | Regel an ADR-294 angleichen |
 | H9 | Henne-Ei / Bootstrapping | kein Hindernis | wie beim Self-Hosting |
 | H10 | Gespeicherte Sichten / Lebensdauern (E0621, #1000, #1037, #1038) | Defekt/Lücke | reparieren, Regel „keine Lebensdauern“ bleibt |
 | H11 | `unsafe` und Leistungsprimitive der Laufzeit | Lücke + Abwägung (Beweiser für Text) | erst Probe, dann entscheiden |
@@ -221,18 +221,43 @@ Generator selbst). Features ohne `#[cfg]` im Code.
 
 ## H8 ADR-290 D12/D17: „anything the compiler needs … stays out“
 
-**Heute:** Der Weg über committetes Pre-Lowering (Nikaia-Code für
-Rust-Programme) ist für Teile verboten, die der Compiler selbst zum
-Übersetzen braucht. Der Generator wäre genau so ein Teil, und er soll
-gleichzeitig für Rust-Nutzer da sein.
+**Heute:** D17 schließt Teile, die der Compiler selbst zum Übersetzen
+braucht, vom Weg „ein Stück Nikaia, das Nikaia- und Rust-Programme
+gleichermaßen aufrufen“ aus. Der Generator wäre genau so ein Teil.
 
-| Vorteile einer Ausnahme | Nachteile |
-| :--- | :--- |
-| Ein Generator für den Compiler und für Rust-Nutzer, keine Kopie. | Release-Kopplung: Eine Änderung für Rust-Nutzer ist zugleich eine Compiler-Änderung. |
-| | Der Zweck von D12 war, dass kein Zyklus entsteht. Den müssen wir dann anders ausschließen (H9). |
+**Woher die Regel kommt** (`nk:docs/history/adr/adr-195.md` D2,
+`adr-196.md` D2, später ADR-290 D12/D17, 2026-10-03): Die Begründung ist
+nur der **Bootstrap-Zyklus**. `describe` durfte als erstes Werkzeug in
+Nikaia geschrieben werden, *weil* der Compiler es nicht braucht: „Nothing
+bootstraps through it … So there is no cycle to break.“ Ob der Compiler
+selbst je Nikaia wird, ließ ADR-196 §4 ausdrücklich offen. Ebenso offen
+blieb, ob ein Nikaia-Modul für Rust-Nutzer veröffentlicht wird („whether
+this project wants to carry that promise is not asked here“).
 
-**Tendenz:** Ausnahme oder Neufassung von D17, sobald H9 belegt ist. Das ist
-klein.
+**Seitdem ist beides entschieden:**
+
+* **ADR-294:** Der Compiler zieht nach Nikaia um, über genau diesen Weg
+  (committetes Pre-Lowering, D1). Er übersetzt sich heute schon mit
+  abgesenktem Nikaia-Code (`tools/*.nika`, Self-Hosting 78–82 %). Der
+  Zyklus ist dort gelöst.
+* **#928/#978:** Nikaia-Pakete werden als Rust-Crates veröffentlicht.
+
+Der Grund der Regel ist also überholt. Außerdem trennt sie zwei Dinge
+nicht: Ob ein Zyklus entsteht, hängt davon ab, ob *der Compiler* das Stück
+braucht, nicht davon, ob *zusätzlich* Rust-Nutzer es aufrufen. Ein
+weiterer Aufrufer erzeugt keinen Zyklus.
+
+**Einordnung: Vorteil.** Die Regel wird an ADR-294 angeglichen; D17 nennt
+dann nur noch die Bedingung „Text oder Bytes rein, Daten raus, Aufrufer auf
+beiden Seiten“. Die Kosten des Teilens bestehen unabhängig von der Regel
+und werden anders behandelt:
+
+* **API-Versprechen:** Ein Teil, den Rust-Nutzer aufrufen, kann der Compiler
+  nicht mehr frei umbauen. Das regeln die Versionen aus #978, wie bei
+  jedem veröffentlichten Paket.
+* **Ein Fehler trifft beide Seiten.** Eine Änderung für Rust-Nutzer ist
+  zugleich eine Compiler-Änderung. Dagegen hilft der Fixpunkt-Test aus
+  H9, nicht die Regel.
 
 ## H9 Henne-Ei / Bootstrapping
 
