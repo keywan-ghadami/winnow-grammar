@@ -142,9 +142,9 @@ test, and is documented as what it is — the general way an action reaches
 `ParseContext`, of which the interner is one field.
 
 What the hatch does *not* reach, found while testing it: `_state.user_state`.
-A generated rule is generic over `S`, so the field is opaque there - the
+A generated rule is generic over `__WgS`, so the field is opaque there - the
 `lazy_diagnostics` tests already say "a grammar action cannot do this to a
-generic `S`" and write their state-mutating passes by hand. `_state` is
+generic `__WgS`" and write their state-mutating passes by hand. `_state` is
 therefore the *context's own* fields: the interner above all, and `fold`,
 `diagnose` and `rules` beside it. `tests/state_action_test.rs` covers all
 three injection sites - a plain variant, one with a span binding, and the
@@ -220,7 +220,7 @@ one — it is what would turn a silent wrong answer into a compile error.
 A claim worth correcting, because it makes the trap in §3 look designed away:
 that `parse_<rule>_pieces` takes a *context factory* rather than a context "so
 that the interner can be shared through an `Arc`, per ADR 14". The first half
-is right - the parameter is `impl Fn() -> ParseContext<S> + Sync`, called once
+is right - the parameter is `impl Fn() -> ParseContext<__WgS> + Sync`, called once
 per piece. The reason is not.
 
 The factory exists because the rest of the context is **per-parse mutable
@@ -233,7 +233,7 @@ evidence: the factory has been there since ADR 16 and nothing has ever shared
 anything through it.
 
 It is worth noticing that the factory is not forced by the sharing
-requirement either - ADR 19 proposes taking it up on that. `ParseContext` is `Clone` and `S: Clone` is already a
+requirement either - ADR 19 proposes taking it up on that. `ParseContext` is `Clone` and `__WgS: Clone` is already a
 bound, so an API taking one context and cloning it per piece would carry the
 interner's `Arc` into every piece *by default*, and the trap in §3 would not
 exist. What the factory buys instead is a `user_state` that starts fresh per

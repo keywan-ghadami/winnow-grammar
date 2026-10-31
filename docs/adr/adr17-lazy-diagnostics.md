@@ -40,7 +40,7 @@ accepts, produces the same value, and fails at the same place.
 
 ### 1. The generated parsers are generic over their error type
 
-`parse_<rule>_inner` takes `E: rt::RtError<'a, S>` — winnow's own
+`parse_<rule>_inner` takes `__WgEr: rt::RtError<'a, __WgS>` — winnow's own
 `ParserError` and `AddContext<StrContext>` plus this crate's `Diagnostics`.
 Two types fill it: `ParseError`, whose `Diagnostics` impl is the engine of
 ADR 15 (moved out of `rt.rs` verbatim), and winnow's zero-sized
@@ -116,7 +116,7 @@ This is the one thing this ADR asks of a grammar that ADR 15 did not:
 
 * **An action that mutates `user_state` must tolerate being replayed**
   after a failure. Under `Replay` the state is restored from a clone first,
-  so the outside sees each action once — provided `S::clone` is a snapshot.
+  so the outside sees each action once — provided `__WgS::clone` is a snapshot.
   A state that shares through `Arc` or `RefCell` is not restored by cloning;
   such a grammar chooses `ReplayInPlace` and lives with the double run, or
   `Eager`.
@@ -138,8 +138,9 @@ This is the one thing this ADR asks of a grammar that ADR 15 did not:
 * A failing parse runs twice — the fast pass to the failure, then one item
   (framed) or the input (unframed) in diagnose mode. With `--features
   trace` both passes trace.
-* Every grammar compiles twice per rule (two instantiations of `E`). Rules
-  cannot use `E` as their own generic parameter, as they could not use `S`.
+* Every grammar compiles twice per rule (two instantiations of `__WgEr`). The
+  generated parameters are named `__WgS` and `__WgEr` so that a rule's own
+  generic parameter, or a user type, can be called `S` or `E`.
 * `rt::fold_pieces` takes the two instantiations instead of one parser;
   `rt::RtError` (a trait) replaces the private alias of the same name.
 * `ParseContext` has two new fields (`diagnose`, `fold`) and `ErrorCore`

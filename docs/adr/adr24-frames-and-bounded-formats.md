@@ -276,7 +276,7 @@ observable behaviour where it was:
    elements run again exactly as they were generated before — so the failure,
    its position, and a `cut` after `=>` come from the code that produced them
    before.
-2. *The diagnosing pass never takes the indexed path* (`E::RECORDING`). An
+2. *The diagnosing pass never takes the indexed path* (`__WgEr::RECORDING`). An
    optional element that did not match leaves "also possible here" behind in
    the context; the indexed match has no business knowing that, and the first
    version, which ran in both passes, lost exactly that note. The equivalence

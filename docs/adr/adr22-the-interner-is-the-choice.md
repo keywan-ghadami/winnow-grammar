@@ -67,8 +67,8 @@ pub trait Interner {
 }
 ```
 
-A grammar that declares one gets `S: InternerOf<I>` on its rules, exactly as
-ADR 20 puts `S: StateOf<T>` there, and `ident` compiles to the trait call. A
+A grammar that declares one gets `__WgS: InternerOf<I>` on its rules, exactly as
+ADR 20 puts `__WgS: StateOf<T>` there, and `ident` compiles to the trait call. A
 grammar that declares nothing keeps today's `ParseContext::interner`, so this
 is additive.
 
@@ -76,7 +76,7 @@ Three things make it affordable, and they are the same three that made ADR 20
 affordable:
 
 * **A bound, not a parameter.** A second type parameter on `ParseContext` would
-  land in every generated signature. A bound rides on the `S` that is already
+  land in every generated signature. A bound rides on the `__WgS` that is already
   there, and one state can satisfy several bounds - which is what lets a
   grammar have both a `state` and an `interner`.
 * **`Symbol` stays the identity type.** The trait produces `Symbol`, so nothing

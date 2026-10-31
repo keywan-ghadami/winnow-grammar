@@ -11,24 +11,24 @@ side-effect contract), ADR 18 §2 (`_state`), ADR 19 §2 (`_pieces_with`).
 
 ## Context
 
-`ParseContext<S>` has carried a `user_state` since ADR 14, and every generated
-rule is generic over `S`:
+`ParseContext<__WgS>` has carried a `user_state` since ADR 14, and every generated
+rule is generic over `__WgS`:
 
 ```rust
-fn parse_row_inner<'a, S: std::fmt::Debug + Clone, E: RtError<'a, S>>(
-    input: &mut ParseInput<'a, S>,
-) -> winnow::Result<Row, ErrMode<E>>
+fn parse_row_inner<'a, __WgS: std::fmt::Debug + Clone, __WgEr: RtError<'a, __WgS>>(
+    input: &mut ParseInput<'a, __WgS>,
+) -> winnow::Result<Row, ErrMode<__WgEr>>
 ```
 
 That genericity is why **nothing the grammar can express can touch the user
-state**. In an action, `_state.user_state` has type `S` and no operation
+state**. In an action, `_state.user_state` has type `__WgS` and no operation
 applies to it. A hand-written parser is not a way round it: it is called from
 that same generic code, so it has to be generic too, and naming a concrete
 state in its signature is a type error —
 
 ```text
 error[E0308]: mismatched types
-  expected `Table`, found type parameter `S`
+  expected `Table`, found type parameter `__WgS`
 ```
 
 — which this ADR's author found by writing one, having documented the
@@ -75,7 +75,7 @@ it does not collide with the rule that an attribute nothing reads is an error.
 
 ### `state T;` declares a *requirement*, not an identity
 
-The obvious reading — substitute `T` for `S` everywhere and drop the parameter
+The obvious reading — substitute `T` for `__WgS` everywhere and drop the parameter
 — is the wrong one, and this is the ADR's central choice. Substituting makes
 two grammars with different states permanently incompatible: neither can call
 the other, and no state can serve both. A **bound** costs the same and does
@@ -91,7 +91,7 @@ pub trait StateOf<T> { fn state(&mut self) -> &mut T; }
 impl<T> StateOf<T> for T { fn state(&mut self) -> &mut T { self } }
 
 // What `state Table;` generates:
-fn parse_row_inner<'a, S: Debug + Clone + StateOf<Table>, E>(…)
+fn parse_row_inner<'a, __WgS: Debug + Clone + StateOf<Table>, __WgEr>(…)
 ```
 
 The blanket impl means a state that simply *is* the table satisfies its own
@@ -108,7 +108,7 @@ Both are exercised in `tests/state_test.rs`, including the coherence question
 the blanket impl raises — `StateOf<App> for App` and `StateOf<TableA> for App`
 are different instantiations and do not overlap.
 
-`S` appears in about thirty places in the code generator, but the *parameter
+`__WgS` appears in about thirty places in the code generator, but the *parameter
 lists* are built in three: the inner rule's generics, the outer entry point's,
 and `parse_<rule>_pieces`. The change is one added bound in those three, plus
 a grammar-local accessor so an action writes `_state.user()` and never spells
@@ -138,7 +138,7 @@ signatures and changes nothing else.
 ### It is additive
 
 A grammar without `state` generates exactly what it generates today, generic
-`S` included. Nothing existing changes, which is why this ADR does not need a
+`__WgS` included. Nothing existing changes, which is why this ADR does not need a
 migration section.
 
 ## The costs, and what each one is met with
@@ -174,7 +174,7 @@ becomes ambiguous. Both are used in the suite.
 immediately while writing the test: `ParseContext { user_state,
 ..Default::default() }` does not compile for a state that is not `Default`,
 which a pre-sized table need not be. Naming every field requires nothing of
-`S`, and that is now `ParseContext::with_state(user_state)` — with
+`__WgS`, and that is now `ParseContext::with_state(user_state)` — with
 `with_state_and_interner` beside it for the ADR 14 shape, where the interner
 outlives the parse.
 
@@ -231,7 +231,7 @@ is what does that.
 
 **Make only the interner pluggable.** It serves the
 high-end interner and nothing else, and it costs a second type parameter on the
-context — the same infection as `S` — for a strictly smaller result. If both
+context — the same infection as `__WgS` — for a strictly smaller result. If both
 are ever wanted, `state` is the one that subsumes the other: a grammar that can
 name its state can put whatever interner it likes in it.
 

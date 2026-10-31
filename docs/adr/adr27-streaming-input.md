@@ -70,9 +70,9 @@ has, keep the rest for the next block: that is a stream, and it needs no
 Next to `parse_<rule>_pieces`, a `par_fold` rule gets
 
 ```rust,ignore
-fn parse_<rule>_reader<S>(
+fn parse_<rule>_reader<__WgS>(
     reader: impl std::io::Read,
-    context: &ParseContext<S>,
+    context: &ParseContext<__WgS>,
     how: rt::Parallelism,
     reading: rt::Reading,
 ) -> Result<T, ParseError>
@@ -278,8 +278,8 @@ the noise of the machine on rows, and the list ran faster.
 The fold's step is grammar text and sees only `(acc, item)`: it cannot reach
 the caller, a channel, or the context. So control over the items belongs to
 the reader, not to the fold: `#[stream(each)]` adds
-`parse_<rule>_reader_each(…, each: impl FnMut(&Item) -> ControlFlow<B>)`
-returning `Result<ControlFlow<B, T>, ParseError>`.
+`parse_<rule>_reader_each(…, each: impl FnMut(&Item) -> ControlFlow<__WgB>)`
+returning `Result<ControlFlow<__WgB, T>, ParseError>`.
 
 * **The tap observes, it does not take.** `each` sees the item by reference
   inside the item step, where `commit` holds and before the fold's step; the

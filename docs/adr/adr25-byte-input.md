@@ -12,8 +12,8 @@ is.
 
 ## Context
 
-Every generated parser takes `ParseInput<'a, S>`, a
-`Stateful<LocatingSlice<&'a str>, ParseContext<S>>`. So a grammar can only be
+Every generated parser takes `ParseInput<'a, __WgS>`, a
+`Stateful<LocatingSlice<&'a str>, ParseContext<__WgS>>`. So a grammar can only be
 run on text that someone has already proved to be UTF-8, in full, before the
 first rule runs. Two kinds of input pay for that:
 
@@ -53,8 +53,8 @@ A declaration beside `state T;` and `interner I;`, at most once per grammar.
 Without it a grammar is a text grammar, exactly as today: no signature, no
 generated line and no built-in of an existing grammar changes.
 
-With it, every rule takes `ParseBytes<'a, S>`, a
-`Stateful<LocatingSlice<&'a [u8]>, ParseContext<S>>`, and the entry points
+With it, every rule takes `ParseBytes<'a, __WgS>`, a
+`Stateful<LocatingSlice<&'a [u8]>, ParseContext<__WgS>>`, and the entry points
 take `&'a [u8]` (`parse_<rule>`, `parse_<rule>_pieces`, `split_<rule>`). The
 context, the state, the interner, the diagnose modes and the frames are the
 same types as in a text grammar.
@@ -128,7 +128,7 @@ string; and if it did, the text a piece yields would still be checked (D3).
 
 ## Rejected
 
-* **The input as a type parameter of the generated code**, beside `S` and `E`.
+* **The input as a type parameter of the generated code**, beside `__WgS` and `__WgEr`.
   It is the most general shape, and winnow's own. It puts a bound in every
   signature of every grammar, makes every built-in generic over a stream trait
   and every error message about one, and breaks every existing user, Nikaia's

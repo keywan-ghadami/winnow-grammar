@@ -75,7 +75,7 @@ thing that does it — a per-piece `finish`.**
 ```rust
 parse_<rule>_pieces_with(input, new_context, how)                    // today
 parse_<rule>_pieces_finish(input, new_context, how, finish)          // proposed
-//                                     finish: Fn(T, &ParseContext<S>) -> U
+//                                     finish: Fn(T, &ParseContext<__WgS>) -> U
 ```
 
 `finish` runs **inside the piece**, after its fold and before its context is

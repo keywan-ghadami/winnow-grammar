@@ -13,9 +13,9 @@ ADR 17 (the diagnosing replay), ADR 18 §3 and §4.
 `parse_<rule>_pieces` takes a **context factory**, called once per piece:
 
 ```rust
-pub fn parse_FILE_pieces<'a, S>(
+pub fn parse_FILE_pieces<'a, __WgS>(
     input: &'a str,
-    new_context: impl Fn() -> ParseContext<S> + Sync,
+    new_context: impl Fn() -> ParseContext<__WgS> + Sync,
     how: Parallelism,
 ) -> Result<Summary, ParseError>
 ```
@@ -104,24 +104,24 @@ longer a question — the parse resets it. So:
 // The default: one context, cloned into every piece. The interner's `Arc`
 // comes along, so symbols are comparable across pieces - without the caller
 // having to know that this was a question.
-pub fn parse_FILE_pieces<'a, S: Clone>(
+pub fn parse_FILE_pieces<'a, __WgS: Clone>(
     input: &'a str,
-    context: &ParseContext<S>,
+    context: &ParseContext<__WgS>,
     how: Parallelism,
 ) -> Result<Summary, ParseError>
 
 // The escape hatch: a fresh context per piece, for a `user_state` that must
 // start empty rather than be copied.
-pub fn parse_FILE_pieces_with<'a, S>(
+pub fn parse_FILE_pieces_with<'a, __WgS>(
     input: &'a str,
-    new_context: impl Fn() -> ParseContext<S> + Sync,
+    new_context: impl Fn() -> ParseContext<__WgS> + Sync,
     how: Parallelism,
 ) -> Result<Summary, ParseError>
 ```
 
-`ParseContext` already derives `Clone` and `S: Clone` is already a bound of
+`ParseContext` already derives `Clone` and `__WgS: Clone` is already a bound of
 `rt::fold_pieces`, so the default costs nothing in the type system. Per piece a
-clone copies an `Arc`, an empty `Vec`, three words and the caller's `S`.
+clone copies an `Arc`, an empty `Vec`, three words and the caller's `__WgS`.
 
 `rt::fold_pieces` keeps taking a factory: it is the lower layer, a caller with
 its own executor may want either, and the generated `_pieces` gives it the
@@ -134,7 +134,7 @@ one context to every piece.
 
 The reset makes the conflation *harmless*; it does not remove it.
 `ParseContext` still bundles a handle meant to outlive many parses with an
-accumulator that must not survive one, and `&ParseContext<S>` as a "template"
+accumulator that must not survive one, and `&ParseContext<__WgS>` as a "template"
 whose three diagnostic fields are ignored is an honest description of nothing.
 The clean shape is two types — a shared handle the caller keeps, and a
 per-parse context built from it.

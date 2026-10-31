@@ -97,13 +97,13 @@ needed.
 
     ```rust
     // Generated signature in codegen/rule.rs
-    pub fn parse_<rule_name><'a, S>(...) -> impl Parser<
-        ::winnow_grammar::ParseInput<'a, S>, // now an alias for Stateful<..., ParseContext<S>>
+    pub fn parse_<rule_name><'a, __WgS>(...) -> impl Parser<
+        ::winnow_grammar::ParseInput<'a, __WgS>, // now an alias for Stateful<..., ParseContext<__WgS>>
         ...,
         ...
     >
     where
-        S: 'a + Clone + std::fmt::Debug,
+        __WgS: 'a + Clone + std::fmt::Debug,
     { ... }
     ```
 
