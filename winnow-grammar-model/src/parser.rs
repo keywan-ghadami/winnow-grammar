@@ -135,7 +135,7 @@ fn resolve_value_arguments(rules: &mut [Rule], extern_rules: &[ExternRule]) -> R
             | Pattern::Repeat(p, _)
             | Pattern::Plus(p, _)
             | Pattern::SpanBinding(p, _, _)
-            | Pattern::Peek(p, _)
+            | Pattern::Peek(p, _, _)
             | Pattern::Not(p, _)
             | Pattern::LexicalScope(p, _)
             | Pattern::SpacedScope(p, _) => walk(p, typed)?,
@@ -889,7 +889,8 @@ pub enum Pattern {
         sync: Box<Pattern>,
         kw_token: kw::recover,
     },
-    Peek(Box<Pattern>, kw::peek),
+    /// `peek(p)`; the binding is the one of `name:peek(p)`.
+    Peek(Box<Pattern>, Option<Ident>, kw::peek),
     Not(Box<Pattern>, kw::not),
     Until {
         binding: Option<Ident>,
@@ -1034,7 +1035,13 @@ impl Pattern {
                     body.collect_bindings(acc);
                 }
             }
-            Pattern::Peek(p, _) => p.collect_bindings(acc),
+            Pattern::Peek(p, binding, _) => {
+                if let Some(b) = binding {
+                    acc.push(b.clone());
+                } else {
+                    p.collect_bindings(acc);
+                }
+            }
             Pattern::Not(p, _) => p.collect_bindings(acc),
             Pattern::Until {
                 binding, pattern, ..
@@ -1105,7 +1112,7 @@ impl Pattern {
                 sync,
                 ..
             } => binding.is_some() || body.has_binding() || sync.has_binding(),
-            Pattern::Peek(p, _) => p.has_binding(),
+            Pattern::Peek(p, binding, _) => binding.is_some() || p.has_binding(),
             Pattern::Not(p, _) => p.has_binding(),
             Pattern::Until {
                 binding, pattern, ..
@@ -1472,7 +1479,11 @@ impl ToTokens for Pattern {
                     sync.to_tokens(t);
                 });
             }
-            Pattern::Peek(p, _) => {
+            Pattern::Peek(p, binding, _) => {
+                if let Some(b) = binding {
+                    b.to_tokens(tokens);
+                    token::Colon::default().to_tokens(tokens);
+                }
                 kw::peek::default().to_tokens(tokens);
                 token::Paren::default().surround(tokens, |t| {
                     p.to_tokens(t);
@@ -1572,6 +1583,21 @@ impl ToTokens for Pattern {
                 });
             }
         }
+    }
+}
+
+/// A binding inside `peek(…)` or `not(…)` would name a value the generated
+/// code never has; it is an error at the binding, not a missing variable in
+/// the action.
+fn reject_inner_binding(inner: &Pattern, message: &str) -> Result<()> {
+    if !inner.has_binding() {
+        return Ok(());
+    }
+    let mut names = Vec::new();
+    inner.collect_bindings(&mut names);
+    match names.first() {
+        Some(name) => Err(syn::Error::new(name.span(), message)),
+        None => Err(syn::Error::new_spanned(inner, message)),
     }
 }
 
@@ -1685,22 +1711,31 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
             kw_token,
         })
     } else if input.peek(kw::peek) {
-        if binding.is_some() {
-            return Err(input.error("Peek cannot be bound."));
-        }
         let kw_token = input.parse::<kw::peek>()?;
         let content;
         syn::parenthesized!(content in input);
-        let inner = content.parse()?;
-        Ok(Pattern::Peek(Box::new(inner), kw_token))
+        let inner: Pattern = content.parse()?;
+        // The value of a lookahead is bound outside it, `name:peek(p)`: one
+        // spelling, and the same place as `name:recover(…)` and `name:until(…)`.
+        reject_inner_binding(
+            &inner,
+            "bind the lookahead instead: write `name:peek(…)`, not `peek(name:…)`",
+        )?;
+        Ok(Pattern::Peek(Box::new(inner), binding, kw_token))
     } else if input.peek(kw::not) {
         if binding.is_some() {
-            return Err(input.error("Not cannot be bound."));
+            return Err(
+                input.error("`not(…)` cannot be bound: it succeeds only when nothing matched")
+            );
         }
         let kw_token = input.parse::<kw::not>()?;
         let content;
         syn::parenthesized!(content in input);
-        let inner = content.parse()?;
+        let inner: Pattern = content.parse()?;
+        reject_inner_binding(
+            &inner,
+            "a binding inside `not(…)` has no value: `not` succeeds only when nothing matched",
+        )?;
         Ok(Pattern::Not(Box::new(inner), kw_token))
     } else if input.peek(kw::until) {
         let kw_token = input.parse::<kw::until>()?;

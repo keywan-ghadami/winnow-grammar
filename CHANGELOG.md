@@ -694,6 +694,15 @@
 
 ### Added
 
+- **`name:peek(p)` binds what a lookahead matched** without consuming it:
+  `n:peek(usize) if(n < 10) …` reads a number to decide an alternative and
+  leaves it for the pattern that reads it. The value is `p`'s, as `name:p`
+  would bind it; it was computed before and thrown away, so the binding costs
+  nothing. A binding *inside* a lookahead - `peek(name:p)`, `not(name:p)` -
+  is now an error at the binding. The parser accepted it before, the
+  generated code dropped it, and the action failed with `cannot find value`.
+  `not(…)` still cannot be bound: it succeeds only where nothing matched.
+
 - **`hex_digit` built-in** — one hex digit (`0`-`9`, `a`-`f`, `A`-`F`) as a
   `char`, next to `hex_digit0`/`hex_digit1`'s greedy runs, as `digit` stands
   next to `digit1`. The greedy runs cannot express a fixed-width hex field;

@@ -288,7 +288,7 @@ fn uses_frame_end(rule: &Rule, user_rules: &HashSet<String>) -> bool {
             | ModelPattern::Repeat(inner, _)
             | ModelPattern::Plus(inner, _)
             | ModelPattern::SpanBinding(inner, _, _)
-            | ModelPattern::Peek(inner, _)
+            | ModelPattern::Peek(inner, _, _)
             | ModelPattern::Not(inner, _)
             | ModelPattern::LexicalScope(inner, _)
             | ModelPattern::SpacedScope(inner, _) => walk(inner),
@@ -572,7 +572,7 @@ fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::
     match p {
         ModelPattern::Cut(_) | ModelPattern::Fail { .. } | ModelPattern::Guard { .. } => Ok(()),
         // Lookahead consumes nothing.
-        ModelPattern::Peek(_, _) | ModelPattern::Not(_, _) => Ok(()),
+        ModelPattern::Peek(_, _, _) | ModelPattern::Not(_, _) => Ok(()),
         ModelPattern::Lit { .. } => {
             if let Some(text) = literal_text(p) {
                 if cx.literal_overlaps(&text) {
@@ -796,7 +796,7 @@ fn collect_outside_lookahead(
     out: &mut Vec<String>,
 ) {
     match p {
-        ModelPattern::Peek(_, _) | ModelPattern::Not(_, _) => {}
+        ModelPattern::Peek(_, _, _) | ModelPattern::Not(_, _) => {}
         ModelPattern::RuleCall {
             rule_path, args, ..
         } => {
@@ -854,7 +854,7 @@ fn for_each_child(p: &ModelPattern, f: &mut impl FnMut(&ModelPattern)) {
         | ModelPattern::Repeat(inner, _)
         | ModelPattern::Plus(inner, _)
         | ModelPattern::SpanBinding(inner, _, _)
-        | ModelPattern::Peek(inner, _)
+        | ModelPattern::Peek(inner, _, _)
         | ModelPattern::Not(inner, _)
         | ModelPattern::LexicalScope(inner, _)
         | ModelPattern::SpacedScope(inner, _) => f(inner),
@@ -911,7 +911,7 @@ fn collect_calls_in(p: &ModelPattern, user_rules: &HashSet<String>, out: &mut Ve
         | ModelPattern::Repeat(inner, _)
         | ModelPattern::Plus(inner, _)
         | ModelPattern::SpanBinding(inner, _, _)
-        | ModelPattern::Peek(inner, _)
+        | ModelPattern::Peek(inner, _, _)
         | ModelPattern::Not(inner, _)
         | ModelPattern::LexicalScope(inner, _)
         | ModelPattern::SpacedScope(inner, _) => collect_calls_in(inner, user_rules, out),
@@ -1023,7 +1023,7 @@ fn find_par_folds<'a>(p: &'a ModelPattern, out: &mut Vec<(&'a ModelPattern, proc
         | ModelPattern::Repeat(inner, _)
         | ModelPattern::Plus(inner, _)
         | ModelPattern::SpanBinding(inner, _, _)
-        | ModelPattern::Peek(inner, _)
+        | ModelPattern::Peek(inner, _, _)
         | ModelPattern::Not(inner, _)
         | ModelPattern::LexicalScope(inner, _)
         | ModelPattern::SpacedScope(inner, _) => find_par_folds(inner, out),

@@ -14,4 +14,5 @@ fn ui() {
     t.compile_fail("tests/ui/values.rs");
     t.compile_fail("tests/ui/reader.rs");
     t.compile_fail("tests/ui/stream.rs");
+    t.compile_fail("tests/ui/peek_binding.rs");
 }

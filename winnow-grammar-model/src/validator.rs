@@ -285,7 +285,7 @@ fn validate_pattern(
         | ModelPattern::Optional(inner, _)
         | ModelPattern::Bounded { pattern: inner, .. }
         | ModelPattern::SpanBinding(inner, _, _)
-        | ModelPattern::Peek(inner, _) => {
+        | ModelPattern::Peek(inner, _, _) => {
             validate_pattern(inner, all_defs, params)?;
         }
         ModelPattern::Count { pattern: inner, .. } => {
@@ -368,9 +368,17 @@ fn validate_no_bindings(pattern: &ModelPattern) -> syn::Result<()> {
         | ModelPattern::Repeat(inner, _)
         | ModelPattern::Plus(inner, _)
         | ModelPattern::Bounded { pattern: inner, .. }
-        | ModelPattern::Peek(inner, _)
         | ModelPattern::Not(inner, _)
         | ModelPattern::Until { pattern: inner, .. } => {
+            validate_no_bindings(inner)?;
+        }
+        ModelPattern::Peek(inner, binding, _) => {
+            if let Some(b) = binding {
+                return Err(syn::Error::new(
+                    b.span(),
+                    "Bindings are not allowed inside 'until' patterns.",
+                ));
+            }
             validate_no_bindings(inner)?;
         }
         ModelPattern::SpanBinding(_, ident, _) => {
@@ -501,7 +509,7 @@ fn validate_args_recursive(
             | ModelPattern::Optional(inner, _)
             | ModelPattern::Bounded { pattern: inner, .. }
             | ModelPattern::SpanBinding(inner, _, _)
-            | ModelPattern::Peek(inner, _) => {
+            | ModelPattern::Peek(inner, _, _) => {
                 validate_args_recursive(std::slice::from_ref(inner), rule_map)?;
             }
             ModelPattern::Count { pattern: inner, .. } => {

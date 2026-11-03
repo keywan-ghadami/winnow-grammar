@@ -169,6 +169,7 @@ grammar! {
           | "{" n:count("x") "}" -> { Item::Xs(n) }
           | "(" not("))") c:any ")" -> { Item::Paren(c) }
           | "@" peek("@@") "@@" -> { Item::At }
+          | "^" p:peek(i64) n:i64 -> { Item::Int(p + n) }
           | "%" s:SPANNED -> { s }
           | "$" w:ident -> { Item::Word(w) }
 
@@ -210,6 +211,8 @@ const LEAF_PIECES: &[&str] = &[
     "))",
     "@@@",
     "@",
+    "^12",
+    "^",
     "%123",
     "%",
     "$name",

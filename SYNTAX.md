@@ -721,6 +721,28 @@ check = "a" peek("b")
 # }
 ```
 
+`name:peek(pattern)` binds what `pattern` matched - the value `name:pattern`
+would bind - and still consumes nothing. A peeked value can decide what comes
+next:
+
+```rust
+# use winnow_grammar::grammar;
+# fn main() {
+#     grammar! {
+#         grammar Test {
+item -> usize = n:peek(usize) if(n < 10) c:usize "x" -> { c }
+              | n:usize -> { n }
+#         }
+#     }
+# }
+```
+
+The binding goes outside the lookahead, as with `name:recover(…)` and
+`name:until(…)`; `peek(name:pattern)` is an error. `not(…)` cannot be bound,
+outside or in: it succeeds only where nothing matched, so there is no value.
+Whatever runs inside a lookahead runs - actions, and writes to the state,
+which are not undone (ADR 26) - whether its value is bound or not.
+
 ### Lexical Control (`lex`, `spaced`)
 - `lex(pattern)`: Forces a **lexical context** (no implicit whitespace) for the duration of the pattern.
 - `spaced(pattern)`: Forces a **syntactic context** (implicit whitespace allowed) even inside a lexical rule.

@@ -393,6 +393,8 @@ fn bindings_of<'p>(p: &'p ModelPattern, out: &mut Vec<(syn::Ident, &'p ModelPatt
             bindings_of(inner, out);
             out.push((span.clone(), p));
         }
+        // `name:peek(p)` binds what `p` would: its type is the type of `p`.
+        ModelPattern::Peek(inner, Some(b), _) => out.push((b.clone(), value_source(inner))),
         ModelPattern::Group {
             binding: None,
             alts,
@@ -410,6 +412,20 @@ fn bindings_of<'p>(p: &'p ModelPattern, out: &mut Vec<(syn::Ident, &'p ModelPatt
             }
         }
         _ => {}
+    }
+}
+
+/// The pattern a lookahead's value comes from, for its type: the one inside
+/// it, seen through the groups and lookaheads that pass a value on unchanged.
+fn value_source(p: &ModelPattern) -> &ModelPattern {
+    match p {
+        ModelPattern::Group {
+            binding: None,
+            alts,
+            ..
+        } if alts.len() == 1 && alts[0].0.len() == 1 => value_source(&alts[0].0[0]),
+        ModelPattern::Peek(inner, _, _) => value_source(inner),
+        _ => p,
     }
 }
 
@@ -537,7 +553,7 @@ pub fn idents_of_pattern(p: &ModelPattern, out: &mut HashSet<String>) {
         | ModelPattern::Repeat(q, _)
         | ModelPattern::Plus(q, _)
         | ModelPattern::SpanBinding(q, _, _)
-        | ModelPattern::Peek(q, _)
+        | ModelPattern::Peek(q, _, _)
         | ModelPattern::Not(q, _)
         | ModelPattern::LexicalScope(q, _)
         | ModelPattern::SpacedScope(q, _) => idents_of_pattern(q, out),

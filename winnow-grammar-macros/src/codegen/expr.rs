@@ -80,6 +80,7 @@ pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::I
         ModelPattern::Lit { binding, .. } => *binding = new_binding,
         ModelPattern::Recover { binding, .. } => *binding = new_binding,
         ModelPattern::Until { binding, .. } => *binding = new_binding,
+        ModelPattern::Peek(_, binding, _) => *binding = new_binding,
         ModelPattern::Count { binding, .. } | ModelPattern::Fold { binding, .. } => {
             *binding = new_binding
         }
@@ -90,7 +91,6 @@ pub(crate) fn set_binding(pattern: &mut ModelPattern, new_binding: Option<syn::I
         | ModelPattern::SpanBinding(inner, _, _)
         | ModelPattern::LexicalScope(inner, _)
         | ModelPattern::SpacedScope(inner, _)
-        | ModelPattern::Peek(inner, _)
         | ModelPattern::Not(inner, _) => set_binding(inner, new_binding),
         ModelPattern::Parenthesized(inner, _)
         | ModelPattern::Bracketed(inner, _)
@@ -248,7 +248,7 @@ pub(crate) fn substitute_pattern(
         | ModelPattern::Plus(inner, _)
         | ModelPattern::Bounded { pattern: inner, .. }
         | ModelPattern::SpanBinding(inner, _, _)
-        | ModelPattern::Peek(inner, _)
+        | ModelPattern::Peek(inner, _, _)
         | ModelPattern::Not(inner, _)
         | ModelPattern::Count { pattern: inner, .. }
         | ModelPattern::Fold { pattern: inner, .. }
@@ -298,6 +298,7 @@ pub(crate) fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
         ModelPattern::SpanBinding(inner, _, _) => get_inner_binding(inner),
         ModelPattern::Recover { binding, .. } => binding.as_ref(),
         ModelPattern::Until { binding, .. } => binding.as_ref(),
+        ModelPattern::Peek(_, binding, _) => binding.as_ref(),
         ModelPattern::Count { binding, .. } | ModelPattern::Fold { binding, .. } => {
             binding.as_ref()
         }
@@ -1734,7 +1735,7 @@ impl<'a> Codegen<'a> {
                     )
                 }
             }
-            ModelPattern::Peek(inner, _) => {
+            ModelPattern::Peek(inner, _, _) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 quote_spanned! {span=>
                     ::winnow_grammar::rt::lookahead(::winnow::combinator::peek(#p))

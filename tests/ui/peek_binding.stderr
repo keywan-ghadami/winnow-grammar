@@ -1,0 +1,17 @@
+error: bind the lookahead instead: write `name:peek(…)`, not `peek(name:…)`
+ --> tests/ui/peek_binding.rs:8:33
+  |
+8 |         pub R -> &'a str = peek(a:raw_ident) b:raw_ident -> { b }
+  |                                 ^
+
+error: `not(…)` cannot be bound: it succeeds only when nothing matched
+  --> tests/ui/peek_binding.rs:15:25
+   |
+15 |         pub R -> () = n:not("a") "b" -> { () }
+   |                         ^^^
+
+error: a binding inside `not(…)` has no value: `not` succeeds only when nothing matched
+  --> tests/ui/peek_binding.rs:22:27
+   |
+22 |         pub R -> () = not(a:"a") "b" -> { () }
+   |                           ^

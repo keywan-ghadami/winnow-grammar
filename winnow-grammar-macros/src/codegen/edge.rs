@@ -88,7 +88,7 @@ fn walk(p: &ModelPattern, k: &mut usize) {
         | ModelPattern::Repeat(q, _)
         | ModelPattern::Plus(q, _)
         | ModelPattern::SpanBinding(q, _, _)
-        | ModelPattern::Peek(q, _)
+        | ModelPattern::Peek(q, _, _)
         | ModelPattern::Not(q, _)
         | ModelPattern::LexicalScope(q, _)
         | ModelPattern::SpacedScope(q, _) => walk(q, k),
@@ -266,7 +266,7 @@ fn swallows_far(
         | ModelPattern::Braced(seq, _)
         | ModelPattern::Parenthesized(seq, _) => seq.iter().any(|q| swallows_far(q, rules, todo)),
         ModelPattern::SpanBinding(q, _, _)
-        | ModelPattern::Peek(q, _)
+        | ModelPattern::Peek(q, _, _)
         | ModelPattern::Not(q, _)
         | ModelPattern::LexicalScope(q, _)
         | ModelPattern::SpacedScope(q, _) => swallows_far(q, rules, todo),

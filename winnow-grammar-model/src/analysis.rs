@@ -146,7 +146,7 @@ fn collect_from_patterns(patterns: &[ModelPattern], kws: &mut HashSet<String>) {
                 collect_from_patterns(std::slice::from_ref(body), kws);
                 collect_from_patterns(std::slice::from_ref(sync), kws);
             }
-            ModelPattern::Peek(i, _) | ModelPattern::Not(i, _) => {
+            ModelPattern::Peek(i, _, _) | ModelPattern::Not(i, _) => {
                 collect_from_patterns(std::slice::from_ref(i), kws)
             }
             ModelPattern::Until { pattern, .. } => {
@@ -195,8 +195,12 @@ pub fn collect_bindings(patterns: &[ModelPattern]) -> Vec<Ident> {
                     bindings.extend(collect_bindings(std::slice::from_ref(body)));
                 }
             }
-            ModelPattern::Peek(inner, _) => {
-                bindings.extend(collect_bindings(std::slice::from_ref(inner)));
+            ModelPattern::Peek(inner, binding, _) => {
+                if let Some(b) = binding {
+                    bindings.push(b.clone());
+                } else {
+                    bindings.extend(collect_bindings(std::slice::from_ref(inner)));
+                }
             }
             ModelPattern::Group { binding, alts, .. } => {
                 if let Some(b) = binding {
@@ -386,7 +390,7 @@ pub fn get_simple_peek(
                 Ok(None)
             }
         }
-        ModelPattern::Peek(inner, _) => get_simple_peek(inner, kws),
+        ModelPattern::Peek(inner, _, _) => get_simple_peek(inner, kws),
         ModelPattern::Not(_, _) => Ok(None),
         ModelPattern::Until { .. } => Ok(None),
         ModelPattern::Count { pattern, .. } => get_simple_peek(pattern, kws),
@@ -429,7 +433,9 @@ pub fn get_peek_token_string(patterns: &[ModelPattern]) -> Option<String> {
                 None
             }
         }
-        Some(ModelPattern::Peek(inner, _)) => get_peek_token_string(std::slice::from_ref(&**inner)),
+        Some(ModelPattern::Peek(inner, _, _)) => {
+            get_peek_token_string(std::slice::from_ref(&**inner))
+        }
         Some(ModelPattern::Not(_, _)) => None,
         Some(ModelPattern::Until { .. }) => None,
         Some(ModelPattern::Count { pattern, .. }) => {
@@ -465,7 +471,7 @@ pub fn is_nullable(pattern: &ModelPattern) -> bool {
         ModelPattern::Bounded { pattern, min, .. } => *min == 0 || is_nullable(pattern),
         ModelPattern::SpanBinding(inner, _, _) => is_nullable(inner),
         ModelPattern::Recover { .. } => true,
-        ModelPattern::Peek(_, _) => true,
+        ModelPattern::Peek(_, _, _) => true,
         ModelPattern::Not(_, _) => true,
         ModelPattern::Until { .. } => true,
         ModelPattern::Fail { .. } => false,
@@ -561,7 +567,7 @@ fn is_pattern_nullable_precise(pattern: &ModelPattern, nullable_rules: &HashSet<
         | ModelPattern::Repeat(_, _)
         | ModelPattern::Fold { .. }
         | ModelPattern::Recover { .. }
-        | ModelPattern::Peek(_, _)
+        | ModelPattern::Peek(_, _, _)
         | ModelPattern::Not(_, _)
         | ModelPattern::Until { .. } => true, // Peek/Not consume nothing
         ModelPattern::Plus(inner, _) => is_pattern_nullable_precise(inner, nullable_rules),
@@ -706,7 +712,7 @@ fn collect_nullable_deps(
                     return;
                 }
             }
-            ModelPattern::Peek(inner, _) | ModelPattern::Not(inner, _) => {
+            ModelPattern::Peek(inner, _, _) | ModelPattern::Not(inner, _) => {
                 collect_nullable_deps(std::slice::from_ref(inner), nullable_rules, deps);
                 // Peek/Not consume nothing, so we continue to next pattern
             }
@@ -821,7 +827,7 @@ fn collect_called_rules<F: FnMut(String)>(patterns: &[ModelPattern], cb: &mut F)
             | ModelPattern::Repeat(inner, _)
             | ModelPattern::Plus(inner, _)
             | ModelPattern::SpanBinding(inner, _, _)
-            | ModelPattern::Peek(inner, _)
+            | ModelPattern::Peek(inner, _, _)
             | ModelPattern::Not(inner, _)
             | ModelPattern::Until { pattern: inner, .. }
             | ModelPattern::Count { pattern: inner, .. }
@@ -987,7 +993,7 @@ fn collect_first_from_sequence(
 
             ModelPattern::Optional(inner, _)
             | ModelPattern::Repeat(inner, _)
-            | ModelPattern::Peek(inner, _) => {
+            | ModelPattern::Peek(inner, _, _) => {
                 collect_first_from_sequence(
                     std::slice::from_ref(inner),
                     first_sets,
@@ -1162,7 +1168,7 @@ fn pattern_structure_eq(p1: &ModelPattern, p2: &ModelPattern) -> bool {
         (ModelPattern::Optional(inner1, _), ModelPattern::Optional(inner2, _))
         | (ModelPattern::Repeat(inner1, _), ModelPattern::Repeat(inner2, _))
         | (ModelPattern::Plus(inner1, _), ModelPattern::Plus(inner2, _))
-        | (ModelPattern::Peek(inner1, _), ModelPattern::Peek(inner2, _))
+        | (ModelPattern::Peek(inner1, _, _), ModelPattern::Peek(inner2, _, _))
         | (ModelPattern::Not(inner1, _), ModelPattern::Not(inner2, _)) => {
             pattern_structure_eq(inner1, inner2)
         }

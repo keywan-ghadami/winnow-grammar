@@ -122,7 +122,9 @@ pub enum ModelPattern {
         sync: Box<ModelPattern>,
         span: proc_macro2::Span,
     },
-    Peek(Box<ModelPattern>, proc_macro2::Span),
+    /// `peek(p)`, and `name:peek(p)`, which binds what `p` matched without
+    /// consuming it.
+    Peek(Box<ModelPattern>, Option<Ident>, proc_macro2::Span),
     Not(Box<ModelPattern>, proc_macro2::Span),
     Until {
         binding: Option<Ident>,
@@ -181,7 +183,7 @@ impl ModelPattern {
             ModelPattern::Bounded { span, .. } => *span,
             ModelPattern::SpanBinding(_, _, s) => *s,
             ModelPattern::Recover { span, .. } => *span,
-            ModelPattern::Peek(_, s) => *s,
+            ModelPattern::Peek(_, _, s) => *s,
             ModelPattern::Not(_, s) => *s,
             ModelPattern::Until { span, .. } => *span,
             ModelPattern::Count { span, .. } => *span,
@@ -402,8 +404,8 @@ impl From<parser::Pattern> for ModelPattern {
                 sync: Box::new((*sync).into()),
                 span: kw_token.span(), // Custom Keyword has .span()
             },
-            parser::Pattern::Peek(p, token) => {
-                ModelPattern::Peek(Box::new((*p).into()), token.span())
+            parser::Pattern::Peek(p, binding, token) => {
+                ModelPattern::Peek(Box::new((*p).into()), binding, token.span())
             } // Custom Keyword has .span()
             parser::Pattern::Not(p, token) => {
                 ModelPattern::Not(Box::new((*p).into()), token.span())
