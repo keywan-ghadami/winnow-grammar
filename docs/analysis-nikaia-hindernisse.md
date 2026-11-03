@@ -34,8 +34,8 @@ Nikaia-Repository.
 | H1 | Wo der Generator läuft (ADR-296 D23: Lowering schreibt `grammar!`) | Abwägung, klein | ändern: Generator im Compiler |
 | H2 | Eine Grammatiksprache oder zwei (Nikaia-`grammar` vs. winnow-grammar-DSL) | Abwägung | eine: Nikaia-`grammar` |
 | H3 | Was der Generator erzeugt (Rust + winnow, Nikaia-Code, eigene Engine) | Abwägung | offen, Probe nötig |
-| H4 | Aktionen in Rust | Abwägung, die zentrale Frage | Aktionen in Nikaia; für Rust ein typisiertes Ergebnis |
-| H5 | Grammatiken ohne Zustand und ohne `extern rule` (ADR-339 D3) | Abwägung | Regel halten, Teilöffnung prüfen |
+| H4 | Aktionen in Rust | Abwägung; mit Option e (Rust-Fassade) keine Sprachfrage mehr | Nikaia-Aktionen im Compiler, Rust-Aktionen nur über die Fassade |
+| H5 | Grammatiken ohne Zustand und ohne `extern rule` (ADR-339 D3) | Abwägung, durch H4 e entschärft | Regel halten; die Fassade darf mehr |
 | H6 | Fremde Rust-Traits implementieren (#928 Option b) | Abwägung | vorerst nein (Fassade), später neu fragen |
 | H7 | Rust-Bibliothek ausliefern (#978) | Vorteil | priorisieren |
 | H8 | ADR-290 D12/D17: Was der Compiler braucht, darf nicht über diesen Weg | Vorteil (Grund überholt durch ADR-294) | Regel an ADR-294 angleichen |
@@ -151,11 +151,43 @@ Aktionen zulassen (a)? Das wäre ein Präzedenzfall für „Rust-Blöcke in
 Nikaia“. Er würde die Sicherheitsaussagen (kein fremder Code zur Build-Zeit,
 Beweise) aufweichen.
 
-**Tendenz:** b für Nikaia-Nutzer, d (bei Bedarf c) für Rust-Nutzer, a
-nicht. **Das ist die Entscheidung mit der größten Wirkung auf
-winnow-grammar als Rust-Produkt**: Mit b/d gibt es kein Rust-Crate
-„winnow-grammar“ mehr im heutigen Sinn, sondern Nikaia-Grammatiken mit
-Rust-Ausgabe.
+### Option e) Eine Rust-Fassade über das Nikaia-Modul (Idee des Owners, 2026-11-03)
+
+**Was sie ist:** Der Generator (Analyse, Validierung, Codeerzeugung) ist ein
+Nikaia-Modul, das abgesenkt als gewöhnliches Rust-Modul vorliegt
+(ADR-290 D16, #978). Darüber liegt eine **dünne Rust-Fassade**, ein kleines
+Proc-Macro-Crate `grammar!`. Sie tut nur, was Nikaia nicht kann:
+
+* Sie nimmt die `TokenStream`s entgegen.
+* Sie reicht Grammatik-Text und Rust-Aktionen als **opake Textstücke** an den
+  Generator weiter.
+* Sie setzt die Rust-Aktionen in den erzeugten Rust-Code ein.
+* Sie bildet die Fehler des Generators auf `proc_macro`-Spans ab.
+
+Das ist dasselbe Muster wie bei yaml (#928 Option a: Kern in Nikaia,
+handgeschriebene Rust-Fassade).
+
+**Der Kern:** Die Rust-Aktionen betreten nie ein Nikaia-Programm. Sie leben
+nur auf dem Fassadenweg. Damit braucht Option a **keine Sprachänderung**
+mehr. Die Sprachfrage oben („Rust-Blöcke in Nikaia“) entfällt.
+
+| Vorteile | Nachteile |
+| :--- | :--- |
+| Rust-Nutzer behalten `grammar!` und Rust-Aktionen. winnow-grammar bleibt ein Rust-Produkt, die Migration für sie ist klein oder null. | Der Generator braucht zwei Aktionsarten: geprüfte Nikaia-Aktionen (Compilerweg, mit Typwissen) und opake Rust-Aktionen (Fassadenweg, ohne Typwissen, wie heute mit `syn`). Auf dem Fassadenweg gehen Optimierungen verloren, die Typen brauchen. |
+| Eine Implementierung der Grammatik-Logik für beide Welten, keine Kopie. | Der Fassadenweg braucht Ziel 1 aus H3 (Rust-Code als Ausgabe), auch wenn der Compilerweg später Nikaia-Code erzeugt. Dann gibt es zwei Backends. |
+| **Sprachregeln bleiben unberührt.** Ein Merkmal, das Nikaia-Grammatiken verbietet (Zustand, `extern rule` in Rust, ADR-339 D3), kann der Generator auf dem Fassadenweg trotzdem anbieten. Die Regel gilt für die Sprache, nicht für den Generator. Das entschärft H5. | Zwei Merkmalsmengen: Was die Fassade kann, kann Nikaia nicht unbedingt. Das muss dokumentiert und getestet werden. |
+| Die Fassade implementiert Rust-Traits (`Read`, `Error`, Fehlertypen). Dafür ist H6 (fremde Traits in Nikaia) nicht nötig. | Der abgesenkte Generator samt `nikaia-std` wird zum Bestandteil des Proc-Macros. Das kostet Kompilierzeit beim Rust-Nutzer (messen; heute ist die von `syn full` auch nicht gemessen). |
+| Jeder Defekt, den Rust-Nutzer finden, wird im Nikaia-Generator repariert und hilft Nikaia sofort. | Fehlermeldungen brauchen eine Positionsabbildung Generator → `TokenStream`-Spans. |
+| Ein schrittweiser Umbau wird möglich: Die heutige Rust-Implementierung wird Stück für Stück durch das Nikaia-Modul ersetzt, während `grammar!` nach außen gleich bleibt (wie beim Self-Hosting, ADR-294 D1: „the Rust module stays as the adapter“). | Die Fassade ist ein Rust-Makro. Die Logik steckt aber nicht darin, und mit „ohne Rust-Makros“ war die Logik gemeint. Das sollte die ADR so sagen. |
+
+**Voraussetzungen:** H8 (die Regel in ADR-290 D17 fällt; der Generator wird
+vom Compiler und von Rust-Nutzern aufgerufen) und #978 oder der
+Pre-Lowering-Weg (H7). H9 (Fixpunkt-Test) gilt unverändert.
+
+**Tendenz:** e für Rust-Nutzer, b für Nikaia-Nutzer. d bleibt ein
+Zusatzangebot (Ereignis-Parser), kein Ersatz. Mit e wird aus H4 von einer
+Sprachfrage eine Frage des Generator-Entwurfs: zwei Aktionsarten und zwei
+Ausgaben.
 
 ## H5 Grammatiken ohne Zustand und ohne `extern rule` (ADR-339 D3)
 
@@ -364,8 +396,11 @@ einem Rust-Crate benutzt). **Kein Hindernis**, aber ein Arbeitsposten.
 
 ## Vorschlag für die Reihenfolge der Entscheidungen
 
-1. **H4** (Aktionen) und damit, was „winnow-grammar für Rust-Nutzer“ künftig
-   ist. Davon hängen H2, H6 und H8 ab.
+1. **H4**: Option e (Rust-Fassade) annehmen oder nicht. Damit ist auch
+   entschieden, was „winnow-grammar für Rust-Nutzer“ künftig ist. Davon hängen
+   H2, H6 und H8 ab. Mit e kommt die Frage dazu, welche Syntax die Fassade
+   liest: die heutige winnow-grammar-DSL (keine Migration für Rust-Nutzer)
+   oder die Nikaia-`grammar` mit Rust-Aktionen (eine Grammatiksprache, H2).
 2. **H7** und die entschiedenen Lücken aus H12 priorisieren. Das sind reine
    Vorteile und hilft yaml sofort.
 3. **H1, H2, H8, H9** als eine ADR „Der Grammatik-Generator ist Nikaia“.
