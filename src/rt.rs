@@ -600,7 +600,7 @@ where
             &diagnose,
         );
     }
-    let one = |k: usize| -> Option<(usize, Result<(T, usize), ParseError>)> {
+    let one = |k: usize| -> Option<(usize, ParsedPiece<T>)> {
         let range = piece_range(bytes, boundary.as_bytes(), how, count, k);
         if range.is_empty() {
             return None;
@@ -708,7 +708,8 @@ fn piece_ranges(input: &[u8], boundary: &str, how: Parallelism) -> Vec<std::ops:
         _ => how.pieces_of(input.len()),
     };
     if count == 1 || input.is_empty() {
-        return vec![0..input.len()];
+        // One piece, the whole input - not the offsets `0..len` collected.
+        return std::iter::once(0..input.len()).collect();
     }
     (0..count)
         .map(|k| piece_range(input, boundary.as_bytes(), how, count, k))
@@ -716,13 +717,16 @@ fn piece_ranges(input: &[u8], boundary: &str, how: Parallelism) -> Vec<std::ops:
         .collect()
 }
 
+/// A piece's value and the number of items its fold accepted, or its error.
+type ParsedPiece<T> = Result<(T, usize), ParseError>;
+
 fn parse_piece<B, S, T, F, D, C>(
     input: B,
     range: std::ops::Range<usize>,
     new_context: &C,
     fast: &F,
     diagnose: &D,
-) -> Result<(T, usize), ParseError>
+) -> ParsedPiece<T>
 where
     S: Clone + std::fmt::Debug,
     C: Fn() -> crate::ParseContext<S>,
