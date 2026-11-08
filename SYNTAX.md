@@ -122,7 +122,8 @@ Match one of several alternatives using `|`. The first one that matches wins.
 ```
 
 ### Repetitions
-- `pattern*`: Match zero or more times. Returns a `Vec`.
+- `pattern*`: Match zero or more times. Returns a `Vec` (or the grammar's
+  `collect L;` list - see *Collections* below).
 - `pattern+`: Match one or more times. Returns a `Vec`.
 - `pattern?`: Match zero or one time. Returns an `Option`.
 - `pattern{n}`: Match exactly `n` times. Returns a `Vec`.
@@ -164,7 +165,8 @@ one rather than scanned:
 # }
 ```
 
-**What a repetition yields.** Its elements, as a `Vec` — *unless* the element
+**What a repetition yields.** Its elements, as a `Vec` (or the list `collect
+L;` names) — *unless* the element
 is a character class, in which case it yields the text it matched (`&'a str`).
 `{n,m}` is borrowed from regular expressions, where `\d{1,2}` matches text and
 not a list of characters, and a `Vec<char>` there would copy input the parser
@@ -584,6 +586,65 @@ invalid UTF-8 at byte 6: 0xff at line 2, column 3
 over bytes that are not UTF-8 they count lines in `\n` bytes and show the line
 lossily, the bad byte as `U+FFFD`. Under `par_fold` the offset is the byte's in
 the whole input, whichever piece found it.
+
+## Collections: `collect L;`
+
+A bound repetition (`xs:x*`, `xs:x+`, `xs:x{n,m}`, `xs:recover(r, s)*`)
+collects its elements into a `Vec` unless the grammar says otherwise. One that
+declares `collect L;` collects into `L<T>` instead, for elements of type `T`,
+in every repetition it writes:
+
+```rust
+# use winnow_grammar::{grammar, Collect};
+# use winnow_grammar::testing::WinnowTestExt;
+#[derive(Debug, PartialEq)]
+pub struct List<T>(Vec<T>);
+
+impl<T> Collect<T> for List<T> {
+    fn empty() -> Self { List(Vec::new()) }
+    fn push(&mut self, item: T) { self.0.push(item) }
+    fn len(&self) -> usize { self.0.len() }
+}
+
+grammar! {
+    grammar Numbers {
+        collect List;
+
+        pub rule numbers -> List<i32> = ns:i32* -> { ns }
+    }
+}
+# fn main() {
+Numbers::parse_numbers()
+    .parse_test("1 2 3")
+    .assert_success_is(List(vec![1, 2, 3]));
+# }
+```
+
+`L` is a path - `collect crate::block::List;` - naming a type with one type
+parameter, the element type; `L<T>` implements `winnow_grammar::Collect<T>`:
+`empty()` to start from, `push` to append, `len` to count. The repetition calls
+nothing else: `len` is what it tests the bounds against and how it numbers the
+element that failed (`in item 3`). `Collect` is implemented for `Vec<T>` and
+`VecDeque<T>`. The declaration sits beside `state T;`, `interner I;` and
+`input bytes;`, at most once per grammar.
+
+What does not collect is not affected: a run of a character class is still the
+text it matched, a repetition nobody names is still discarded, and `count(…)`,
+`fold(…)` and `x?` yield what they did. An action that builds a list itself
+(`-> { vec![v] }`) builds what it writes.
+
+**What it costs.** Nothing over a `Vec`. A grammar that declares nothing calls
+the loop it always did, `rt::repeat_recording_bounded`, which is
+`rt::repeat_collecting_bounded` at `C = Vec<T>`; a declared list is the same
+loop at `C = L<T>`. `Collect`'s methods are static calls, so a list whose
+`push` and `len` inline costs what a `Vec` does (`benches/repetition.rs`).
+
+**Generated code names the standard library by full path** -
+`::std::vec::Vec`, `::core::option::Option`, `::core::result::Result::Ok` -
+so a crate with a `Vec`, `String`, `Option`, `Result` or `Box` of its own in
+scope (`use super::*` brings it into the grammar's module) expands as any other.
+What the grammar writes itself - a rule's return type, an action - means what
+it means where the grammar is written.
 
 ## Hand-written Parsers: `extern rule`
 

@@ -73,12 +73,12 @@ impl<'a> Codegen<'a> {
             let final_expr = if use_with_span && !is_explicit {
                 // Implicit action -> use WithSpan
                 quote! {
-                    Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, _span))
+                    ::core::result::Result::Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, _span))
                 }
             } else {
                 // Explicit action (user handles _span if needed) OR no span requested
                 quote! {
-                    Ok({ #action })
+                    ::core::result::Result::Ok({ #action })
                 }
             };
 
@@ -152,7 +152,7 @@ impl<'a> Codegen<'a> {
 
             let final_expr = if use_with_span && !is_explicit {
                 quote! {
-                    Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, _span))
+                    ::core::result::Result::Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, _span))
                 }
             } else {
                 // An action written by the user comes without its braces and
@@ -163,9 +163,9 @@ impl<'a> Codegen<'a> {
                 // single expression (`()`, a binding, a tuple) and stays
                 // unbraced - `{ () }` would be a Clippy finding.
                 if v.is_explicit {
-                    quote! { Ok({ #action }) }
+                    quote! { ::core::result::Result::Ok({ #action }) }
                 } else {
-                    quote! { Ok(#action) }
+                    quote! { ::core::result::Result::Ok(#action) }
                 }
             };
 
@@ -325,7 +325,7 @@ impl<'a> Codegen<'a> {
                      // We should pass full span.
 
                      let full_span = #lhs_ident.span.start .. end;
-                     Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, full_span))
+                     ::core::result::Result::Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, full_span))
                 }
             } else {
                 // An action written by the user comes without its braces and
@@ -336,9 +336,9 @@ impl<'a> Codegen<'a> {
                 // single expression (`()`, a binding, a tuple) and stays
                 // unbraced - `{ () }` would be a Clippy finding.
                 if v.is_explicit {
-                    quote! { Ok({ #action }) }
+                    quote! { ::core::result::Result::Ok({ #action }) }
                 } else {
-                    quote! { Ok(#action) }
+                    quote! { ::core::result::Result::Ok(#action) }
                 }
             };
 
@@ -362,13 +362,13 @@ impl<'a> Codegen<'a> {
                     })();
 
                     match attempt {
-                        Ok(val) => {
+                        ::core::result::Result::Ok(val) => {
                             #lhs_ident = val;
                             continue;
                         },
-                        Err(e) => {
+                        ::core::result::Result::Err(e) => {
                             if matches!(e, ::winnow::error::ErrMode::Cut(_)) {
-                                return Err(e);
+                                return ::core::result::Result::Err(e);
                             } else {
                                 ::winnow::stream::Stream::reset(#input, &checkpoint);
                             }

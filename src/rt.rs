@@ -15,6 +15,7 @@
 
 use crate::ascii::AsciiClass;
 use crate::error::{Diagnostics, ParseError};
+use crate::Collect;
 use crate::{Diagnose, FoldProgress, ParseInput};
 use winnow::error::{AddContext, EmptyError, ErrMode, ParserError, StrContext};
 use winnow::stream::{AsBStr, FindSlice, Location, Offset, Stream, StreamIsPartial};
@@ -1047,8 +1048,34 @@ pub fn repeat_recording_bounded<
 >(
     min: usize,
     max: Option<usize>,
-    mut p: P,
+    p: P,
 ) -> impl FnMut(&mut Input<B, S>) -> Result<Vec<O>, ErrMode<E>>
+where
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
+{
+    repeat_collecting_bounded::<Vec<O>, B, S, O, P, E>(min, max, p)
+}
+
+/// [`repeat_recording_bounded`] collecting into any [`Collect`] `C` instead
+/// of a `Vec` - what a bound repetition in a grammar that declares
+/// `collect L;` calls, with `C = L<_>`.
+///
+/// This is the loop; [`repeat_recording_bounded`] is this one at
+/// `C = Vec<O>`, and since `Collect`'s methods are static calls that inline,
+/// the two compile to the same code (`benches/repetition.rs`, `collected`).
+pub fn repeat_collecting_bounded<
+    'a,
+    C: Collect<O>,
+    B: Slice,
+    S: Clone + std::fmt::Debug,
+    O,
+    P,
+    E: RtError<'a, S, B>,
+>(
+    min: usize,
+    max: Option<usize>,
+    mut p: P,
+) -> impl FnMut(&mut Input<B, S>) -> Result<C, ErrMode<E>>
 where
     P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
@@ -1056,7 +1083,7 @@ where
     // `Option` unwrapped every time round.
     let cap = max.unwrap_or(usize::MAX);
     move |input| {
-        let mut items = Vec::new();
+        let mut items = C::empty();
         loop {
             if items.len() >= cap {
                 break;

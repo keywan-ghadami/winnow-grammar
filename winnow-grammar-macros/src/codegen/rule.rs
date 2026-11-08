@@ -101,7 +101,7 @@ impl<'a> Codegen<'a> {
                     #loop_body
                     break;
                 }
-                Ok(#lhs_ident)
+                ::core::result::Result::Ok(#lhs_ident)
             }
         };
 
@@ -115,7 +115,7 @@ impl<'a> Codegen<'a> {
         let gen_where = &rule.generics.where_clause;
 
         let mut all_generics =
-            quote! { 'a, __WgS: std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error };
+            quote! { 'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error };
         if !gen_params.is_empty() {
             all_generics.extend(quote! {, #gen_params});
         }
@@ -130,8 +130,8 @@ impl<'a> Codegen<'a> {
         let ws_shadow = if is_ws_rule {
             quote_spanned! {span=>
                 #[allow(dead_code)]
-                fn WS<'a, __WgS: std::fmt::Debug + Clone, __WgEr>(_: &mut #input_ty) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
-                    Ok(())
+                fn WS<'a, __WgS: ::std::fmt::Debug + Clone, __WgEr>(_: &mut #input_ty) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
+                    ::core::result::Result::Ok(())
                 }
             }
         } else {
@@ -178,7 +178,7 @@ impl<'a> Codegen<'a> {
             }
         };
 
-        let mut outer_generics = quote! {'a, __WgS: std::fmt::Debug + Clone #state_bound };
+        let mut outer_generics = quote! {'a, __WgS: ::std::fmt::Debug + Clone #state_bound };
         if !gen_params.is_empty() {
             outer_generics.extend(quote! {, #gen_params});
         }
@@ -217,7 +217,7 @@ impl<'a> Codegen<'a> {
                     let result: ::winnow::Result<#ret_type, #err> = #inner_fn_name(input, #(#arg_names),*);
                     let result = result?;
                     #ws_after
-                    Ok(result)
+                    ::core::result::Result::Ok(result)
                 }
             }
         };
@@ -368,7 +368,7 @@ impl<'a> Codegen<'a> {
                     /// must start empty per piece instead of being copied
                     /// wants `parse_…_pieces_with` - ADR 19.
                     #[allow(dead_code)]
-                    #vis fn #pieces_fn<'a, __WgS: std::fmt::Debug + Clone #state_bound>(
+                    #vis fn #pieces_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound>(
                         input: &'a #slice,
                         context: &::winnow_grammar::ParseContext<__WgS>,
                         how: ::winnow_grammar::rt::Parallelism,
@@ -390,7 +390,7 @@ impl<'a> Codegen<'a> {
                     /// interner gives every piece its own numbering, and
                     /// symbols from two pieces are then not comparable.
                     #[allow(dead_code)]
-                    #vis fn #pieces_with_fn<'a, __WgS: std::fmt::Debug + Clone #state_bound>(
+                    #vis fn #pieces_with_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound>(
                         input: &'a #slice,
                         new_context: impl Fn() -> ::winnow_grammar::ParseContext<__WgS> + Sync,
                         how: ::winnow_grammar::rt::Parallelism,
@@ -466,7 +466,7 @@ impl<'a> Codegen<'a> {
             /// in memory, in a buffer of at most `reading.max_frame` plus one
             /// block. An error is at its offset in the stream - ADR 27.
             #[allow(dead_code)]
-            #vis fn #reader_fn<__WgS: std::fmt::Debug + Clone #state_bound>(
+            #vis fn #reader_fn<__WgS: ::std::fmt::Debug + Clone #state_bound>(
                 reader: impl ::std::io::Read,
                 context: &::winnow_grammar::ParseContext<__WgS>,
                 how: ::winnow_grammar::rt::Parallelism,
@@ -482,7 +482,7 @@ impl<'a> Codegen<'a> {
             /// [`#reader_fn`] with a context *built* per piece rather than
             /// cloned - see `parse_…_pieces_with`.
             #[allow(dead_code)]
-            #vis fn #reader_with_fn<__WgS: std::fmt::Debug + Clone #state_bound>(
+            #vis fn #reader_with_fn<__WgS: ::std::fmt::Debug + Clone #state_bound>(
                 reader: impl ::std::io::Read,
                 new_context: impl Fn() -> ::winnow_grammar::ParseContext<__WgS> + Sync,
                 how: ::winnow_grammar::rt::Parallelism,

@@ -106,6 +106,17 @@ impl Codegen<'_> {
         quote! { #state #interner }
     }
 
+    /// The collection a bound repetition collects into, written without its
+    /// element type: `collect L;`'s `L`, or `::std::vec::Vec`. By its full
+    /// path, so that a crate with a `Vec` of its own in scope - `use super::*`
+    /// brings it into the grammar's module - does not change what it means.
+    pub fn collection(&self) -> TokenStream {
+        match &self.grammar.collect {
+            Some(path) => quote! { #path },
+            None => quote! { ::std::vec::Vec },
+        }
+    }
+
     /// Whether the grammar declares `input bytes;` - ADR 25.
     pub fn is_bytes(&self) -> bool {
         self.grammar.input == InputKind::Bytes
@@ -229,7 +240,7 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 // Whitespace handling (similar to syn)
                 #[allow(dead_code)]
-                fn WS<'a, __WgS: std::fmt::Debug + Clone, __WgEr: #rt_error>(
+                fn WS<'a, __WgS: ::std::fmt::Debug + Clone, __WgEr: #rt_error>(
                     #input: &mut #input_ty,
                 ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
                     use ::winnow::Parser;

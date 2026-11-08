@@ -12,6 +12,7 @@ pub use winnow;
 
 /// The error type of the generated parsers and the selection between errors.
 pub mod ascii;
+pub mod collect;
 pub mod error;
 #[doc(hidden)]
 pub mod intern_cache;
@@ -28,6 +29,7 @@ pub use error::{
     Diagnostics, Excerpt, ParseError, PRIO_AGGREGATED, PRIO_LABELED, PRIO_NORMAL, PRIO_STRUCTURAL,
 };
 
+pub use collect::Collect;
 pub use interner::{InternerContext, Symbol};
 pub use interner_trait::{Interner, InternerOf};
 pub use state::StateOf;

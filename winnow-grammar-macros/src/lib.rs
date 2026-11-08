@@ -248,7 +248,7 @@ pub fn with_span(_attr: TokenStream, item: TokenStream) -> TokenStream {
     if let Fields::Named(ref mut fields) = input.fields {
         fields.named.push(
             syn::Field::parse_named
-                .parse2(quote! { pub span: std::ops::Range<usize> })
+                .parse2(quote! { pub span: ::core::ops::Range<usize> })
                 .expect("Failed to parse span field"),
         );
     } else {

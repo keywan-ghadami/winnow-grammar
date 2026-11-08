@@ -228,6 +228,7 @@ pub mod kw {
     syn::custom_keyword!(interner);
     syn::custom_keyword!(input);
     syn::custom_keyword!(bytes);
+    syn::custom_keyword!(collect);
 }
 
 fn parse_path_no_args(input: ParseStream) -> Result<Path> {
@@ -333,7 +334,20 @@ pub struct GrammarDefinition {
     pub interner: Option<Type>,
     /// `input bytes;` - what the grammar's rules read (ADR 25).
     pub input: crate::model::InputKind,
+    /// `collect L;` - the collection a bound repetition collects into,
+    /// `L<T>` for elements of type `T`. `None` is `Vec`.
+    pub collect: Option<Path>,
     pub imports: Vec<ImportedGrammar>,
+}
+
+/// Is the next item a `collect L;` declaration rather than a rule named
+/// `collect`? Only a path and a `;` may follow the keyword, which no rule
+/// header is.
+fn peek_collect_decl(input: ParseStream) -> bool {
+    let fork = input.fork();
+    fork.parse::<kw::collect>().is_ok()
+        && fork.call(Path::parse_mod_style).is_ok()
+        && fork.peek(Token![;])
 }
 
 /// Is the next item an `extern rule`? Both it and an ordinary rule may carry
@@ -371,6 +385,7 @@ impl Parse for GrammarDefinition {
         let mut state: Option<Type> = None;
         let mut interner: Option<Type> = None;
         let mut input_kind: Option<crate::model::InputKind> = None;
+        let mut collect: Option<Path> = None;
 
         while !content.is_empty() {
             if content.peek(Token![use]) {
@@ -417,6 +432,18 @@ impl Parse for GrammarDefinition {
                     ));
                 }
                 input_kind = Some(crate::model::InputKind::Bytes);
+            } else if peek_collect_decl(&content) {
+                // `collect L;` - what a bound repetition collects into.
+                let kw = content.parse::<kw::collect>()?;
+                let path = content.call(Path::parse_mod_style)?;
+                let _ = content.parse::<Token![;]>()?;
+                if collect.is_some() {
+                    return Err(syn::Error::new(
+                        kw.span,
+                        "a grammar declares at most one `collect`",
+                    ));
+                }
+                collect = Some(path);
             } else if peek_extern_rule(&content) {
                 extern_rules.push(content.parse()?);
             } else {
@@ -439,6 +466,7 @@ impl Parse for GrammarDefinition {
             state,
             interner,
             input: input_kind.unwrap_or_default(),
+            collect,
             imports,
         })
     }

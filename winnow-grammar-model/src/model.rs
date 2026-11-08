@@ -19,6 +19,12 @@ pub struct GrammarDefinition {
     /// `input bytes;` - what the rules read (ADR 25). [`InputKind::Text`],
     /// what every grammar that does not say otherwise has always read.
     pub input: InputKind,
+    /// `collect L;` - the collection every bound repetition (`x*`, `x+`,
+    /// `x{n,m}`) collects into, as `L<T>` for elements of type `T`; `L`
+    /// implements `winnow_grammar::Collect<T>`. `None` is
+    /// `::std::vec::Vec`, what every grammar that does not say otherwise has
+    /// always collected into.
+    pub collect: Option<syn::Path>,
     pub imports: Vec<ImportedGrammar>,
     pub uses: Vec<syn::ItemUse>,
 }
@@ -233,6 +239,7 @@ impl From<parser::GrammarDefinition> for GrammarDefinition {
             state: p.state,
             interner: p.interner,
             input: p.input,
+            collect: p.collect,
         }
     }
 }

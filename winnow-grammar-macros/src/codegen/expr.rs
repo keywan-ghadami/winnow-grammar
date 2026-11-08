@@ -457,8 +457,9 @@ impl<'a> Codegen<'a> {
                 | ModelPattern::Bounded { pattern: inner, .. }
                     if !self.is_char_class(inner) =>
                 {
+                    let list = self.collection();
                     quote_spanned! {span=>
-                        let #name: Vec<_> = #parser_expr.parse_next(#input)?;
+                        let #name: #list<_> = #parser_expr.parse_next(#input)?;
                     }
                 }
                 // A fold's value is the accumulator, whose type comes from
@@ -1622,6 +1623,9 @@ impl<'a> Codegen<'a> {
             } else {
                 quote_spanned! {span=> ::winnow::Parser::take(#counting) }
             }
+        } else if let Some(list) = &self.grammar.collect {
+            // `collect L;`: the same loop, into `L<_>` (SYNTAX.md, *Collections*).
+            quote_spanned! {span=> ::winnow_grammar::rt::repeat_collecting_bounded::<#list<_>, _, _, _, _, _>(#min, #max, #elem) }
         } else {
             quote_spanned! {span=> ::winnow_grammar::rt::repeat_recording_bounded(#min, #max, #elem) }
         }
