@@ -314,7 +314,8 @@ pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK:
     /// No error of a step is merged with it, backtracking or not. While it
     /// holds an entry a cut scope spanning steps is open, and in memory
     /// every failure under that scope leaves it as a cut - the call after
-    /// the cut is `cut_err` - so `best_after_cut` would ignore it there too.
+    /// the cut is `cut_err`, the trivia skipped there `skip_trivia_cut` - so
+    /// `best_after_cut` would ignore it there too.
     /// A step reports such a failure as a `Backtrack` when the rule it
     /// parses has no cut of its own; the stream does not tell them apart.
     cut_stash: Vec<Option<ParseError>>,
@@ -657,6 +658,14 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<(), Fail>,
     {
+        // Every cut scope is closed by now: a step closes its own, the
+        // reader closes those that span steps, and a step parsed again
+        // gives back what its try set aside.
+        debug_assert!(
+            self.cut_stash.is_empty(),
+            "an open cut at the end of the stream: {:?}",
+            self.cut_stash
+        );
         self.chunk(&[], f)?;
         while self.visible == self.pos && !self.eof {
             self.read_once(0)?;
@@ -777,6 +786,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                     if item.is_some() && consumed > 0 {
                         self.prev_item = Some(self.pos);
                     }
+                    if item.is_none() && !first.diagnose && mode != Diagnose::Off {
+                        self.record_chunk(rules, f, snapshot, last);
+                    }
                     self.pos += consumed;
                     Ok(Some(v))
                 }
@@ -817,6 +829,51 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 }
             };
         }
+    }
+
+    /// A prefix or suffix the fast pass matched, parsed again by the
+    /// diagnosing pass for what it records, its value and effects thrown
+    /// away. The parse in memory replays a failed fast pass from the start,
+    /// so what a step that matched would record is there for an error
+    /// further on; a stream never goes back that far. A step is parsed once
+    /// per rule of the path, not once per item, so it costs that and the
+    /// copy of the user state `Diagnose::Replay` takes anyway.
+    ///
+    /// The state goes in as the replay in memory has it: put back under
+    /// `Replay` (`snapshot`), as the fast pass left it under `ReplayInPlace`.
+    /// A replay that touches the end of the window records over input that
+    /// is not all there: then nothing of it is kept.
+    fn record_chunk<T, F>(
+        &mut self,
+        rules: &[&'static str],
+        f: &mut F,
+        snapshot: Option<S>,
+        last: bool,
+    ) where
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<T, Fail>,
+    {
+        // What the fast pass recovered stays; the replay's goes.
+        let saved = {
+            let c = self.context();
+            (c.recoveries, c.recovered.len())
+        };
+        let keep = self.context().user_state.clone();
+        if let Some(s) = snapshot {
+            self.context().user_state = s;
+        }
+        let before = (self.furthest.clone(), self.cut_stash.len());
+        let pass = Pass {
+            diagnose: true,
+            last,
+            replay: true,
+        };
+        let (_, touched) = self.attempt(self.pos, rules, f, pass, None);
+        if touched && !last {
+            self.furthest = before.0;
+            self.cut_stash.truncate(before.1);
+        }
+        self.context().user_state = keep;
+        self.roll_back(None, saved);
     }
 
     /// Forgets the items whose failures lie behind the next step: an error

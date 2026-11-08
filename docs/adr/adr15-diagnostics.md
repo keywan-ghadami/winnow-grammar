@@ -57,6 +57,10 @@ A sequence with a cut is a scope (`rt::cut_scope`, or `cut_begin`/`cut_end`
 around its statements): when it matches, its entries go back into `furthest`,
 because a failure after it backtracked past the commitment and nothing
 decided it. A scope left by a `Cut` keeps them aside - the parse ends there.
+Nothing else leaves a scope after its cut: every element after it is
+`cut_err`, and so is the trivia skipped between them (`rt::skip_trivia_cut`) -
+before, a `WS` that could fail let a backtrack out there, and an alternative
+after the committed one was tried.
 The stream keeps the same books across its steps (ADR 27, *Errors*).
 
 The error is boxed (`ParseError(Box<ErrorCore>)`, fields reachable through `Deref`):

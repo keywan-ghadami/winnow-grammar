@@ -266,15 +266,24 @@ entry means a scope spanning steps is open, and in memory every failure under
 it reaches `finish` as a `Cut` - the call after the cut is `cut_err` - while
 a step whose rule has no cut of its own reports it as a `Backtrack`. A step
 that touched the end and is parsed again gives back what it set aside
-(`run`). `tests/cut_error_wins_test.rs` checks each part against the parse in
+(`run`). That cannot change a message - what a try set aside lies in input
+already read, and every failure after the step lies beyond it - but it keeps
+the books: `Stream::finish` asserts in a debug build that no cut is left
+open, and a suffix read a byte at a time trips it without the give-back. `tests/cut_error_wins_test.rs` checks each part against the parse in
 memory - removing any of them fails a test.
 
-Found on the way, and not fixed here: under `Diagnose::Replay` and
-`ReplayInPlace` a prefix that matches runs in the fast pass only, so what it
-would record is never there for the stream - with or without a cut. A
-stream rule `"%" ("@" "b" "c")? n:fold(…)` on `%@bX` reports the left-over
-input at offset 1 where the parse in memory reports ``expected `c` `` at 3;
-`Eager` agrees.
+Found on the way, and fixed: under `Diagnose::Replay` and `ReplayInPlace` a
+prefix or suffix that matched ran in the fast pass only, so what it would
+record was never there for the stream - with or without a cut. A stream rule
+`"%" ("@" "b" "c")? n:fold(…)` on `%@bX` reported the left-over input at
+offset 1 where the parse in memory reports ``expected `c` `` at 3. A step the
+fast pass matched is now parsed again by the diagnosing pass at once, for its
+records only (`Stream::record_chunk`): with the user state put back under
+`Replay`, as the fast pass left it under `ReplayInPlace`, and both the state
+and the recoveries back to the fast pass's afterwards. That is one more parse
+per rule of the path, not per item. A replay that touches the end of its
+window keeps nothing. `tests/stream_step_records_test.rs` pins prefix, suffix
+and the state.
 
 Found on the way, and fixed: under `Diagnose::Eager`, which records in the
 first pass, an item that touched the end of its window kept what it had

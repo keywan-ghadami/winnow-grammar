@@ -1714,6 +1714,28 @@ pub fn class_or_wide<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
 #[doc(hidden)]
 pub const TRIVIA_UNSEEN: (usize, usize, usize) = (0, usize::MAX, usize::MAX);
 
+/// [`skip_trivia`] after a cut `=>`: the trivia there belongs to what the
+/// cut committed to, so a skip that fails is a cut failure, not a backtrack.
+/// A grammar whose `WS` can fail - `WS -> () = " "* not("~")` - otherwise
+/// left a committed sequence through it, and an alternative after it was
+/// tried. Only the code generator calls this.
+#[doc(hidden)]
+#[inline]
+pub fn skip_trivia_cut<'a, B: Slice, S, E, F>(
+    ws: F,
+    input: &mut Input<B, S>,
+) -> Result<(), ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    E: RtError<'a, S, B>,
+    F: FnMut(&mut Input<B, S>) -> Result<(), ErrMode<E>>,
+{
+    match skip_trivia(ws, input) {
+        Err(ErrMode::Backtrack(e)) => Err(ErrMode::Cut(e)),
+        r => r,
+    }
+}
+
 /// The implicit whitespace skip between the tokens of a syntactic rule.
 ///
 /// Only the code generator calls this, and that is the point: what the skip

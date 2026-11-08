@@ -704,11 +704,16 @@ matched, what its cut set aside competes again. `t:tag ")"` on `!ok.y)` fails
 at the `)` - a plain backtracking failure, no cut decided it - and reports
 ``expected `x` `` one byte further on, as without the cut.
 
-One gap: the whitespace a syntactic rule skips between elements is not
-under the cut. A `WS` rule that can fail, failing there, backtracks, and is
-then ranked against everything, the records from before the cut included.
-`tests/cut_error_wins_test.rs` pins the rest, in memory and through
-`#[stream]`.
+**The whitespace after a cut is under it too.** In a syntactic rule the
+trivia skipped between the elements after `=>` belongs to what the cut
+committed to: a `WS` that can fail, failing there, is a cut failure like any
+element's, and no alternative is tried after it. The skip *in front of* the
+`=>` comes before the commitment and still backtracks. (Before, every skip
+backtracked - with `WS -> () = " "* not("~")`, `"k" => "a" "b" | "k" "a~b"`
+took the second alternative on `ka~b`; now it fails. A `WS` that cannot fail,
+`(" " | COMMENT)*` and the like, behaves as before.) `tests/cut_trivia_test.rs`
+pins it; `tests/cut_error_wins_test.rs` pins which error is reported, in
+memory and through `#[stream]`.
 
 ```rust
 # use winnow_grammar::grammar;

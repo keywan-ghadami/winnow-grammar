@@ -377,17 +377,30 @@ impl<'a> Codegen<'a> {
         let input = &self.input_ident;
 
         for (i, p) in patterns.iter().enumerate() {
+            // The skip in front of `=>` comes before the commitment; every
+            // skip after it is under the cut (`rt::skip_trivia_cut`).
+            let skip_in_cut = in_cut;
             if let ModelPattern::Cut(_) = p {
                 in_cut = true;
             }
 
             if i > 0 && !is_lexical {
-                steps.push(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
+                steps.push(Self::skip_stmt(input, skip_in_cut));
             }
 
             steps.push(self.generate_step(p, in_cut, is_lexical));
         }
         quote! { #(#steps)* }
+    }
+
+    /// The trivia skip between two elements, as a statement: under a cut a
+    /// failing skip is a cut failure.
+    pub fn skip_stmt(input: &syn::Ident, in_cut: bool) -> TokenStream {
+        if in_cut {
+            quote! { ::winnow_grammar::rt::skip_trivia_cut(WS, #input)?; }
+        } else {
+            quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
+        }
     }
 
     pub fn generate_step(
@@ -513,7 +526,7 @@ impl<'a> Codegen<'a> {
 
         // Infix WS between Open and Inner
         let ws_before_inner = if !is_lexical {
-            quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
+            Self::skip_stmt(input, in_cut)
         } else {
             quote! {}
         };
@@ -531,7 +544,7 @@ impl<'a> Codegen<'a> {
 
         // Infix WS between Inner and Close
         let ws_before_close = if !is_lexical {
-            quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
+            Self::skip_stmt(input, final_cut)
         } else {
             quote! {}
         };
@@ -1895,11 +1908,17 @@ impl<'a> Codegen<'a> {
                 continue;
             }
 
-            // Infix WS
+            // Infix WS - under the cut once it is passed
             if i > 0 && !is_lexical {
-                parsers.push(
-                    quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i)) },
-                );
+                if in_cut {
+                    parsers.push(
+                        quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia_cut(WS, i)) },
+                    );
+                } else {
+                    parsers.push(
+                        quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i)) },
+                    );
+                }
             }
 
             let p_expr = self.generate_parser_expr(p, is_lexical, discard);
@@ -1936,15 +1955,28 @@ impl<'a> Codegen<'a> {
         let open_p = self.edge(quote_spanned! {span=> literal(#open) }, None);
         let close_p = self.edge(quote_spanned! {span=> literal(#close) }, None);
 
+        // A cut inside holds up to the closing delimiter, as in
+        // `generate_delimited_step`.
+        let close = if is_lexical {
+            close_p
+        } else {
+            quote_spanned! {span=> preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #close_p) }
+        };
+        let close = if has_cut(inner) {
+            quote_spanned! {span=> ::winnow::combinator::cut_err(#close) }
+        } else {
+            close
+        };
+
         if is_lexical {
             quote_spanned! {span=>
-                delimited(#open_p, #inner_parser, #close_p)
+                delimited(#open_p, #inner_parser, #close)
             }
         } else {
             // Infix logic: Open, WS, Inner, WS, Close
             // This is: delimited(open, preceded(WS, inner), preceded(WS, close))
             quote_spanned! {span=>
-                delimited(#open_p, preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #inner_parser), preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #close_p))
+                delimited(#open_p, preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #inner_parser), #close)
             }
         }
     }

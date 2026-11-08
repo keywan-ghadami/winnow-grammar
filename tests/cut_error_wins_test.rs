@@ -156,6 +156,13 @@ grammar! {
         pub outer -> usize = "%" _r:far0 => n:plain ";" -> { n }
         far0 -> () = ("(" "#" "y" ";" "]" "z")? -> { () }
         plain -> usize = "(" n:fold(hash, || 0usize, |n: usize, _h: ()| n + 1) ")" -> { n }
+
+        // A suffix with a cut of its own, read a byte at a time: its first
+        // tries stop at the end of the window after the cut and are parsed
+        // again over more.
+        #[stream]
+        pub retry -> usize = n:fold(hash, || 0usize, |n: usize, _h: ()| n + 1) _s:bang -> { n }
+        bang -> () = "!" => "a" "b" "c" "d" "e" "f" "g" "h" "i" "j" -> { () }
     }
 }
 
@@ -250,13 +257,9 @@ fn a_cut_in_the_stream_prefix_holds_through_the_fold() {
     // The rule matched (no items: `@` begins none) and input is left over
     // at offset 1: the scope is over, so `c` at offset 3 is the better
     // message again.
-    //
-    // Under `Eager` only: the other modes run a prefix that matches in the
-    // fast pass alone, so the stream never records `c` there - with or
-    // without a cut, a limit of the stream's prefixes, not of cuts.
     for mem in stream_agrees(
         "%@bX",
-        &[Diagnose::Eager],
+        EVERY_MODE,
         |i| CutEdges::parse_open().parse_next(i),
         |r, c| CutEdges::parse_open_reader(r, c, SMALL),
     ) {
@@ -274,7 +277,7 @@ fn a_cut_scope_spanning_steps_ends_with_its_rule() {
     // with the cut failure of `nest`.
     for mem in stream_agrees(
         "%(#y;)X",
-        &[Diagnose::Eager],
+        EVERY_MODE,
         |i| CutEdges::parse_nest().parse_next(i),
         |r, c| CutEdges::parse_nest_reader(r, c, SMALL),
     ) {
@@ -300,4 +303,36 @@ fn a_failure_under_an_open_cut_scope_is_a_cut_failure_in_a_stream() {
         assert!(mem.to_string().contains("`)`"), "{mem}");
         assert!(!mem.to_string().contains("`z`"), "{mem}");
     }
+}
+
+/// One-byte blocks: a step sees the input as it trickles in.
+const TINY: Reading = Reading {
+    block: 1,
+    max_frame: 256,
+};
+
+#[test]
+fn a_step_parsed_again_gives_back_what_its_cut_set_aside() {
+    // What a try that stopped at the end of the window set aside is given
+    // back before the step is parsed again: no cut is left open at the end
+    // (`Stream::finish` asserts it in a debug build).
+    for mode in EVERY_MODE {
+        for step in [1, 2, 3, 1 << 20] {
+            let mut ctx = ParseContext::<()> {
+                diagnose: *mode,
+                ..Default::default()
+            };
+            let n =
+                CutEdges::parse_retry_reader(Trickle(b"#y;#y;!abcdefghij", step), &mut ctx, TINY)
+                    .unwrap();
+            assert_eq!(n, 2, "{mode:?} step {step}");
+        }
+    }
+    // And a failure after the cut, once all of it has arrived.
+    stream_agrees(
+        "#y;!abcdefgX",
+        EVERY_MODE,
+        |i| CutEdges::parse_retry().parse_next(i),
+        |r, c| CutEdges::parse_retry_reader(r, c, TINY),
+    );
 }
