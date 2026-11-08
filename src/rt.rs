@@ -11,7 +11,7 @@
 //! A helper that only steps, records and decides is generic over the slice
 //! ([`Slice`](crate::rt::Slice): `&str` or `&[u8]`), so text and byte grammars share it. One
 //! that hands back text is written here for [`ParseInput`] and again, over
-//! [`ParseBytes`](crate::ParseBytes), in [`bytes`](crate::rt::bytes) - ADR 25.
+//! [`ParseBytes`], in [`bytes`](crate::rt::bytes) - ADR 25.
 
 use crate::ascii::AsciiClass;
 use crate::error::{Diagnostics, ParseError};
