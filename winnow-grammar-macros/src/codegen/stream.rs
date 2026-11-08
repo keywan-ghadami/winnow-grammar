@@ -213,7 +213,8 @@ impl Codegen<'_> {
         if !lexical {
             steps.extend(skip.clone());
         }
-        // A cut here holds into the suffix, so its scope is not closed here.
+        // A cut here holds into the suffix, so its scope is not closed here:
+        // the driver closes it after the suffix (`scope_begin`/`scope_end`).
         steps.extend(self.generate_sequence_steps_unscoped(&v.pattern[..at], false, lexical));
         if !lexical && at > 0 {
             steps.extend(skip.clone());
@@ -321,12 +322,29 @@ impl Codegen<'_> {
         } else {
             quote! { #action }
         };
+        // A cut before `at` is one scope from the prefix through the suffix,
+        // as the rule's sequence is in memory: what it set aside competes
+        // again once the suffix matched (`Stream::cut_end`).
+        let (scope_begin, scope_end) = if v.pattern[..at]
+            .iter()
+            .any(|p| matches!(p, ModelPattern::Cut(_)))
+        {
+            let depth = format_ident!("__wg_stream_cut", span = span);
+            (
+                quote_spanned! {span=> let #depth = __stream.cut_depth(); },
+                quote_spanned! {span=> __stream.cut_end(#depth); },
+            )
+        } else {
+            (TokenStream::new(), TokenStream::new())
+        };
         quote_spanned! {span=>
             {
+                #scope_begin
                 #prefix
                 #middle
                 #bind_path
                 #suffix
+                #scope_end
                 let _state = __stream.context();
                 let __r: ::winnow::Result<#ret, ::winnow::error::ErrMode<::winnow_grammar::ParseError>> =
                     (|| ::core::result::Result::Ok(#action))();

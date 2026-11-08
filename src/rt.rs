@@ -923,16 +923,17 @@ pub fn cut_begin<B: Slice, S: Clone + std::fmt::Debug>(input: &mut Input<B, S>) 
 /// The cut `=>` itself: what is recorded so far is set aside.
 ///
 /// A parser with output `()` that never fails, so it stands where the cut
-/// stood in a sequence. Under the fast pass nothing is recorded and it costs
-/// a branch.
+/// stood in a sequence. It pushes an entry even when nothing was recorded
+/// (`None`, always so under the fast pass): an entry on the stash is how a
+/// stream step that ends tells that a cut is still open - see
+/// `rt::stream`. The push reuses the stash's allocation.
 #[doc(hidden)]
 #[inline]
 pub fn commit<B: Slice, S: Clone + std::fmt::Debug, E>(
     input: &mut Input<B, S>,
 ) -> Result<(), ErrMode<E>> {
-    if let Some(f) = input.state.furthest.take() {
-        input.state.cut_stash.push(f);
-    }
+    let f = input.state.furthest.take();
+    input.state.cut_stash.push(f);
     Ok(())
 }
 
@@ -945,7 +946,7 @@ pub fn cut_end<B: Slice, S: Clone + std::fmt::Debug>(input: &mut Input<B, S>, de
         return;
     }
     let mut back: Option<ParseError> = input.state.furthest.take();
-    for f in input.state.cut_stash.drain(depth..) {
+    for f in input.state.cut_stash.drain(depth..).flatten() {
         back = Some(match back {
             Some(b) => f.merge(b),
             None => f,

@@ -307,6 +307,17 @@ pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK:
     out: &'c mut ParseContext<S>,
     /// What the diagnosing pass recorded, at stream positions.
     furthest: Option<ParseError>,
+    /// What a cut set aside that is still open after the step that made
+    /// it, at stream positions: the stream's side of
+    /// `ParseContext::cut_stash`. See [`Stream::cut_end`].
+    ///
+    /// No error of a step is merged with it, backtracking or not. While it
+    /// holds an entry a cut scope spanning steps is open, and in memory
+    /// every failure under that scope leaves it as a cut - the call after
+    /// the cut is `cut_err` - so `best_after_cut` would ignore it there too.
+    /// A step reports such a failure as a `Backtrack` when the rule it
+    /// parses has no cut of its own; the stream does not tell them apart.
+    cut_stash: Vec<Option<ParseError>>,
     _kind: PhantomData<K>,
 }
 
@@ -342,6 +353,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             ctx: Some(ctx),
             out: context,
             furthest: None,
+            cut_stash: Vec::new(),
             _kind: PhantomData,
         }
     }
@@ -351,6 +363,32 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         self.ctx
             .as_mut()
             .expect("the context is back between steps")
+    }
+
+    /// Where a cut scope that spans steps begins: a rule of the path with a
+    /// cut `=>` before the element the path continues in. The generated
+    /// reader takes it before the rule's prefix and hands it to
+    /// [`Stream::cut_end`] after the rule's suffix.
+    #[doc(hidden)]
+    pub fn cut_depth(&self) -> usize {
+        self.cut_stash.len()
+    }
+
+    /// The end of a cut scope that spans steps - the rule matched: what its
+    /// cut set aside competes again, as `rt::cut_end` has it in memory.
+    #[doc(hidden)]
+    pub fn cut_end(&mut self, depth: usize) {
+        if self.cut_stash.len() <= depth {
+            return;
+        }
+        let mut back = self.furthest.take();
+        for f in self.cut_stash.drain(depth..).flatten() {
+            back = Some(match back {
+                Some(b) => f.merge(b),
+                None => f,
+            });
+        }
+        self.furthest = back;
     }
 
     /// One step: `f` parses a prefix or a suffix, whose value does not
@@ -535,11 +573,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         };
         ctx.rules.clear();
         ctx.origin = 0;
-        let recorded = ctx.furthest.take().map(|e| shift(e, origin));
-        self.furthest = match (self.furthest.take(), recorded) {
-            (Some(a), Some(b)) => Some(a.merge(b)),
-            (a, b) => a.or(b),
-        };
+        end_step(&mut self.furthest, &mut self.cut_stash, &mut ctx, origin);
         for e in &mut ctx.recovered[recovered..] {
             *e = shift(e.clone(), origin);
         }
@@ -721,11 +755,15 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 last,
                 replay: false,
             };
+            let depth = self.cut_depth();
             let (r, touched) = self.attempt(self.pos, rules, f, first, item);
             if touched && !last {
                 if full {
                     return Err(self.too_far());
                 }
+                // What the attempt's cut set aside comes back: it is parsed
+                // again, and sets it aside again if it still cuts.
+                self.cut_end(depth);
                 self.roll_back(snapshot, saved);
                 let more = window.max(self.block);
                 let before = self.visible;
@@ -895,11 +933,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         let mut ctx = input.state;
         ctx.rules.clear();
         ctx.origin = 0;
-        let recorded = ctx.furthest.take().map(|e| shift(e, origin));
-        self.furthest = match (self.furthest.take(), recorded) {
-            (Some(a), Some(b)) => Some(a.merge(b)),
-            (a, b) => a.or(b),
-        };
+        end_step(&mut self.furthest, &mut self.cut_stash, &mut ctx, origin);
         for e in &mut ctx.recovered[recovered..] {
             *e = shift(e.clone(), origin);
         }
@@ -1023,6 +1057,31 @@ pub fn action_error(e: ErrMode<ParseError>) -> ParseError {
 #[inline(never)]
 fn saved_furthest<S>(ctx: &ParseContext<S>) -> Option<ParseError> {
     ctx.furthest.clone()
+}
+
+/// What a step hands back when it ends, its context's records at its
+/// `origin`: the records go to the stream's `furthest`. When the step left a
+/// cut open - an item or a step that failed after its cut, or a prefix whose
+/// cut holds into later steps - everything recorded before that cut goes to
+/// the stream's `cut_stash` first, the earlier steps' records included: in
+/// memory the cut's `commit` took all of `furthest`, wherever it came from.
+/// Fields rather than `&mut Stream`: the step's view still borrows the
+/// buffer here.
+fn end_step<S>(
+    furthest: &mut Option<ParseError>,
+    cut_stash: &mut Vec<Option<ParseError>>,
+    ctx: &mut ParseContext<S>,
+    origin: usize,
+) {
+    if !ctx.cut_stash.is_empty() {
+        cut_stash.push(furthest.take());
+        cut_stash.extend(ctx.cut_stash.drain(..).map(|e| e.map(|e| shift(e, origin))));
+    }
+    let recorded = ctx.furthest.take().map(|e| shift(e, origin));
+    *furthest = match (furthest.take(), recorded) {
+        (Some(a), Some(b)) => Some(a.merge(b)),
+        (a, b) => a.or(b),
+    };
 }
 
 fn shift(mut e: ParseError, by: usize) -> ParseError {

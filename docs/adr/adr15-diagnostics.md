@@ -47,6 +47,18 @@ it against the returned error at the end. A remembered error gets its outer
 rules from the **live** rule stack (`ParseContext::rules`), because it never
 travels the return path where rules are normally collected.
 
+**A cut decides, progress does not** (Nikaia #1413). `p => q`: once `p`
+matched, a failure in `q` is the error, even where something recorded while
+`p` ran got farther - it names an alternative the cut ruled out. The cut
+(`rt::commit`) moves `furthest` onto `ParseContext::cut_stash`, one entry per
+cut (`None` where nothing was recorded); `rt::finish` weighs a `Cut` against
+`furthest` alone (`best_after_cut`) and a `Backtrack` against both (`best`).
+A sequence with a cut is a scope (`rt::cut_scope`, or `cut_begin`/`cut_end`
+around its statements): when it matches, its entries go back into `furthest`,
+because a failure after it backtracked past the commitment and nothing
+decided it. A scope left by a `Cut` keeps them aside - the parse ends there.
+The stream keeps the same books across its steps (ADR 27, *Errors*).
+
 The error is boxed (`ParseError(Box<ErrorCore>)`, fields reachable through `Deref`):
 every closure level of a generated parser holds a `Result<_, ErrMode<ParseError>>`
 on the stack, and with the payload inline (about 130 bytes instead of 32) a rule
@@ -69,6 +81,7 @@ nested 500 deep overflowed the stack in a debug build.
 | 11 | `Display` without position, `render(source)` with it | winnow's `Parser::parse` prints the position itself |
 | 12 | The error is a value with fields | `e.expected`, `e.found`, `e.rule_stack`, `e.offset` |
 | 13 | `render(source)` prints the line under the message, with a caret under what was found | `   3 \|     temp: f64,` / `           ^^^^` |
+| 14 | After a cut, its failure is the error; what was recorded before the cut does not compete with it | `a declared handle`, not the farther ``expected `x` `` |
 
 Built-ins get an expectation (`identifier`, `integer literal`, …) because
 winnow's primitives only report the position.

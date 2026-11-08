@@ -684,6 +684,32 @@ that cuts is not a drop-in inside someone else's alternatives: put the cut
 where the commitment belongs, which is usually after the token that identifies
 the construct. `tests/cut_test.rs` pins the reach in both directions.
 
+**Which error a failed cut reports: its own.** Errors are ranked by progress -
+the attempt that got farthest wins, also one that an `x?`, `x*` or an
+alternative gave up along the way. A cut changes that for what was recorded
+*before* it: once `p` in `p => q` matched, a failure in `q` is the error,
+even where an attempt made while `p` was parsed got farther. Only what was
+recorded *after* the cut competes with it.
+
+```rust,ignore
+pub tag -> &'a str = "!" s:name => if(s == "ok", "a declared handle") -> { s }
+rule name -> &'a str = s:raw_ident ("." "x")? -> { s }
+```
+
+On `!foo.y` the guard fails at offset 4, `name`'s `("." "x")?` got to offset
+5 - the message is `a declared handle`, not ``expected `x` ``.
+
+The cut holds as long as the sequence that wrote it: when that sequence
+matched, what its cut set aside competes again. `t:tag ")"` on `!ok.y)` fails
+at the `)` - a plain backtracking failure, no cut decided it - and reports
+``expected `x` `` one byte further on, as without the cut.
+
+One gap: the whitespace a syntactic rule skips between elements is not
+under the cut. A `WS` rule that can fail, failing there, backtracks, and is
+then ranked against everything, the records from before the cut included.
+`tests/cut_error_wins_test.rs` pins the rest, in memory and through
+`#[stream]`.
+
 ```rust
 # use winnow_grammar::grammar;
 # #[derive(Debug)]

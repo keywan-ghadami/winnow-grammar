@@ -103,9 +103,10 @@ pub struct ParseContext<S = ()> {
     /// What was recorded before a cut `p => q` whose scope is still running:
     /// once `q` fails, the failure is the error, and nothing recorded before
     /// the cut competes with it. A scope that succeeds merges its entries
-    /// back into `furthest` - see [`crate::rt::cut_begin`].
+    /// back into `furthest` - see [`crate::rt::cut_begin`]. One entry per
+    /// open cut, `None` where nothing had been recorded.
     #[doc(hidden)]
-    pub cut_stash: Vec<ParseError>,
+    pub cut_stash: Vec<Option<ParseError>>,
     /// The **live** rule stack: the rules currently running, outermost first.
     /// An error that is passed out collects its rules itself on the way back;
     /// an error that is *recorded* along the way never gets there - it
@@ -423,7 +424,11 @@ impl<S> ParseContext<S> {
     /// The better of the returned error and the recorded one, the records
     /// a cut set aside included: the parse backtracked, so no cut decided it.
     pub fn best(&self, e: ParseError) -> ParseError {
-        let e = self.cut_stash.iter().fold(e, |e, f| f.clone().merge(e));
+        let e = self
+            .cut_stash
+            .iter()
+            .flatten()
+            .fold(e, |e, f| f.clone().merge(e));
         self.best_after_cut(e)
     }
 
