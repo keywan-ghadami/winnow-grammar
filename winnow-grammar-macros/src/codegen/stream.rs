@@ -213,7 +213,8 @@ impl Codegen<'_> {
         if !lexical {
             steps.extend(skip.clone());
         }
-        steps.extend(self.generate_sequence_steps(&v.pattern[..at], false, lexical));
+        // A cut here holds into the suffix, so its scope is not closed here.
+        steps.extend(self.generate_sequence_steps_unscoped(&v.pattern[..at], false, lexical));
         if !lexical && at > 0 {
             steps.extend(skip.clone());
         }

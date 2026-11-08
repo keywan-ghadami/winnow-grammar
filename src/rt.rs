@@ -907,6 +907,70 @@ where
     }
 }
 
+/// Where a sequence with a cut `=>` begins its scope: the depth of the cut
+/// stash, handed back to [`cut_end`].
+///
+/// Records made before the cut are set aside at [`commit`]; once the cut is
+/// passed, a failure after it is the error, and they must not compete with
+/// it. If the sequence succeeds they come back ([`cut_end`]): a later failure
+/// that backtracks past the whole sequence may still be beaten by them.
+#[doc(hidden)]
+#[inline]
+pub fn cut_begin<B: Slice, S: Clone + std::fmt::Debug>(input: &mut Input<B, S>) -> usize {
+    input.state.cut_stash.len()
+}
+
+/// The cut `=>` itself: what is recorded so far is set aside.
+///
+/// A parser with output `()` that never fails, so it stands where the cut
+/// stood in a sequence. Under the fast pass nothing is recorded and it costs
+/// a branch.
+#[doc(hidden)]
+#[inline]
+pub fn commit<B: Slice, S: Clone + std::fmt::Debug, E>(
+    input: &mut Input<B, S>,
+) -> Result<(), ErrMode<E>> {
+    if let Some(f) = input.state.furthest.take() {
+        input.state.cut_stash.push(f);
+    }
+    Ok(())
+}
+
+/// The end of a cut scope: what [`commit`] set aside since `depth` competes
+/// again.
+#[doc(hidden)]
+#[inline]
+pub fn cut_end<B: Slice, S: Clone + std::fmt::Debug>(input: &mut Input<B, S>, depth: usize) {
+    if input.state.cut_stash.len() <= depth {
+        return;
+    }
+    let mut back: Option<ParseError> = input.state.furthest.take();
+    for f in input.state.cut_stash.drain(depth..) {
+        back = Some(match back {
+            Some(b) => f.merge(b),
+            None => f,
+        });
+    }
+    input.state.furthest = back;
+}
+
+/// `p` as one cut scope - [`cut_begin`] before it, [`cut_end`] after it when
+/// it succeeds.
+#[doc(hidden)]
+pub fn cut_scope<B: Slice, S: Clone + std::fmt::Debug, O, E, P>(
+    mut p: P,
+) -> impl FnMut(&mut Input<B, S>) -> Result<O, ErrMode<E>>
+where
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
+{
+    move |input| {
+        let depth = cut_begin(input);
+        let v = p.parse_next(input)?;
+        cut_end(input, depth);
+        Ok(v)
+    }
+}
+
 /// `x?` - at most once. A failed attempt is **recorded**, not thrown away:
 /// if the rule later fails at a shallower position or input is left over, it
 /// is the better message.
@@ -1754,7 +1818,8 @@ pub fn finish<B: Slice, S: Clone + std::fmt::Debug, O>(
                 Err(input.state.best(e))
             }
         }
-        Err(ErrMode::Backtrack(e) | ErrMode::Cut(e)) => Err(input.state.best(e)),
+        Err(ErrMode::Backtrack(e)) => Err(input.state.best(e)),
+        Err(ErrMode::Cut(e)) => Err(input.state.best_after_cut(e)),
         Err(ErrMode::Incomplete(_)) => {
             Err(ParseError::from_stream(input).with_message("incomplete input"))
         }
@@ -1898,6 +1963,7 @@ where
     D: FnOnce(&mut Input<B, S>) -> Result<O, ErrMode<ParseError>>,
 {
     input.state.furthest = None;
+    input.state.cut_stash.clear();
     // The fast pass's skips ran the grammar's trivia actions against a user
     // state that `Diagnose::Replay` has since put back: this pass runs them
     // again rather than taking their ends on trust.

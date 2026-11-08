@@ -72,6 +72,8 @@ pub struct Codegen<'a> {
     /// The bytes each alternative can begin with, where that is known - the
     /// fast pass's guard on a rule's alternatives (`rt::first_byte`).
     pub first_bytes: winnow_grammar_model::first_bytes::FirstBytes<'a>,
+    /// Numbers the cut scopes of one grammar, for their depth bindings.
+    pub cut_counter: std::cell::Cell<usize>,
     /// `#[stream]` rules and their paths (ADR 27 §3).
     pub streams: Streams,
     /// Whether every parser is wrapped in `rt::edge`: in a grammar with a
@@ -158,6 +160,7 @@ impl<'a> Codegen<'a> {
             current_boundary: RefCell::new(None),
             literal_rules: winnow_grammar_model::analysis::literal_rules(grammar),
             first_bytes: winnow_grammar_model::first_bytes::FirstBytes::new(grammar),
+            cut_counter: std::cell::Cell::new(0),
         }
     }
 

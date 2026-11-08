@@ -433,6 +433,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         ctx.trivia_memo = TRIVIA_UNSEEN;
         ctx.last_trivia = (usize::MAX, usize::MAX);
         ctx.furthest = None;
+        ctx.cut_stash.clear();
         ctx.origin = origin;
         ctx.rules.clear();
         if pass.diagnose {
@@ -459,7 +460,11 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 }
                 let snapshot = (!zst && (mode == Diagnose::Replay || (lazy && !last)))
                     .then(|| input.state.user_state.clone());
-                let saved = (input.state.recoveries, input.state.recovered.len());
+                let saved = (
+                    input.state.recoveries,
+                    input.state.recovered.len(),
+                    input.state.cut_stash.len(),
+                );
                 // What an eager pass recorded before this item: an attempt
                 // that is parsed again with more input records nothing.
                 if pass.diagnose {
@@ -478,6 +483,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                     }
                     input.state.recoveries = saved.0;
                     input.state.recovered.truncate(saved.1);
+                    input.state.cut_stash.truncate(saved.2);
                     if pass.diagnose {
                         input.state.furthest = recorded.take();
                     }
@@ -848,6 +854,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         // merged outside: moved into the window, a failure that began before
         // it would lose the order of where attempts began.
         ctx.furthest = None;
+        ctx.cut_stash.clear();
         ctx.origin = origin;
         ctx.rules.clear();
         if pass.diagnose {

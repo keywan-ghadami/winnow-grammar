@@ -100,6 +100,12 @@ pub struct ParseContext<S = ()> {
     /// discarded. Compared against the returned error at the end - see
     /// [`crate::rt::finish`].
     pub furthest: Option<ParseError>,
+    /// What was recorded before a cut `p => q` whose scope is still running:
+    /// once `q` fails, the failure is the error, and nothing recorded before
+    /// the cut competes with it. A scope that succeeds merges its entries
+    /// back into `furthest` - see [`crate::rt::cut_begin`].
+    #[doc(hidden)]
+    pub cut_stash: Vec<ParseError>,
     /// The **live** rule stack: the rules currently running, outermost first.
     /// An error that is passed out collects its rules itself on the way back;
     /// an error that is *recorded* along the way never gets there - it
@@ -195,6 +201,7 @@ impl<S: Default> Default for ParseContext<S> {
             intern_cache: intern_cache::InternCache::new(),
             user_state: S::default(),
             furthest: None,
+            cut_stash: Vec::new(),
             rules: Vec::new(),
             diagnose: Diagnose::default(),
             recoveries: 0,
@@ -225,6 +232,7 @@ impl<S> ParseContext<S> {
             intern_cache: intern_cache::InternCache::new(),
             user_state,
             furthest: None,
+            cut_stash: Vec::new(),
             rules: Vec::new(),
             diagnose: Diagnose::default(),
             recoveries: 0,
@@ -270,6 +278,7 @@ impl<S> ParseContext<S> {
     /// parse already fails.
     pub fn begin_parse(&mut self) {
         self.furthest = None;
+        self.cut_stash.clear();
         self.rules.clear();
         self.fold = FoldProgress::default();
         self.recoveries = 0;
@@ -411,8 +420,17 @@ impl<S> ParseContext<S> {
         offset > from
     }
 
-    /// The better of the returned error and the recorded one.
+    /// The better of the returned error and the recorded one, the records
+    /// a cut set aside included: the parse backtracked, so no cut decided it.
     pub fn best(&self, e: ParseError) -> ParseError {
+        let e = self.cut_stash.iter().fold(e, |e, f| f.clone().merge(e));
+        self.best_after_cut(e)
+    }
+
+    /// The better of a cut error and what was recorded after the cut: the
+    /// records from before it (`cut_stash`) do not compete - the cut said
+    /// the parse is in this branch, and `q` failing in it is the error.
+    pub fn best_after_cut(&self, e: ParseError) -> ParseError {
         match &self.furthest {
             Some(f) => f.clone().merge(e),
             None => e,
