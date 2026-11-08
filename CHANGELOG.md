@@ -1,6 +1,34 @@
 # Changelog
 
 
+## [0.2.0] - Unreleased
+
+### Added
+
+- **`collect L;`: the collection a grammar's repetitions collect into.** A
+  grammar that declares it collects every bound repetition (`xs:x*`, `xs:x+`,
+  `xs:x{n,m}`, `xs:recover(r, s)*`) into `L<T>` instead of `Vec<T>`. `L` is a
+  path naming a type with one type parameter; `L<T>` implements the new trait
+  `winnow_grammar::Collect<T>` (`empty`, `push`, `len`; implemented for `Vec`
+  and `VecDeque`). New in `rt`: `repeat_collecting_bounded::<C, …>`, the loop
+  `repeat_recording_bounded` now is at `C = Vec<O>`. A grammar that declares
+  nothing generates the call it did, and the delegation compiles away:
+  callgrind counts the same instructions before and after for 200 000
+  collected elements (386 125 212 both). SYNTAX.md, *Collections*.
+
+### Fixed
+
+- **Generated code names the standard library by full path.** The annotation
+  on a bound repetition (`let xs: Vec<_>`), the `Ok(…)` that wraps an action,
+  the `Ok`/`Err` of left recursion and the `std::fmt::Debug` bound on the
+  state parameter were written unqualified, so a crate with its own `Vec`,
+  `Ok` or `std` in scope (`use super::*` brings it into the grammar's module)
+  broke the expansion. They are `::std::vec::Vec`,
+  `::core::result::Result::Ok`, `::std::fmt::Debug`; `#[with_span]`'s span
+  field is `::core::ops::Range<usize>`. `tests/collect_test.rs` expands
+  grammars where `Vec`, `String`, `Option`, `Result`, `Box`, `Some`, `None`,
+  `Ok` and `Err` are the crate's own.
+
 ## [0.1.0] - Unreleased
 
 ### Parallelism

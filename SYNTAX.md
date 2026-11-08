@@ -637,7 +637,8 @@ text it matched, a repetition nobody names is still discarded, and `count(…)`,
 the loop it always did, `rt::repeat_recording_bounded`, which is
 `rt::repeat_collecting_bounded` at `C = Vec<T>`; a declared list is the same
 loop at `C = L<T>`. `Collect`'s methods are static calls, so a list whose
-`push` and `len` inline costs what a `Vec` does (`benches/repetition.rs`).
+`push` and `len` inline costs what a `Vec` does; for `Vec` itself callgrind
+counts the same instructions as before the trait existed.
 
 **Generated code names the standard library by full path** -
 `::std::vec::Vec`, `::core::option::Option`, `::core::result::Result::Ok` -

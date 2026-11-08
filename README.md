@@ -31,7 +31,7 @@ Add `winnow-grammar` and `winnow` to your `Cargo.toml`.
 
 ```toml
 [dependencies]
-winnow-grammar = "0.1.0"
+winnow-grammar = "0.2.0"
 winnow = "0.6"
 ```
 
@@ -65,7 +65,7 @@ a backend. Two ways, pick one:
 - Or take the seed from the build instead:
 
   ```toml
-  winnow-grammar = { version = "0.1", default-features = false, features = ["ahash-compile-time-rng"] }
+  winnow-grammar = { version = "0.2", default-features = false, features = ["ahash-compile-time-rng"] }
   ```
 
   Every run of one binary then hashes alike, so someone who has the binary can

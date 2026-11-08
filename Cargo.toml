@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "winnow-grammar"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A parser generator for winnow: grammars as a DSL, compiled to winnow parsers."
 license = "MIT OR Apache-2.0"
@@ -43,7 +43,7 @@ winnow = { version = "1", features = ["simd"] }
 # `static` per scan site (`rt::FindBytes2`, ADR 24 §12b); winnow already
 # depends on it through `simd`.
 memchr = "2.7"
-winnow-grammar-macros = { path = "winnow-grammar-macros", version = "0.1.0" }
+winnow-grammar-macros = { path = "winnow-grammar-macros", version = "0.2.0" }
 proc-macro2 = "1.0"
 quote = "1.0"
 lasso = { version = "0.7", features = ["multi-threaded"] }
