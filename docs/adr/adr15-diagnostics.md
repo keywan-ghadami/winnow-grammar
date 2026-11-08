@@ -61,6 +61,30 @@ Nothing else leaves a scope after its cut: every element after it is
 `cut_err`, and so is the trivia skipped between them (`rt::skip_trivia_cut`) -
 before, a `WS` that could fail let a backtrack out there, and an alternative
 after the committed one was tried.
+
+**What a cut costs.** Callgrind, instructions per statement `let vN = N;`
+over 200 000 of them, the input's construction subtracted
+(`scripts/profile-cut.sh`, `examples/cut_profile.rs`). The grammar has a
+`#[stream]` rule, so its parsers carry edge tracking (ADR 27) in memory too.
+
+| | before cuts decided (`main`) | first cut (PR #27) | now |
+|---|---|---|---|
+| rule's own sequence, no cut | 750 | 750 | 750 |
+| … with a cut after `let` | 760 | 788 | 793 |
+| inside a repetition, no cut | 762 | 762 | 762 |
+| … with a cut | 762 | 789 | 799 |
+| `#[stream]` reader, no cut | 816 | 849 | 816 |
+| … with a cut after `[` and in each item | 826 | 887 | 859 |
+
+A grammar without a cut pays nothing. A cut costs ~35 instructions where it
+cost ~10: the push of `rt::commit`, the pop of `rt::cut_end` and the skip
+after it. Two things on the way there were measured and fixed: `cut_end`
+draining with `drain(..).flatten()`, out of line, cost 61 instructions a cut -
+it now pops, inlined, and merges out of line only when something was
+recorded; and the first cut cost *every* stream ~32 instructions a row, cut
+or not - the stash's handling in the loop over the items (ADR 27, *Cuts
+across steps*). Wall time (`benches/cut.rs`) moved within the noise of the
+shared 4-core machine it was taken on, ±10 % between runs of the same build.
 The stream keeps the same books across its steps (ADR 27, *Errors*).
 
 The error is boxed (`ParseError(Box<ErrorCore>)`, fields reachable through `Deref`):

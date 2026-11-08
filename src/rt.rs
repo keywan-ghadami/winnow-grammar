@@ -940,19 +940,32 @@ pub fn commit<B: Slice, S: Clone + std::fmt::Debug, E>(
 /// The end of a cut scope: what [`commit`] set aside since `depth` competes
 /// again.
 #[doc(hidden)]
-#[inline]
+#[inline(always)]
 pub fn cut_end<B: Slice, S: Clone + std::fmt::Debug>(input: &mut Input<B, S>, depth: usize) {
-    if input.state.cut_stash.len() <= depth {
-        return;
+    // Under the fast pass, and wherever nothing was recorded before the cut,
+    // the entries are `None`: popping them is all there is to do - usually
+    // one, the scope's own cut.
+    while input.state.cut_stash.len() > depth {
+        if let Some(Some(f)) = input.state.cut_stash.pop() {
+            input.state.cut_stash.push(Some(f));
+            cut_end_merge(&mut input.state, depth);
+            return;
+        }
     }
-    let mut back: Option<ParseError> = input.state.furthest.take();
-    for f in input.state.cut_stash.drain(depth..).flatten() {
+}
+
+/// [`cut_end`] with something to merge back.
+#[cold]
+#[inline(never)]
+fn cut_end_merge<S>(ctx: &mut crate::ParseContext<S>, depth: usize) {
+    let mut back: Option<ParseError> = ctx.furthest.take();
+    for f in ctx.cut_stash.drain(depth..).flatten() {
         back = Some(match back {
             Some(b) => f.merge(b),
             None => f,
         });
     }
-    input.state.furthest = back;
+    ctx.furthest = back;
 }
 
 /// `p` as one cut scope - [`cut_begin`] before it, [`cut_end`] after it when

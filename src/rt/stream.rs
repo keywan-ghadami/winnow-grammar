@@ -472,7 +472,8 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         ctx.trivia_memo = TRIVIA_UNSEEN;
         ctx.last_trivia = (usize::MAX, usize::MAX);
         ctx.furthest = None;
-        ctx.cut_stash.clear();
+        // `end_step` emptied it when the last step ended.
+        debug_assert!(ctx.cut_stash.is_empty());
         ctx.origin = origin;
         ctx.rules.clear();
         if pass.diagnose {
@@ -499,11 +500,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 }
                 let snapshot = (!zst && (mode == Diagnose::Replay || (lazy && !last)))
                     .then(|| input.state.user_state.clone());
-                let saved = (
-                    input.state.recoveries,
-                    input.state.recovered.len(),
-                    input.state.cut_stash.len(),
-                );
+                let saved = (input.state.recoveries, input.state.recovered.len());
                 // What an eager pass recorded before this item: an attempt
                 // that is parsed again with more input records nothing.
                 if pass.diagnose {
@@ -522,7 +519,10 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                     }
                     input.state.recoveries = saved.0;
                     input.state.recovered.truncate(saved.1);
-                    input.state.cut_stash.truncate(saved.2);
+                    // An item begins with no cut open - the window starts
+                    // with none, and an item that matched closed its own -
+                    // so what this try left open goes.
+                    drop_open_cuts(&mut input.state.cut_stash);
                     if pass.diagnose {
                         input.state.furthest = recorded.take();
                     }
@@ -949,7 +949,8 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         // merged outside: moved into the window, a failure that began before
         // it would lose the order of where attempts began.
         ctx.furthest = None;
-        ctx.cut_stash.clear();
+        // `end_step` emptied it when the last step ended.
+        debug_assert!(ctx.cut_stash.is_empty());
         ctx.origin = origin;
         ctx.rules.clear();
         if pass.diagnose {
@@ -1131,14 +1132,41 @@ fn end_step<S>(
     origin: usize,
 ) {
     if !ctx.cut_stash.is_empty() {
-        cut_stash.push(furthest.take());
-        cut_stash.extend(ctx.cut_stash.drain(..).map(|e| e.map(|e| shift(e, origin))));
+        set_aside(furthest, cut_stash, &mut ctx.cut_stash, origin);
     }
     let recorded = ctx.furthest.take().map(|e| shift(e, origin));
     *furthest = match (furthest.take(), recorded) {
         (Some(a), Some(b)) => Some(a.merge(b)),
         (a, b) => a.or(b),
     };
+}
+
+/// [`end_step`] with a cut still open. Out of line: in the loop over the
+/// items it cost every item a dozen instructions inlined, open cut or not.
+#[cold]
+#[inline(never)]
+fn set_aside(
+    furthest: &mut Option<ParseError>,
+    cut_stash: &mut Vec<Option<ParseError>>,
+    open: &mut Vec<Option<ParseError>>,
+    origin: usize,
+) {
+    cut_stash.push(furthest.take());
+    cut_stash.extend(open.drain(..).map(|e| e.map(|e| shift(e, origin))));
+}
+
+/// What a try that touched the end of its window left open goes, out of
+/// line for the same reason as [`set_aside`].
+#[inline]
+fn drop_open_cuts(open: &mut Vec<Option<ParseError>>) {
+    #[cold]
+    #[inline(never)]
+    fn drop_them(open: &mut Vec<Option<ParseError>>) {
+        open.clear();
+    }
+    if !open.is_empty() {
+        drop_them(open);
+    }
 }
 
 fn shift(mut e: ParseError, by: usize) -> ParseError {

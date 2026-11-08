@@ -272,6 +272,16 @@ the books: `Stream::finish` asserts in a debug build that no cut is left
 open, and a suffix read a byte at a time trips it without the give-back. `tests/cut_error_wins_test.rs` checks each part against the parse in
 memory - removing any of them fails a test.
 
+Cost: the first version kept the stash's length per item and cleared it at
+each window inside `items_once`; together those cost every stream 32
+instructions a row (`scripts/profile-stream.sh`: 246 → 278), cut or not,
+though none of them alone did - the loop's code changed as a whole. Now the
+context's stash is asserted empty at a window's start (`end_step` emptied it),
+and setting aside and dropping are out of line (`set_aside`,
+`drop_open_cuts`): 248. `record_chunk` is not in those two - without it the
+count is the same; it is one parse per rule of the path, not per row. ADR 15
+has the cut's own cost.
+
 Found on the way, and fixed: under `Diagnose::Replay` and `ReplayInPlace` a
 prefix or suffix that matched ran in the fast pass only, so what it would
 record was never there for the stream - with or without a cut. A stream rule
