@@ -11,7 +11,7 @@
 //! A helper that only steps, records and decides is generic over the slice
 //! ([`Slice`](crate::rt::Slice): `&str` or `&[u8]`), so text and byte grammars share it. One
 //! that hands back text is written here for [`ParseInput`] and again, over
-//! [`ParseBytes`](crate::ParseBytes), in [`bytes`](crate::rt::bytes) - ADR 25.
+//! [`ParseBytes`], in [`bytes`](crate::rt::bytes) - ADR 25.
 
 use crate::ascii::AsciiClass;
 use crate::error::{Diagnostics, ParseError};
@@ -907,6 +907,84 @@ where
     }
 }
 
+/// Where a sequence with a cut `=>` begins its scope: the depth of the cut
+/// stash, handed back to [`cut_end`].
+///
+/// Records made before the cut are set aside at [`commit`]; once the cut is
+/// passed, a failure after it is the error, and they must not compete with
+/// it. If the sequence succeeds they come back ([`cut_end`]): a later failure
+/// that backtracks past the whole sequence may still be beaten by them.
+#[doc(hidden)]
+#[inline]
+pub fn cut_begin<B: Slice, S: Clone + std::fmt::Debug>(input: &mut Input<B, S>) -> usize {
+    input.state.cut_stash.len()
+}
+
+/// The cut `=>` itself: what is recorded so far is set aside.
+///
+/// A parser with output `()` that never fails, so it stands where the cut
+/// stood in a sequence. It pushes an entry even when nothing was recorded
+/// (`None`, always so under the fast pass): an entry on the stash is how a
+/// stream step that ends tells that a cut is still open - see
+/// `rt::stream`. The push reuses the stash's allocation.
+#[doc(hidden)]
+#[inline]
+pub fn commit<B: Slice, S: Clone + std::fmt::Debug, E>(
+    input: &mut Input<B, S>,
+) -> Result<(), ErrMode<E>> {
+    let f = input.state.furthest.take();
+    input.state.cut_stash.push(f);
+    Ok(())
+}
+
+/// The end of a cut scope: what [`commit`] set aside since `depth` competes
+/// again.
+#[doc(hidden)]
+#[inline(always)]
+pub fn cut_end<B: Slice, S: Clone + std::fmt::Debug>(input: &mut Input<B, S>, depth: usize) {
+    // Under the fast pass, and wherever nothing was recorded before the cut,
+    // the entries are `None`: popping them is all there is to do - usually
+    // one, the scope's own cut.
+    while input.state.cut_stash.len() > depth {
+        if let Some(Some(f)) = input.state.cut_stash.pop() {
+            input.state.cut_stash.push(Some(f));
+            cut_end_merge(&mut input.state, depth);
+            return;
+        }
+    }
+}
+
+/// [`cut_end`] with something to merge back.
+#[cold]
+#[inline(never)]
+fn cut_end_merge<S>(ctx: &mut crate::ParseContext<S>, depth: usize) {
+    let mut back: Option<ParseError> = ctx.furthest.take();
+    for f in ctx.cut_stash.drain(depth..).flatten() {
+        back = Some(match back {
+            Some(b) => f.merge(b),
+            None => f,
+        });
+    }
+    ctx.furthest = back;
+}
+
+/// `p` as one cut scope - [`cut_begin`] before it, [`cut_end`] after it when
+/// it succeeds.
+#[doc(hidden)]
+pub fn cut_scope<B: Slice, S: Clone + std::fmt::Debug, O, E, P>(
+    mut p: P,
+) -> impl FnMut(&mut Input<B, S>) -> Result<O, ErrMode<E>>
+where
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
+{
+    move |input| {
+        let depth = cut_begin(input);
+        let v = p.parse_next(input)?;
+        cut_end(input, depth);
+        Ok(v)
+    }
+}
+
 /// `x?` - at most once. A failed attempt is **recorded**, not thrown away:
 /// if the rule later fails at a shallower position or input is left over, it
 /// is the better message.
@@ -1649,6 +1727,28 @@ pub fn class_or_wide<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S>>(
 #[doc(hidden)]
 pub const TRIVIA_UNSEEN: (usize, usize, usize) = (0, usize::MAX, usize::MAX);
 
+/// [`skip_trivia`] after a cut `=>`: the trivia there belongs to what the
+/// cut committed to, so a skip that fails is a cut failure, not a backtrack.
+/// A grammar whose `WS` can fail - `WS -> () = " "* not("~")` - otherwise
+/// left a committed sequence through it, and an alternative after it was
+/// tried. Only the code generator calls this.
+#[doc(hidden)]
+#[inline]
+pub fn skip_trivia_cut<'a, B: Slice, S, E, F>(
+    ws: F,
+    input: &mut Input<B, S>,
+) -> Result<(), ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    E: RtError<'a, S, B>,
+    F: FnMut(&mut Input<B, S>) -> Result<(), ErrMode<E>>,
+{
+    match skip_trivia(ws, input) {
+        Err(ErrMode::Backtrack(e)) => Err(ErrMode::Cut(e)),
+        r => r,
+    }
+}
+
 /// The implicit whitespace skip between the tokens of a syntactic rule.
 ///
 /// Only the code generator calls this, and that is the point: what the skip
@@ -1754,7 +1854,8 @@ pub fn finish<B: Slice, S: Clone + std::fmt::Debug, O>(
                 Err(input.state.best(e))
             }
         }
-        Err(ErrMode::Backtrack(e) | ErrMode::Cut(e)) => Err(input.state.best(e)),
+        Err(ErrMode::Backtrack(e)) => Err(input.state.best(e)),
+        Err(ErrMode::Cut(e)) => Err(input.state.best_after_cut(e)),
         Err(ErrMode::Incomplete(_)) => {
             Err(ParseError::from_stream(input).with_message("incomplete input"))
         }
@@ -1898,6 +1999,7 @@ where
     D: FnOnce(&mut Input<B, S>) -> Result<O, ErrMode<ParseError>>,
 {
     input.state.furthest = None;
+    input.state.cut_stash.clear();
     // The fast pass's skips ran the grammar's trivia actions against a user
     // state that `Diagnose::Replay` has since put back: this pass runs them
     // again rather than taking their ends on trust.

@@ -252,6 +252,49 @@ within `k` of the next step, in the buffer and in a list, and replays them in
 order before the item before the failure. An item drops out of the list once
 the parse has moved past what it reached, so the buffer stays bounded.
 
+**Cuts across steps** (ADR 15, *a cut decides*). In memory a cut sets aside
+all of `furthest` - what earlier steps recorded too - and a stream step starts
+with an empty `furthest` of its own. So the driver keeps a stash of its own,
+`Stream::cut_stash`, at stream positions: a step that ends with a cut still
+open (it failed after the cut, or it is a prefix whose cut holds into later
+steps) moves the stream's `furthest` and its own stash there first
+(`end_step`). A rule of the path with a cut before the rule it continues in
+is one scope from its prefix through its suffix, as its sequence is in memory:
+the generated reader takes `cut_depth()` before the prefix and calls
+`cut_end` after the suffix. No error of a step is merged with that stash: an
+entry means a scope spanning steps is open, and in memory every failure under
+it reaches `finish` as a `Cut` - the call after the cut is `cut_err` - while
+a step whose rule has no cut of its own reports it as a `Backtrack`. A step
+that touched the end and is parsed again gives back what it set aside
+(`run`). That cannot change a message - what a try set aside lies in input
+already read, and every failure after the step lies beyond it - but it keeps
+the books: `Stream::finish` asserts in a debug build that no cut is left
+open, and a suffix read a byte at a time trips it without the give-back. `tests/cut_error_wins_test.rs` checks each part against the parse in
+memory - removing any of them fails a test.
+
+Cost: the first version kept the stash's length per item and cleared it at
+each window inside `items_once`; together those cost every stream 32
+instructions a row (`scripts/profile-stream.sh`: 246 → 278), cut or not,
+though none of them alone did - the loop's code changed as a whole. Now the
+context's stash is asserted empty at a window's start (`end_step` emptied it),
+and setting aside and dropping are out of line (`set_aside`,
+`drop_open_cuts`): 248. `record_chunk` is not in those two - without it the
+count is the same; it is one parse per rule of the path, not per row. ADR 15
+has the cut's own cost.
+
+Found on the way, and fixed: under `Diagnose::Replay` and `ReplayInPlace` a
+prefix or suffix that matched ran in the fast pass only, so what it would
+record was never there for the stream - with or without a cut. A stream rule
+`"%" ("@" "b" "c")? n:fold(…)` on `%@bX` reported the left-over input at
+offset 1 where the parse in memory reports ``expected `c` `` at 3. A step the
+fast pass matched is now parsed again by the diagnosing pass at once, for its
+records only (`Stream::record_chunk`): with the user state put back under
+`Replay`, as the fast pass left it under `ReplayInPlace`, and both the state
+and the recoveries back to the fast pass's afterwards. That is one more parse
+per rule of the path, not per item. A replay that touches the end of its
+window keeps nothing. `tests/stream_step_records_test.rs` pins prefix, suffix
+and the state.
+
 Found on the way, and fixed: under `Diagnose::Eager`, which records in the
 first pass, an item that touched the end of its window kept what it had
 recorded over the partial input when it was parsed again over more; its

@@ -213,9 +213,16 @@ impl Codegen<'_> {
         if !lexical {
             steps.extend(skip.clone());
         }
-        steps.extend(self.generate_sequence_steps(&v.pattern[..at], false, lexical));
+        // A cut here holds into the suffix, so its scope is not closed here:
+        // the driver closes it after the suffix (`scope_begin`/`scope_end`).
+        steps.extend(self.generate_sequence_steps_unscoped(&v.pattern[..at], false, lexical));
+        // The skip before the element at `at`: under the prefix's cut, if
+        // it has one, as in memory.
+        let prefix_cut = v.pattern[..at]
+            .iter()
+            .any(|p| matches!(p, ModelPattern::Cut(_)));
         if !lexical && at > 0 {
-            steps.extend(skip.clone());
+            steps.extend(Self::skip_stmt(input, prefix_cut));
         }
         let next_params: Vec<(syn::Ident, syn::Type)> = match path.levels.get(j + 1) {
             Some(next) => self
@@ -284,7 +291,7 @@ impl Codegen<'_> {
             .any(|p| matches!(p, ModelPattern::Cut(_)));
         let mut steps = TokenStream::new();
         if !lexical && !suffix_pats.is_empty() {
-            steps.extend(skip.clone());
+            steps.extend(Self::skip_stmt(input, cut));
         }
         steps.extend(self.generate_sequence_steps(suffix_pats, cut, lexical));
         let returned = &level.returned;
@@ -320,12 +327,26 @@ impl Codegen<'_> {
         } else {
             quote! { #action }
         };
+        // A cut before `at` is one scope from the prefix through the suffix,
+        // as the rule's sequence is in memory: what it set aside competes
+        // again once the suffix matched (`Stream::cut_end`).
+        let (scope_begin, scope_end) = if prefix_cut {
+            let depth = format_ident!("__wg_stream_cut", span = span);
+            (
+                quote_spanned! {span=> let #depth = __stream.cut_depth(); },
+                quote_spanned! {span=> __stream.cut_end(#depth); },
+            )
+        } else {
+            (TokenStream::new(), TokenStream::new())
+        };
         quote_spanned! {span=>
             {
+                #scope_begin
                 #prefix
                 #middle
                 #bind_path
                 #suffix
+                #scope_end
                 let _state = __stream.context();
                 let __r: ::winnow::Result<#ret, ::winnow::error::ErrMode<::winnow_grammar::ParseError>> =
                     (|| ::core::result::Result::Ok(#action))();

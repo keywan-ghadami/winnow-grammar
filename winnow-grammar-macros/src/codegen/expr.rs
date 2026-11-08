@@ -318,8 +318,47 @@ pub(crate) fn get_inner_binding(pattern: &ModelPattern) -> Option<&syn::Ident> {
     }
 }
 
+/// Whether a sequence holds a cut `=>` of its own (not one nested deeper).
+fn has_cut(patterns: &[ModelPattern]) -> bool {
+    patterns.iter().any(|p| matches!(p, ModelPattern::Cut(_)))
+}
+
 impl<'a> Codegen<'a> {
+    /// The steps of a sequence. One holding a cut `=>` is a cut scope: what
+    /// was recorded before the cut does not compete with an error after it,
+    /// and competes again once the sequence matched (the cut is then over).
     pub fn generate_sequence_steps(
+        &self,
+        patterns: &[ModelPattern],
+        in_cut: bool,
+        is_lexical: bool,
+    ) -> TokenStream {
+        let steps = self.generate_sequence_steps_unscoped(patterns, in_cut, is_lexical);
+        if !has_cut(patterns) {
+            return steps;
+        }
+        let (begin, end) = self.cut_scope_stmts();
+        quote! { #begin #steps #end }
+    }
+
+    /// The statements that open and close a cut scope, around steps that
+    /// leave their bindings in scope.
+    pub fn cut_scope_stmts(&self) -> (TokenStream, TokenStream) {
+        let span = Span::mixed_site();
+        let input = &self.input_ident;
+        let n = self.cut_counter.get();
+        self.cut_counter.set(n + 1);
+        let depth = quote::format_ident!("__wg_cut_{}", n, span = span);
+        (
+            quote_spanned! {span=> let #depth = ::winnow_grammar::rt::cut_begin(#input); },
+            quote_spanned! {span=> ::winnow_grammar::rt::cut_end(#input, #depth); },
+        )
+    }
+
+    /// [`generate_sequence_steps`](Self::generate_sequence_steps) without
+    /// the cut scope: for a caller that closes the scope itself, or whose
+    /// steps are split where the scope cannot be closed.
+    pub fn generate_sequence_steps_unscoped(
         &self,
         patterns: &[ModelPattern],
         mut in_cut: bool,
@@ -338,17 +377,30 @@ impl<'a> Codegen<'a> {
         let input = &self.input_ident;
 
         for (i, p) in patterns.iter().enumerate() {
+            // The skip in front of `=>` comes before the commitment; every
+            // skip after it is under the cut (`rt::skip_trivia_cut`).
+            let skip_in_cut = in_cut;
             if let ModelPattern::Cut(_) = p {
                 in_cut = true;
             }
 
             if i > 0 && !is_lexical {
-                steps.push(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
+                steps.push(Self::skip_stmt(input, skip_in_cut));
             }
 
             steps.push(self.generate_step(p, in_cut, is_lexical));
         }
         quote! { #(#steps)* }
+    }
+
+    /// The trivia skip between two elements, as a statement: under a cut a
+    /// failing skip is a cut failure.
+    pub fn skip_stmt(input: &syn::Ident, in_cut: bool) -> TokenStream {
+        if in_cut {
+            quote! { ::winnow_grammar::rt::skip_trivia_cut(WS, #input)?; }
+        } else {
+            quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
+        }
     }
 
     pub fn generate_step(
@@ -474,19 +526,25 @@ impl<'a> Codegen<'a> {
 
         // Infix WS between Open and Inner
         let ws_before_inner = if !is_lexical {
-            quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
+            Self::skip_stmt(input, in_cut)
         } else {
             quote! {}
         };
 
-        let inner_steps = self.generate_sequence_steps(inner, in_cut, is_lexical);
+        let inner_steps = self.generate_sequence_steps_unscoped(inner, in_cut, is_lexical);
 
-        let inner_triggers_cut = inner.iter().any(|p| matches!(p, ModelPattern::Cut(_)));
+        let inner_triggers_cut = has_cut(inner);
         let final_cut = in_cut || inner_triggers_cut;
+        // A cut inside holds up to the closing delimiter.
+        let (scope_begin, scope_end) = if inner_triggers_cut {
+            self.cut_scope_stmts()
+        } else {
+            (TokenStream::new(), TokenStream::new())
+        };
 
         // Infix WS between Inner and Close
         let ws_before_close = if !is_lexical {
-            quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
+            Self::skip_stmt(input, final_cut)
         } else {
             quote! {}
         };
@@ -500,10 +558,12 @@ impl<'a> Codegen<'a> {
 
         quote_spanned! {span=>
             #open_stmt
+            #scope_begin
             #ws_before_inner
             #inner_steps
             #ws_before_close
             #close_stmt
+            #scope_end
         }
     }
 
@@ -1719,7 +1779,10 @@ impl<'a> Codegen<'a> {
             ModelPattern::Braced(inner, _) => {
                 self.generate_delimited_expr(inner, "{", "}", is_lexical)
             }
-            ModelPattern::Cut(_) => quote_spanned! {span=> ::winnow::combinator::empty },
+            ModelPattern::Cut(_) => {
+                let input_ty = self.input_ty();
+                quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::commit(i)) }
+            }
             ModelPattern::Recover { body, sync, .. } => {
                 let body_parser = self.generate_parser_expr(body, is_lexical, false);
                 let sync_parser = self.generate_parser_expr(sync, is_lexical, false);
@@ -1845,11 +1908,17 @@ impl<'a> Codegen<'a> {
                 continue;
             }
 
-            // Infix WS
+            // Infix WS - under the cut once it is passed
             if i > 0 && !is_lexical {
-                parsers.push(
-                    quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i)) },
-                );
+                if in_cut {
+                    parsers.push(
+                        quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia_cut(WS, i)) },
+                    );
+                } else {
+                    parsers.push(
+                        quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i)) },
+                    );
+                }
             }
 
             let p_expr = self.generate_parser_expr(p, is_lexical, discard);
@@ -1860,10 +1929,15 @@ impl<'a> Codegen<'a> {
             }
         }
 
-        if parsers.len() == 1 {
+        let parser = if parsers.len() == 1 {
             quote_spanned! {span=> #(#parsers)* }
         } else {
             seq_of(parsers, &input_ty)
+        };
+        if has_cut(seq) {
+            quote_spanned! {span=> ::winnow_grammar::rt::cut_scope(#parser) }
+        } else {
+            parser
         }
     }
 
@@ -1881,15 +1955,28 @@ impl<'a> Codegen<'a> {
         let open_p = self.edge(quote_spanned! {span=> literal(#open) }, None);
         let close_p = self.edge(quote_spanned! {span=> literal(#close) }, None);
 
+        // A cut inside holds up to the closing delimiter, as in
+        // `generate_delimited_step`.
+        let close = if is_lexical {
+            close_p
+        } else {
+            quote_spanned! {span=> preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #close_p) }
+        };
+        let close = if has_cut(inner) {
+            quote_spanned! {span=> ::winnow::combinator::cut_err(#close) }
+        } else {
+            close
+        };
+
         if is_lexical {
             quote_spanned! {span=>
-                delimited(#open_p, #inner_parser, #close_p)
+                delimited(#open_p, #inner_parser, #close)
             }
         } else {
             // Infix logic: Open, WS, Inner, WS, Close
             // This is: delimited(open, preceded(WS, inner), preceded(WS, close))
             quote_spanned! {span=>
-                delimited(#open_p, preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #inner_parser), preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #close_p))
+                delimited(#open_p, preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #inner_parser), #close)
             }
         }
     }

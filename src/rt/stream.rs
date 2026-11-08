@@ -307,6 +307,18 @@ pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK:
     out: &'c mut ParseContext<S>,
     /// What the diagnosing pass recorded, at stream positions.
     furthest: Option<ParseError>,
+    /// What a cut set aside that is still open after the step that made
+    /// it, at stream positions: the stream's side of
+    /// `ParseContext::cut_stash`. See [`Stream::cut_end`].
+    ///
+    /// No error of a step is merged with it, backtracking or not. While it
+    /// holds an entry a cut scope spanning steps is open, and in memory
+    /// every failure under that scope leaves it as a cut - the call after
+    /// the cut is `cut_err`, the trivia skipped there `skip_trivia_cut` - so
+    /// `best_after_cut` would ignore it there too.
+    /// A step reports such a failure as a `Backtrack` when the rule it
+    /// parses has no cut of its own; the stream does not tell them apart.
+    cut_stash: Vec<Option<ParseError>>,
     _kind: PhantomData<K>,
 }
 
@@ -342,6 +354,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             ctx: Some(ctx),
             out: context,
             furthest: None,
+            cut_stash: Vec::new(),
             _kind: PhantomData,
         }
     }
@@ -351,6 +364,32 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         self.ctx
             .as_mut()
             .expect("the context is back between steps")
+    }
+
+    /// Where a cut scope that spans steps begins: a rule of the path with a
+    /// cut `=>` before the element the path continues in. The generated
+    /// reader takes it before the rule's prefix and hands it to
+    /// [`Stream::cut_end`] after the rule's suffix.
+    #[doc(hidden)]
+    pub fn cut_depth(&self) -> usize {
+        self.cut_stash.len()
+    }
+
+    /// The end of a cut scope that spans steps - the rule matched: what its
+    /// cut set aside competes again, as `rt::cut_end` has it in memory.
+    #[doc(hidden)]
+    pub fn cut_end(&mut self, depth: usize) {
+        if self.cut_stash.len() <= depth {
+            return;
+        }
+        let mut back = self.furthest.take();
+        for f in self.cut_stash.drain(depth..).flatten() {
+            back = Some(match back {
+                Some(b) => f.merge(b),
+                None => f,
+            });
+        }
+        self.furthest = back;
     }
 
     /// One step: `f` parses a prefix or a suffix, whose value does not
@@ -433,6 +472,8 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         ctx.trivia_memo = TRIVIA_UNSEEN;
         ctx.last_trivia = (usize::MAX, usize::MAX);
         ctx.furthest = None;
+        // `end_step` emptied it when the last step ended.
+        debug_assert!(ctx.cut_stash.is_empty());
         ctx.origin = origin;
         ctx.rules.clear();
         if pass.diagnose {
@@ -478,6 +519,10 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                     }
                     input.state.recoveries = saved.0;
                     input.state.recovered.truncate(saved.1);
+                    // An item begins with no cut open - the window starts
+                    // with none, and an item that matched closed its own -
+                    // so what this try left open goes.
+                    drop_open_cuts(&mut input.state.cut_stash);
                     if pass.diagnose {
                         input.state.furthest = recorded.take();
                     }
@@ -529,11 +574,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         };
         ctx.rules.clear();
         ctx.origin = 0;
-        let recorded = ctx.furthest.take().map(|e| shift(e, origin));
-        self.furthest = match (self.furthest.take(), recorded) {
-            (Some(a), Some(b)) => Some(a.merge(b)),
-            (a, b) => a.or(b),
-        };
+        end_step(&mut self.furthest, &mut self.cut_stash, &mut ctx, origin);
         for e in &mut ctx.recovered[recovered..] {
             *e = shift(e.clone(), origin);
         }
@@ -617,6 +658,14 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<(), Fail>,
     {
+        // Every cut scope is closed by now: a step closes its own, the
+        // reader closes those that span steps, and a step parsed again
+        // gives back what its try set aside.
+        debug_assert!(
+            self.cut_stash.is_empty(),
+            "an open cut at the end of the stream: {:?}",
+            self.cut_stash
+        );
         self.chunk(&[], f)?;
         while self.visible == self.pos && !self.eof {
             self.read_once(0)?;
@@ -715,11 +764,15 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 last,
                 replay: false,
             };
+            let depth = self.cut_depth();
             let (r, touched) = self.attempt(self.pos, rules, f, first, item);
             if touched && !last {
                 if full {
                     return Err(self.too_far());
                 }
+                // What the attempt's cut set aside comes back: it is parsed
+                // again, and sets it aside again if it still cuts.
+                self.cut_end(depth);
                 self.roll_back(snapshot, saved);
                 let more = window.max(self.block);
                 let before = self.visible;
@@ -732,6 +785,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 Ok((v, consumed)) => {
                     if item.is_some() && consumed > 0 {
                         self.prev_item = Some(self.pos);
+                    }
+                    if item.is_none() && !first.diagnose && mode != Diagnose::Off {
+                        self.record_chunk(rules, f, snapshot, last);
                     }
                     self.pos += consumed;
                     Ok(Some(v))
@@ -773,6 +829,51 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 }
             };
         }
+    }
+
+    /// A prefix or suffix the fast pass matched, parsed again by the
+    /// diagnosing pass for what it records, its value and effects thrown
+    /// away. The parse in memory replays a failed fast pass from the start,
+    /// so what a step that matched would record is there for an error
+    /// further on; a stream never goes back that far. A step is parsed once
+    /// per rule of the path, not once per item, so it costs that and the
+    /// copy of the user state `Diagnose::Replay` takes anyway.
+    ///
+    /// The state goes in as the replay in memory has it: put back under
+    /// `Replay` (`snapshot`), as the fast pass left it under `ReplayInPlace`.
+    /// A replay that touches the end of the window records over input that
+    /// is not all there: then nothing of it is kept.
+    fn record_chunk<T, F>(
+        &mut self,
+        rules: &[&'static str],
+        f: &mut F,
+        snapshot: Option<S>,
+        last: bool,
+    ) where
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<T, Fail>,
+    {
+        // What the fast pass recovered stays; the replay's goes.
+        let saved = {
+            let c = self.context();
+            (c.recoveries, c.recovered.len())
+        };
+        let keep = self.context().user_state.clone();
+        if let Some(s) = snapshot {
+            self.context().user_state = s;
+        }
+        let before = (self.furthest.clone(), self.cut_stash.len());
+        let pass = Pass {
+            diagnose: true,
+            last,
+            replay: true,
+        };
+        let (_, touched) = self.attempt(self.pos, rules, f, pass, None);
+        if touched && !last {
+            self.furthest = before.0;
+            self.cut_stash.truncate(before.1);
+        }
+        self.context().user_state = keep;
+        self.roll_back(None, saved);
     }
 
     /// Forgets the items whose failures lie behind the next step: an error
@@ -848,6 +949,8 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         // merged outside: moved into the window, a failure that began before
         // it would lose the order of where attempts began.
         ctx.furthest = None;
+        // `end_step` emptied it when the last step ended.
+        debug_assert!(ctx.cut_stash.is_empty());
         ctx.origin = origin;
         ctx.rules.clear();
         if pass.diagnose {
@@ -888,11 +991,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         let mut ctx = input.state;
         ctx.rules.clear();
         ctx.origin = 0;
-        let recorded = ctx.furthest.take().map(|e| shift(e, origin));
-        self.furthest = match (self.furthest.take(), recorded) {
-            (Some(a), Some(b)) => Some(a.merge(b)),
-            (a, b) => a.or(b),
-        };
+        end_step(&mut self.furthest, &mut self.cut_stash, &mut ctx, origin);
         for e in &mut ctx.recovered[recovered..] {
             *e = shift(e.clone(), origin);
         }
@@ -1016,6 +1115,58 @@ pub fn action_error(e: ErrMode<ParseError>) -> ParseError {
 #[inline(never)]
 fn saved_furthest<S>(ctx: &ParseContext<S>) -> Option<ParseError> {
     ctx.furthest.clone()
+}
+
+/// What a step hands back when it ends, its context's records at its
+/// `origin`: the records go to the stream's `furthest`. When the step left a
+/// cut open - an item or a step that failed after its cut, or a prefix whose
+/// cut holds into later steps - everything recorded before that cut goes to
+/// the stream's `cut_stash` first, the earlier steps' records included: in
+/// memory the cut's `commit` took all of `furthest`, wherever it came from.
+/// Fields rather than `&mut Stream`: the step's view still borrows the
+/// buffer here.
+fn end_step<S>(
+    furthest: &mut Option<ParseError>,
+    cut_stash: &mut Vec<Option<ParseError>>,
+    ctx: &mut ParseContext<S>,
+    origin: usize,
+) {
+    if !ctx.cut_stash.is_empty() {
+        set_aside(furthest, cut_stash, &mut ctx.cut_stash, origin);
+    }
+    let recorded = ctx.furthest.take().map(|e| shift(e, origin));
+    *furthest = match (furthest.take(), recorded) {
+        (Some(a), Some(b)) => Some(a.merge(b)),
+        (a, b) => a.or(b),
+    };
+}
+
+/// [`end_step`] with a cut still open. Out of line: in the loop over the
+/// items it cost every item a dozen instructions inlined, open cut or not.
+#[cold]
+#[inline(never)]
+fn set_aside(
+    furthest: &mut Option<ParseError>,
+    cut_stash: &mut Vec<Option<ParseError>>,
+    open: &mut Vec<Option<ParseError>>,
+    origin: usize,
+) {
+    cut_stash.push(furthest.take());
+    cut_stash.extend(open.drain(..).map(|e| e.map(|e| shift(e, origin))));
+}
+
+/// What a try that touched the end of its window left open goes, out of
+/// line for the same reason as [`set_aside`].
+#[inline]
+fn drop_open_cuts(open: &mut Vec<Option<ParseError>>) {
+    #[cold]
+    #[inline(never)]
+    fn drop_them(open: &mut Vec<Option<ParseError>>) {
+        open.clear();
+    }
+    if !open.is_empty() {
+        drop_them(open);
+    }
 }
 
 fn shift(mut e: ParseError, by: usize) -> ParseError {

@@ -47,6 +47,46 @@ it against the returned error at the end. A remembered error gets its outer
 rules from the **live** rule stack (`ParseContext::rules`), because it never
 travels the return path where rules are normally collected.
 
+**A cut decides, progress does not** (Nikaia #1413). `p => q`: once `p`
+matched, a failure in `q` is the error, even where something recorded while
+`p` ran got farther - it names an alternative the cut ruled out. The cut
+(`rt::commit`) moves `furthest` onto `ParseContext::cut_stash`, one entry per
+cut (`None` where nothing was recorded); `rt::finish` weighs a `Cut` against
+`furthest` alone (`best_after_cut`) and a `Backtrack` against both (`best`).
+A sequence with a cut is a scope (`rt::cut_scope`, or `cut_begin`/`cut_end`
+around its statements): when it matches, its entries go back into `furthest`,
+because a failure after it backtracked past the commitment and nothing
+decided it. A scope left by a `Cut` keeps them aside - the parse ends there.
+Nothing else leaves a scope after its cut: every element after it is
+`cut_err`, and so is the trivia skipped between them (`rt::skip_trivia_cut`) -
+before, a `WS` that could fail let a backtrack out there, and an alternative
+after the committed one was tried.
+
+**What a cut costs.** Callgrind, instructions per statement `let vN = N;`
+over 200 000 of them, the input's construction subtracted
+(`scripts/profile-cut.sh`, `examples/cut_profile.rs`). The grammar has a
+`#[stream]` rule, so its parsers carry edge tracking (ADR 27) in memory too.
+
+| | before cuts decided (`main`) | first cut (PR #27) | now |
+|---|---|---|---|
+| rule's own sequence, no cut | 750 | 750 | 750 |
+| … with a cut after `let` | 760 | 788 | 793 |
+| inside a repetition, no cut | 762 | 762 | 762 |
+| … with a cut | 762 | 789 | 799 |
+| `#[stream]` reader, no cut | 816 | 849 | 816 |
+| … with a cut after `[` and in each item | 826 | 887 | 859 |
+
+A grammar without a cut pays nothing. A cut costs ~35 instructions where it
+cost ~10: the push of `rt::commit`, the pop of `rt::cut_end` and the skip
+after it. Two things on the way there were measured and fixed: `cut_end`
+draining with `drain(..).flatten()`, out of line, cost 61 instructions a cut -
+it now pops, inlined, and merges out of line only when something was
+recorded; and the first cut cost *every* stream ~32 instructions a row, cut
+or not - the stash's handling in the loop over the items (ADR 27, *Cuts
+across steps*). Wall time (`benches/cut.rs`) moved within the noise of the
+shared 4-core machine it was taken on, ±10 % between runs of the same build.
+The stream keeps the same books across its steps (ADR 27, *Errors*).
+
 The error is boxed (`ParseError(Box<ErrorCore>)`, fields reachable through `Deref`):
 every closure level of a generated parser holds a `Result<_, ErrMode<ParseError>>`
 on the stack, and with the payload inline (about 130 bytes instead of 32) a rule
@@ -69,6 +109,7 @@ nested 500 deep overflowed the stack in a debug build.
 | 11 | `Display` without position, `render(source)` with it | winnow's `Parser::parse` prints the position itself |
 | 12 | The error is a value with fields | `e.expected`, `e.found`, `e.rule_stack`, `e.offset` |
 | 13 | `render(source)` prints the line under the message, with a caret under what was found | `   3 \|     temp: f64,` / `           ^^^^` |
+| 14 | After a cut, its failure is the error; what was recorded before the cut does not compete with it | `a declared handle`, not the farther ``expected `x` `` |
 
 Built-ins get an expectation (`identifier`, `integer literal`, …) because
 winnow's primitives only report the position.

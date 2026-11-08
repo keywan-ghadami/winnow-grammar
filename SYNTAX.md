@@ -684,6 +684,37 @@ that cuts is not a drop-in inside someone else's alternatives: put the cut
 where the commitment belongs, which is usually after the token that identifies
 the construct. `tests/cut_test.rs` pins the reach in both directions.
 
+**Which error a failed cut reports: its own.** Errors are ranked by progress -
+the attempt that got farthest wins, also one that an `x?`, `x*` or an
+alternative gave up along the way. A cut changes that for what was recorded
+*before* it: once `p` in `p => q` matched, a failure in `q` is the error,
+even where an attempt made while `p` was parsed got farther. Only what was
+recorded *after* the cut competes with it.
+
+```rust,ignore
+pub tag -> &'a str = "!" s:name => if(s == "ok", "a declared handle") -> { s }
+rule name -> &'a str = s:raw_ident ("." "x")? -> { s }
+```
+
+On `!foo.y` the guard fails at offset 4, `name`'s `("." "x")?` got to offset
+5 - the message is `a declared handle`, not ``expected `x` ``.
+
+The cut holds as long as the sequence that wrote it: when that sequence
+matched, what its cut set aside competes again. `t:tag ")"` on `!ok.y)` fails
+at the `)` - a plain backtracking failure, no cut decided it - and reports
+``expected `x` `` one byte further on, as without the cut.
+
+**The whitespace after a cut is under it too.** In a syntactic rule the
+trivia skipped between the elements after `=>` belongs to what the cut
+committed to: a `WS` that can fail, failing there, is a cut failure like any
+element's, and no alternative is tried after it. The skip *in front of* the
+`=>` comes before the commitment and still backtracks. (Before, every skip
+backtracked - with `WS -> () = " "* not("~")`, `"k" => "a" "b" | "k" "a~b"`
+took the second alternative on `ka~b`; now it fails. A `WS` that cannot fail,
+`(" " | COMMENT)*` and the like, behaves as before.) `tests/cut_trivia_test.rs`
+pins it; `tests/cut_error_wins_test.rs` pins which error is reported, in
+memory and through `#[stream]`.
+
 ```rust
 # use winnow_grammar::grammar;
 # #[derive(Debug)]
