@@ -379,6 +379,9 @@ impl Codegen<'_> {
             pattern,
             init,
             step,
+            sep,
+            min,
+            max,
             ..
         } = &rule.variants[0].pattern[level.at]
         else {
@@ -408,6 +411,21 @@ impl Codegen<'_> {
         } else {
             quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
         };
+        // A separator comes before every item but the first, and is taken
+        // only with the item after it, as in memory.
+        let sep_parse = match sep {
+            Some(sep) => {
+                let sep_parser = self.generate_parser_expr(sep, lexical, true);
+                quote_spanned! {span=>
+                    if __sep {
+                        #skip
+                        let mut __s = #sep_parser;
+                        ::winnow::Parser::parse_next(&mut __s, #input)?;
+                    }
+                }
+            }
+            None => quote! {},
+        };
         let item_parser = self.edge(
             quote_spanned! {span=>
                 (|i: &mut #input_ty| #item_inner(i, #(::core::clone::Clone::clone(&#a_names)),*))
@@ -432,9 +450,11 @@ impl Codegen<'_> {
             #[allow(dead_code, non_snake_case, unused_variables, unused_mut)]
             fn #item_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
                 #input: &mut #input_ty,
+                __sep: bool,
                 #(#a_names: #a_types),*
             ) -> ::winnow::Result<#item_ret, ::winnow::error::ErrMode<__WgEr>> {
                 use ::winnow::Parser;
+                #sep_parse
                 #skip
                 let mut __p = #item_parser;
                 ::winnow::Parser::parse_next(&mut __p, #input)
@@ -480,16 +500,38 @@ impl Codegen<'_> {
         } else {
             (quote! {}, quote! {})
         };
+        // `max = N`: the fold takes no item past the N-th.
+        let at_max = match max {
+            Some(m) => quote_spanned! {span=>
+                if pass.item() > #m {
+                    return ::core::result::Result::Ok(false);
+                }
+            },
+            None => quote! {},
+        };
+        // `min = N`: fewer items fail the parse with what the next one
+        // expected, as in memory.
+        let short = if *min > 0 {
+            quote_spanned! {span=>
+                if __n < #min {
+                    return ::core::result::Result::Err(__stream.short());
+                }
+            }
+        } else {
+            quote! {}
+        };
         quote_spanned! {span=>
             let mut __acc = ::core::option::Option::Some((#init)());
             let mut __step = #step_fn(&__acc, #step);
             let mut __n = 0usize;
             while __stream.items(&[#(#rules),*], &mut __n, |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass| {
+                #at_max
+                let __sep = pass.item() > 1;
                 let __v = if pass.diagnose() {
-                    #item_fn::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
+                    #item_fn::<__WgS, ::winnow_grammar::ParseError>(input, __sep, #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 } else {
-                    #item_fn::<__WgS, ::winnow::error::EmptyError>(input, #(#args),*)
+                    #item_fn::<__WgS, ::winnow::error::EmptyError>(input, __sep, #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 };
                 if ::winnow_grammar::rt::stream::commit(input, pass) {
@@ -501,6 +543,7 @@ impl Codegen<'_> {
                 }
             })? {}
             #stopped
+            #short
             let __path = __acc.take().expect("the accumulator is there");
         }
     }

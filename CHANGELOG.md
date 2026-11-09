@@ -23,6 +23,17 @@
   `Rule::is_pub: bool` is now `Rule::vis: syn::Visibility`. SYNTAX.md,
   *Rules*; `tests/visibility_test.rs`, `tests/ui/visibility.rs`.
 
+- **`fold(rule, init, step, sep = p, min = n, max = m)`.** A fold takes a
+  separator between two items and bounds on the number of items, in memory,
+  in place and under `#[stream]` / `#[stream(each)]`. The separator is taken
+  only with the item after it, so a trailing one is left in the input; with
+  fewer than `min` items the fold fails with the next item's error, and a
+  stream that ends short gives the same error at the same offset (new:
+  `rt::fold_bounded`, `rt::fold_in_place_bounded`, `rt::no_sep`,
+  `Pass::item`, `Stream::short`). `max = 0`, `min > max`, a repeated or
+  unknown argument and any of them on `par_fold` are refused where they are
+  written. SYNTAX.md, *fold*.
+
 ### Fixed
 
 - **Generated code names the standard library by full path.** The annotation

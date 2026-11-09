@@ -155,6 +155,12 @@ pub enum ModelPattern {
         step: Box<syn::Expr>,
         /// `par_fold`'s merge, `None` for a plain `fold`. See [`crate::frame`].
         merge: Option<Box<syn::Expr>>,
+        /// `sep = p`: matched between two items, its value dropped.
+        sep: Option<Box<ModelPattern>>,
+        /// `min = n`: the fewest items (default 0).
+        min: usize,
+        /// `max = n`: the most items (default unbounded).
+        max: Option<usize>,
         span: proc_macro2::Span,
     },
     LexicalScope(Box<ModelPattern>, proc_macro2::Span),
@@ -434,6 +440,9 @@ impl From<parser::Pattern> for ModelPattern {
                 init,
                 step,
                 merge,
+                sep,
+                min,
+                max,
                 kw_span,
             } => ModelPattern::Fold {
                 binding,
@@ -441,6 +450,9 @@ impl From<parser::Pattern> for ModelPattern {
                 init,
                 step,
                 merge,
+                sep: sep.map(|s| Box::new((*s).into())),
+                min,
+                max,
                 span: kw_span,
             },
             parser::Pattern::Count {

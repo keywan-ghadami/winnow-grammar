@@ -529,9 +529,13 @@ pub fn idents_of_pattern(p: &ModelPattern, out: &mut HashSet<String>) {
             pattern,
             init,
             step,
+            sep,
             ..
         } => {
             idents_of_pattern(pattern, out);
+            if let Some(sep) = sep {
+                idents_of_pattern(sep, out);
+            }
             idents_of_tokens(&init.to_token_stream(), out);
             idents_of_tokens(&step.to_token_stream(), out);
         }

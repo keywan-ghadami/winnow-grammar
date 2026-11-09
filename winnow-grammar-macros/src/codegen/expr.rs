@@ -251,10 +251,15 @@ pub(crate) fn substitute_pattern(
         | ModelPattern::Peek(inner, _, _)
         | ModelPattern::Not(inner, _)
         | ModelPattern::Count { pattern: inner, .. }
-        | ModelPattern::Fold { pattern: inner, .. }
         | ModelPattern::LexicalScope(inner, _)
         | ModelPattern::SpacedScope(inner, _) => {
             substitute_pattern(inner, subst, type_subst);
+        }
+        ModelPattern::Fold { pattern, sep, .. } => {
+            substitute_pattern(pattern, subst, type_subst);
+            if let Some(sep) = sep {
+                substitute_pattern(sep, subst, type_subst);
+            }
         }
         ModelPattern::Parenthesized(inner, _)
         | ModelPattern::Bracketed(inner, _)
@@ -1828,9 +1833,17 @@ impl<'a> Codegen<'a> {
                 init,
                 step,
                 merge,
+                sep,
+                min,
+                max,
                 ..
             } => {
                 let p = self.generate_parser_expr(pattern, is_lexical, false);
+                let p = if is_lexical {
+                    p
+                } else {
+                    quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p) }
+                };
                 // The fold of a `par_fold` rule leaves a trail for the replay
                 // of a failed fast pass (`rt::entry_framed`).
                 // A step whose accumulator is written `&mut` changes it in
@@ -1842,6 +1855,31 @@ impl<'a> Codegen<'a> {
                         Some(syn::Pat::Type(t)) if matches!(&*t.ty, syn::Type::Reference(r) if r.mutability.is_some())
                     )
                 );
+                // `sep`, `min` and `max` (never on a `par_fold`, which the
+                // parser refuses) take the bounded form.
+                if sep.is_some() || *min > 0 || max.is_some() {
+                    let fold = if in_place {
+                        quote_spanned! {span=> ::winnow_grammar::rt::fold_in_place_bounded }
+                    } else {
+                        quote_spanned! {span=> ::winnow_grammar::rt::fold_bounded }
+                    };
+                    let sep = match sep {
+                        Some(sep) => {
+                            let q = self.generate_parser_expr(sep, is_lexical, true);
+                            if is_lexical {
+                                q
+                            } else {
+                                quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #q) }
+                            }
+                        }
+                        None => quote_spanned! {span=> ::winnow_grammar::rt::no_sep },
+                    };
+                    let max = match max {
+                        Some(m) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
+                        None => quote_spanned! {span=> ::core::option::Option::None },
+                    };
+                    return quote_spanned! {span=> #fold(#min, #max, #sep, #p, #init, #step) };
+                }
                 let fold = match (merge.is_some(), in_place) {
                     (true, false) => {
                         quote_spanned! {span=> ::winnow_grammar::rt::par_fold_recording }
@@ -1854,11 +1892,7 @@ impl<'a> Codegen<'a> {
                         quote_spanned! {span=> ::winnow_grammar::rt::fold_in_place_recording }
                     }
                 };
-                if !is_lexical {
-                    quote_spanned! {span=> #fold(0, ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p), #init, #step) }
-                } else {
-                    quote_spanned! {span=> #fold(0, #p, #init, #step) }
-                }
+                quote_spanned! {span=> #fold(0, #p, #init, #step) }
             }
             ModelPattern::Fail { message, .. } => match message {
                 Some(msg) => quote_spanned! {span=> ::winnow_grammar::rt::fail(#msg) },
