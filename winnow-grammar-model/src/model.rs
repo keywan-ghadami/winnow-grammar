@@ -67,7 +67,9 @@ pub struct Rule {
     /// have started with.
     pub label: Option<String>,
     pub variants: Vec<RuleVariant>,
-    pub is_pub: bool,
+    /// The visibility written before the rule (`pub`, `pub(crate)`, …),
+    /// given to every function generated for it.
+    pub vis: syn::Visibility,
     pub is_lexical: bool,
     pub attrs: Vec<syn::Attribute>,
 }
@@ -288,7 +290,7 @@ impl From<parser::Rule> for Rule {
             return_type_kind,
             label: p.label,
             variants: p.variants.into_iter().map(Into::into).collect(),
-            is_pub: p.is_pub.is_some(),
+            vis: p.vis,
             is_lexical,
             attrs: p.attrs,
         }

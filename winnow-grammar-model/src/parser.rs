@@ -547,7 +547,7 @@ impl ToTokens for RuleParameter {
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub attrs: Vec<Attribute>,
-    pub is_pub: Option<Token![pub]>,
+    pub vis: syn::Visibility,
     pub name: Ident,
     pub generics: Generics,
     pub params: Vec<RuleParameter>,
@@ -562,11 +562,7 @@ impl Parse for Rule {
     fn parse(input: ParseStream) -> Result<Self> {
         let attrs = Attribute::parse_outer(input)?;
 
-        let is_pub = if input.peek(Token![pub]) {
-            Some(input.parse()?)
-        } else {
-            None
-        };
+        let vis: syn::Visibility = input.parse()?;
 
         if input.peek(kw::rule) {
             let _ = input.parse::<kw::rule>()?;
@@ -624,7 +620,7 @@ impl Parse for Rule {
 
         Ok(Rule {
             attrs,
-            is_pub,
+            vis,
             name,
             generics,
             params,
@@ -638,7 +634,7 @@ impl Parse for Rule {
 impl ToTokens for Rule {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let attrs = &self.attrs;
-        let vis = &self.is_pub;
+        let vis = &self.vis;
         let name = &self.name;
         let generics = &self.generics;
         let ret = &self.return_type;

@@ -105,11 +105,7 @@ impl<'a> Codegen<'a> {
             }
         };
 
-        let vis = if rule.is_pub {
-            quote! { pub }
-        } else {
-            quote! {}
-        };
+        let vis = &rule.vis;
 
         let gen_params = &rule.generics.params;
         let gen_where = &rule.generics.where_clause;
@@ -294,11 +290,7 @@ impl<'a> Codegen<'a> {
         let state_bound = self.state_bound();
         let span = Span::mixed_site();
         let rule_name_str = rule.name.to_string();
-        let vis = if rule.is_pub {
-            quote! { pub }
-        } else {
-            quote! {}
-        };
+        let vis = &rule.vis;
         let frames_fn = format_ident!("frames_{}", rule.name, span = span);
 
         let boundary = if let Some(b) = self.frames.frames.get(&rule_name_str) {
@@ -444,11 +436,7 @@ impl<'a> Codegen<'a> {
             quote! { ::winnow_grammar::ParseInput<'_, __WgS> }
         };
         let state_bound = self.state_bound();
-        let vis = if rule.is_pub {
-            quote! { pub }
-        } else {
-            quote! {}
-        };
+        let vis = &rule.vis;
         let ret_type = &rule.return_type;
         let reader_fn = format_ident!("parse_{}_reader", rule.name, span = span);
         let reader_with_fn = format_ident!("parse_{}_reader_with", rule.name, span = span);
