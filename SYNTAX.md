@@ -911,6 +911,38 @@ rule T = "bool"
   and yields the initial accumulator. Bindings inside `rule` are consumed by
   `step` and do not escape to the surrounding action.
 
+  After `step`, a fold takes three named arguments, in any order:
+
+  - **`sep = pattern`**: a separator between two items, `fold(item, init, step,
+    sep = ",")` for `1, 2, 3`. It is taken only together with the item after
+    it, so a trailing separator (`1, 2,`) is left to what follows the fold.
+  - **`min = n`**: at least `n` items. With fewer, the fold fails where the
+    next item should have started, with that item's error.
+  - **`max = n`**: at most `n` items (`n >= 1`, and not below `min`). After the
+    `n`-th item the fold stops, and the rest is left to what follows.
+
+  ```rust
+  # use winnow_grammar::grammar;
+  # fn main() {
+  grammar! {
+      grammar Lists {
+          // One to three numbers, a comma between two.
+          pub list -> Vec<i64> =
+              v:fold(item, Vec::new, |mut v: Vec<i64>, i: i64| { v.push(i); v },
+                     sep = ",", min = 1, max = 3)
+              -> { v }
+
+          item -> i64 = n:i64 -> { n }
+      }
+  }
+  # }
+  ```
+
+  The fold in place takes them too; `par_fold` takes none of them, since a
+  frame is cut between items. Under `#[stream]` and `#[stream(each)]` they work
+  as in memory, and a stream that ends short of `min` fails with the same error
+  at the same place.
+
 ## Frames and parallel parsing
 
 A parser reads its input front to back on one core. For a large input that is

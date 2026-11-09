@@ -94,8 +94,13 @@ fn walk(p: &ModelPattern, k: &mut usize) {
         | ModelPattern::SpacedScope(q, _) => walk(q, k),
         ModelPattern::Bounded { pattern, .. }
         | ModelPattern::Until { pattern, .. }
-        | ModelPattern::Count { pattern, .. }
-        | ModelPattern::Fold { pattern, .. } => walk(pattern, k),
+        | ModelPattern::Count { pattern, .. } => walk(pattern, k),
+        ModelPattern::Fold { pattern, sep, .. } => {
+            walk(pattern, k);
+            if let Some(sep) = sep {
+                walk(sep, k);
+            }
+        }
         ModelPattern::Recover { body, sync, .. } => {
             walk(body, k);
             walk(sync, k);
@@ -161,11 +166,15 @@ pub fn reaches(
             .map(|l| l.at);
         for v in &rule.variants {
             for (i, p) in v.pattern.iter().enumerate() {
-                let p = match p {
-                    ModelPattern::Fold { pattern, .. } if Some(i) == fold_at => &**pattern,
-                    p => p,
+                let (p, sep) = match p {
+                    ModelPattern::Fold { pattern, sep, .. } if Some(i) == fold_at => {
+                        (&**pattern, sep.as_deref())
+                    }
+                    p => (p, None),
                 };
-                if swallows_far(p, &rules, &mut todo) {
+                if swallows_far(p, &rules, &mut todo)
+                    || sep.is_some_and(|s| swallows_far(s, &rules, &mut todo))
+                {
                     return true;
                 }
             }
@@ -193,8 +202,8 @@ fn infallible(p: &ModelPattern) -> bool {
         ModelPattern::Optional(..)
         | ModelPattern::Repeat(..)
         | ModelPattern::Count { .. }
-        | ModelPattern::Fold { .. }
         | ModelPattern::Cut(_) => true,
+        ModelPattern::Fold { min, .. } => *min == 0,
         ModelPattern::Bounded { min, dynamic, .. } => *min == 0 && dynamic.is_none(),
         ModelPattern::SpanBinding(q, _, _)
         | ModelPattern::LexicalScope(q, _)
@@ -240,10 +249,15 @@ fn swallows_far(
         ModelPattern::Optional(q, _) | ModelPattern::Repeat(q, _) | ModelPattern::Plus(q, _) => {
             attempt(q) || swallows_far(q, rules, todo)
         }
-        ModelPattern::Bounded { pattern, .. }
-        | ModelPattern::Count { pattern, .. }
-        | ModelPattern::Fold { pattern, .. } => {
+        ModelPattern::Bounded { pattern, .. } | ModelPattern::Count { pattern, .. } => {
             attempt(pattern) || swallows_far(pattern, rules, todo)
+        }
+        ModelPattern::Fold { pattern, sep, .. } => {
+            attempt(pattern)
+                || swallows_far(pattern, rules, todo)
+                || sep
+                    .as_deref()
+                    .is_some_and(|s| attempt(s) || swallows_far(s, rules, todo))
         }
         ModelPattern::Recover { .. } => true,
         ModelPattern::RuleCall {

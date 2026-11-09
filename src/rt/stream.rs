@@ -211,12 +211,21 @@ pub struct Pass {
     last: bool,
     /// A taken item parsed again, for what it records: not taken again.
     replay: bool,
+    /// The number of the fold's item being parsed, from 1; 0 outside a fold.
+    item: usize,
 }
 
 impl Pass {
     /// The diagnosing pass, with `ParseError`; otherwise the fast one.
     pub fn diagnose(&self) -> bool {
         self.diagnose
+    }
+
+    /// The number of the fold's item this step parses, from 1: a separator
+    /// comes before every item but the first, and `max = N` ends the fold
+    /// before item N + 1.
+    pub fn item(&self) -> usize {
+        self.item
     }
 }
 
@@ -462,6 +471,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             diagnose: mode == Diagnose::Eager,
             last,
             replay: false,
+            item: 0,
         };
         let origin = self.base + self.pos;
         let window = self.visible - self.pos;
@@ -511,7 +521,11 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                     input.state.reach = usize::MAX;
                 }
                 let cp = input.checkpoint();
-                let r = f(&mut input, &pass);
+                let here = Pass {
+                    item: *n + 1,
+                    ..pass
+                };
+                let r = f(&mut input, &here);
                 if input.state.touched && !last {
                     input.reset(&cp);
                     if let Some(s) = snapshot {
@@ -594,6 +608,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             diagnose: true,
             last,
             replay: false,
+            item: 0,
         };
         match stop {
             Stop::Refill => {
@@ -649,6 +664,36 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                     Err(fail) => Err(fail.error().unwrap_or_else(ParseError::undiagnosed)),
                 }
             }
+        }
+    }
+
+    /// A fold that took fewer items than its `min = N`: it fails with what
+    /// its next item expected - recorded when the items ended - as the fold
+    /// in memory does.
+    pub fn short(&mut self) -> ParseError {
+        if self.context().diagnose == Diagnose::Off {
+            return ParseError::undiagnosed();
+        }
+        let e = match &self.furthest {
+            Some(f) => f.clone(),
+            None => {
+                let ctx = self.ctx.take().expect("the context is back between steps");
+                let (e, ctx) = {
+                    let input = Input {
+                        input: winnow::stream::LocatingSlice::new(K::view(
+                            &self.buf.bytes()[self.pos..self.visible],
+                        )),
+                        state: ctx,
+                    };
+                    (ParseError::from_stream(&input), input.state)
+                };
+                self.ctx = Some(ctx);
+                self.absolute(e)
+            }
+        };
+        match self.finished(Err::<(), _>(e)) {
+            Err(e) => e,
+            Ok(()) => unreachable!("an error stays one"),
         }
     }
 
@@ -758,11 +803,13 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 diagnose: mode == Diagnose::Eager,
                 last,
                 replay: false,
+                item: 0,
             };
             let diagnose = Pass {
                 diagnose: true,
                 last,
                 replay: false,
+                item: 0,
             };
             let depth = self.cut_depth();
             let (r, touched) = self.attempt(self.pos, rules, f, first, item);
@@ -866,6 +913,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             diagnose: true,
             last,
             replay: true,
+            item: 0,
         };
         let (_, touched) = self.attempt(self.pos, rules, f, pass, None);
         if touched && !last {
@@ -907,6 +955,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             diagnose: true,
             last,
             replay: true,
+            item: 0,
         };
         self.prune();
         let earlier: Vec<Reaching> = self
@@ -961,6 +1010,10 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 &self.buf.bytes()[start..self.visible],
             )),
             state: ctx,
+        };
+        let pass = Pass {
+            item: item.unwrap_or(pass.item),
+            ..pass
         };
         let r = f(&mut input, &pass);
         let consumed = input.current_token_start();

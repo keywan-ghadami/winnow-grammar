@@ -141,8 +141,13 @@ fn resolve_value_arguments(rules: &mut [Rule], extern_rules: &[ExternRule]) -> R
             | Pattern::SpacedScope(p, _) => walk(p, typed)?,
             Pattern::Bounded { pattern, .. }
             | Pattern::Until { pattern, .. }
-            | Pattern::Count { pattern, .. }
-            | Pattern::Fold { pattern, .. } => walk(pattern, typed)?,
+            | Pattern::Count { pattern, .. } => walk(pattern, typed)?,
+            Pattern::Fold { pattern, sep, .. } => {
+                walk(pattern, typed)?;
+                if let Some(sep) = sep {
+                    walk(sep, typed)?;
+                }
+            }
             Pattern::Recover { body, sync, .. } => {
                 walk(body, typed)?;
                 walk(sync, typed)?;
@@ -941,6 +946,13 @@ pub enum Pattern {
         /// `par_fold(rule, init, step, merge)`: how two accumulators combine.
         /// `None` for a plain `fold`.
         merge: Option<Box<syn::Expr>>,
+        /// `fold(rule, init, step, sep = p)`: a pattern matched between two
+        /// items. Its value is dropped.
+        sep: Option<Box<Pattern>>,
+        /// `min = n`: the fewest items the fold accepts (default 0).
+        min: usize,
+        /// `max = n`: the most items the fold takes (default unbounded).
+        max: Option<usize>,
         /// The span of the keyword, `fold` or `par_fold`.
         kw_span: proc_macro2::Span,
     },
@@ -1553,6 +1565,9 @@ impl ToTokens for Pattern {
                 init,
                 step,
                 merge,
+                sep,
+                min,
+                max,
                 ..
             } => {
                 if let Some(b) = binding {
@@ -1573,6 +1588,26 @@ impl ToTokens for Pattern {
                     if let Some(m) = merge {
                         token::Comma::default().to_tokens(t);
                         m.to_tokens(t);
+                    }
+                    if let Some(sep) = sep {
+                        token::Comma::default().to_tokens(t);
+                        Ident::new("sep", proc_macro2::Span::call_site()).to_tokens(t);
+                        token::Eq::default().to_tokens(t);
+                        sep.to_tokens(t);
+                    }
+                    if *min > 0 {
+                        token::Comma::default().to_tokens(t);
+                        Ident::new("min", proc_macro2::Span::call_site()).to_tokens(t);
+                        token::Eq::default().to_tokens(t);
+                        syn::LitInt::new(&min.to_string(), proc_macro2::Span::call_site())
+                            .to_tokens(t);
+                    }
+                    if let Some(m) = max {
+                        token::Comma::default().to_tokens(t);
+                        Ident::new("max", proc_macro2::Span::call_site()).to_tokens(t);
+                        token::Eq::default().to_tokens(t);
+                        syn::LitInt::new(&m.to_string(), proc_macro2::Span::call_site())
+                            .to_tokens(t);
                     }
                 });
             }
@@ -1807,12 +1842,75 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
         } else {
             None
         };
+        let (mut sep, mut min, mut max) = (None, None, None);
+        while content.peek(Token![,]) {
+            let _ = content.parse::<Token![,]>()?;
+            let name: Ident = content.parse().map_err(|e| {
+                syn::Error::new(
+                    e.span(),
+                    "after `step`, a fold takes only the named arguments `sep = pattern`, \
+                     `min = n` and `max = n`",
+                )
+            })?;
+            if parallel {
+                return Err(syn::Error::new(
+                    name.span(),
+                    "`par_fold` takes no `sep`, `min` or `max`: a frame is cut between items, \
+                     which a separator or a count would have to cross",
+                ));
+            }
+            let _ = content.parse::<Token![=]>()?;
+            match name.to_string().as_str() {
+                "sep" if sep.is_none() => sep = Some(Box::new(content.parse::<Pattern>()?)),
+                "min" if min.is_none() => {
+                    min = Some(content.parse::<syn::LitInt>()?.base10_parse::<usize>()?)
+                }
+                "max" if max.is_none() => {
+                    let lit = content.parse::<syn::LitInt>()?;
+                    let n: usize = lit.base10_parse()?;
+                    if n == 0 {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "`max = 0` matches nothing; a fold takes at least one item",
+                        ));
+                    }
+                    max = Some(n);
+                }
+                "sep" | "min" | "max" => {
+                    return Err(syn::Error::new(
+                        name.span(),
+                        format!("`{name}` is given twice"),
+                    ));
+                }
+                _ => {
+                    return Err(syn::Error::new(
+                        name.span(),
+                        format!(
+                            "unknown fold argument `{name}`: a fold takes `sep = pattern`, \
+                             `min = n` and `max = n`"
+                        ),
+                    ));
+                }
+            }
+        }
+        let min = min.unwrap_or(0);
+        if let Some(m) = max {
+            if min > m {
+                return Err(syn::Error::new(
+                    kw_span,
+                    format!("this fold's `min = {min}` is above its `max = {m}`"),
+                ));
+            }
+        }
         Ok(Pattern::Fold {
             binding,
             pattern: Box::new(pattern),
             init,
             step,
             merge,
+            sep,
+            min,
+            max,
             kw_span,
         })
     } else if input.peek(kw::count) {

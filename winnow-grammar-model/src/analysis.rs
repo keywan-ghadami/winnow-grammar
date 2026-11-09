@@ -152,8 +152,14 @@ fn collect_from_patterns(patterns: &[ModelPattern], kws: &mut HashSet<String>) {
             ModelPattern::Until { pattern, .. } => {
                 collect_from_patterns(std::slice::from_ref(pattern), kws);
             }
-            ModelPattern::Count { pattern, .. } | ModelPattern::Fold { pattern, .. } => {
+            ModelPattern::Count { pattern, .. } => {
                 collect_from_patterns(std::slice::from_ref(pattern), kws);
+            }
+            ModelPattern::Fold { pattern, sep, .. } => {
+                collect_from_patterns(std::slice::from_ref(pattern), kws);
+                if let Some(sep) = sep {
+                    collect_from_patterns(std::slice::from_ref(sep), kws);
+                }
             }
             ModelPattern::LexicalScope(pattern, _) | ModelPattern::SpacedScope(pattern, _) => {
                 collect_from_patterns(std::slice::from_ref(pattern), kws);
@@ -463,8 +469,8 @@ pub fn is_nullable(pattern: &ModelPattern) -> bool {
         ModelPattern::Optional(_, _) => true,
         ModelPattern::Repeat(_, _) => true,
         // `fold` is a zero-or-more repetition: it succeeds on empty input,
-        // returning the initial accumulator.
-        ModelPattern::Fold { .. } => true,
+        // returning the initial accumulator - unless `min = n` asks for items.
+        ModelPattern::Fold { pattern, min, .. } => *min == 0 || is_nullable(pattern),
         ModelPattern::Plus(inner, _) => is_nullable(inner),
         // `p{0,m}` matches nothing at all; above zero it is nullable only if
         // its element is.
@@ -565,13 +571,12 @@ fn is_pattern_nullable_precise(pattern: &ModelPattern, nullable_rules: &HashSet<
             .any(|(seq, _, _)| is_sequence_nullable(seq, nullable_rules)),
         ModelPattern::Optional(_, _)
         | ModelPattern::Repeat(_, _)
-        | ModelPattern::Fold { .. }
         | ModelPattern::Recover { .. }
         | ModelPattern::Peek(_, _, _)
         | ModelPattern::Not(_, _)
         | ModelPattern::Until { .. } => true, // Peek/Not consume nothing
         ModelPattern::Plus(inner, _) => is_pattern_nullable_precise(inner, nullable_rules),
-        ModelPattern::Bounded { pattern, min, .. } => {
+        ModelPattern::Bounded { pattern, min, .. } | ModelPattern::Fold { pattern, min, .. } => {
             *min == 0 || is_pattern_nullable_precise(pattern, nullable_rules)
         }
         ModelPattern::SpanBinding(inner, _, _) => {
@@ -689,8 +694,11 @@ fn collect_nullable_deps(
             ModelPattern::Optional(inner, _) | ModelPattern::Repeat(inner, _) => {
                 collect_nullable_deps(std::slice::from_ref(inner), nullable_rules, deps);
             }
-            ModelPattern::Fold { pattern, .. } => {
+            ModelPattern::Fold { pattern, min, .. } => {
                 collect_nullable_deps(std::slice::from_ref(pattern), nullable_rules, deps);
+                if *min > 0 && !is_pattern_nullable_precise(pattern, nullable_rules) {
+                    return;
+                }
             }
             ModelPattern::Plus(inner, _) => {
                 collect_nullable_deps(std::slice::from_ref(inner), nullable_rules, deps);
@@ -831,11 +839,16 @@ fn collect_called_rules<F: FnMut(String)>(patterns: &[ModelPattern], cb: &mut F)
             | ModelPattern::Not(inner, _)
             | ModelPattern::Until { pattern: inner, .. }
             | ModelPattern::Count { pattern: inner, .. }
-            | ModelPattern::Fold { pattern: inner, .. }
             | ModelPattern::Bounded { pattern: inner, .. }
             | ModelPattern::LexicalScope(inner, _)
             | ModelPattern::SpacedScope(inner, _) => {
                 collect_called_rules(std::slice::from_ref(inner), cb);
+            }
+            ModelPattern::Fold { pattern, sep, .. } => {
+                collect_called_rules(std::slice::from_ref(pattern), cb);
+                if let Some(sep) = sep {
+                    collect_called_rules(std::slice::from_ref(sep), cb);
+                }
             }
             ModelPattern::Recover { body, sync, .. } => {
                 collect_called_rules(std::slice::from_ref(body), cb);
@@ -1054,7 +1067,18 @@ fn collect_first_from_sequence(
                     acc,
                 );
             }
-            ModelPattern::Count { pattern, .. } | ModelPattern::Fold { pattern, .. } => {
+            ModelPattern::Fold { pattern, min, .. } => {
+                collect_first_from_sequence(
+                    std::slice::from_ref(pattern),
+                    first_sets,
+                    nullable_rules,
+                    acc,
+                );
+                if *min > 0 && !is_pattern_nullable_precise(pattern, nullable_rules) {
+                    return;
+                }
+            }
+            ModelPattern::Count { pattern, .. } => {
                 collect_first_from_sequence(
                     std::slice::from_ref(pattern),
                     first_sets,

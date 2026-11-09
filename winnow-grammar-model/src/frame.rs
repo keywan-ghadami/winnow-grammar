@@ -294,8 +294,10 @@ fn uses_frame_end(rule: &Rule, user_rules: &HashSet<String>) -> bool {
             | ModelPattern::SpacedScope(inner, _) => walk(inner),
             ModelPattern::Until { pattern, .. }
             | ModelPattern::Count { pattern, .. }
-            | ModelPattern::Fold { pattern, .. }
             | ModelPattern::Bounded { pattern, .. } => walk(pattern),
+            ModelPattern::Fold { pattern, sep, .. } => {
+                walk(pattern) || sep.as_deref().is_some_and(walk)
+            }
             ModelPattern::Recover { body, sync, .. } => walk(body) || walk(sync),
             ModelPattern::Cut(_)
             | ModelPattern::Fail { .. }
@@ -688,14 +690,21 @@ fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::
                 check_pattern(inner, lexical, rule, cx)
             }
         }
-        ModelPattern::Bounded { pattern, .. }
-        | ModelPattern::Count { pattern, .. }
-        | ModelPattern::Fold { pattern, .. } => check_sequence(
-            &[(**pattern).clone(), (**pattern).clone()],
-            lexical,
-            rule,
-            cx,
-        ),
+        ModelPattern::Bounded { pattern, .. } | ModelPattern::Count { pattern, .. } => {
+            check_sequence(
+                &[(**pattern).clone(), (**pattern).clone()],
+                lexical,
+                rule,
+                cx,
+            )
+        }
+        // Two items in a row, with the separator between them when there is one.
+        ModelPattern::Fold { pattern, sep, .. } => {
+            let mut seq = vec![(**pattern).clone()];
+            seq.extend(sep.as_deref().cloned());
+            seq.push((**pattern).clone());
+            check_sequence(&seq, lexical, rule, cx)
+        }
         ModelPattern::LexicalScope(inner, _) => check_pattern(inner, true, rule, cx),
         ModelPattern::SpacedScope(inner, _) => check_pattern(inner, false, rule, cx),
     }
@@ -860,8 +869,13 @@ fn for_each_child(p: &ModelPattern, f: &mut impl FnMut(&ModelPattern)) {
         | ModelPattern::SpacedScope(inner, _) => f(inner),
         ModelPattern::Until { pattern, .. }
         | ModelPattern::Count { pattern, .. }
-        | ModelPattern::Fold { pattern, .. }
         | ModelPattern::Bounded { pattern, .. } => f(pattern),
+        ModelPattern::Fold { pattern, sep, .. } => {
+            f(pattern);
+            if let Some(sep) = sep {
+                f(sep);
+            }
+        }
         ModelPattern::Recover { body, sync, .. } => {
             f(body);
             f(sync);
@@ -917,8 +931,13 @@ fn collect_calls_in(p: &ModelPattern, user_rules: &HashSet<String>, out: &mut Ve
         | ModelPattern::SpacedScope(inner, _) => collect_calls_in(inner, user_rules, out),
         ModelPattern::Until { pattern, .. }
         | ModelPattern::Count { pattern, .. }
-        | ModelPattern::Fold { pattern, .. }
         | ModelPattern::Bounded { pattern, .. } => collect_calls_in(pattern, user_rules, out),
+        ModelPattern::Fold { pattern, sep, .. } => {
+            collect_calls_in(pattern, user_rules, out);
+            if let Some(sep) = sep {
+                collect_calls_in(sep, user_rules, out);
+            }
+        }
         ModelPattern::Recover { body, sync, .. } => {
             collect_calls_in(body, user_rules, out);
             collect_calls_in(sync, user_rules, out);

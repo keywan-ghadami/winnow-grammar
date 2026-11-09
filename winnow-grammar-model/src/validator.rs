@@ -291,8 +291,25 @@ fn validate_pattern(
         ModelPattern::Count { pattern: inner, .. } => {
             validate_pattern(inner, all_defs, params)?;
         }
-        ModelPattern::Fold { pattern: inner, .. } => {
+        ModelPattern::Fold {
+            pattern: inner,
+            sep,
+            ..
+        } => {
             validate_pattern(inner, all_defs, params)?;
+            if let Some(sep) = sep {
+                validate_pattern(sep, all_defs, params)?;
+                // The separator's value is dropped and `step` sees only the
+                // item, so a name bound in it would name nothing.
+                if let Some(b) =
+                    crate::analysis::collect_bindings(std::slice::from_ref(&**sep)).first()
+                {
+                    return Err(syn::Error::new(
+                        b.span(),
+                        "a fold's `sep` binds no names: its value is dropped",
+                    ));
+                }
+            }
         }
         ModelPattern::Not(inner, _) => {
             validate_pattern(inner, all_defs, params)?;

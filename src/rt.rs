@@ -1326,8 +1326,15 @@ where
 /// step, because the by-value step cannot be expressed through an in-place
 /// one without moving the accumulator - the very cost the in-place form is
 /// there to avoid.
+///
+/// Every item after the first is preceded by `$sep` (a fold without `sep =`
+/// passes [`no_sep`], which matches nothing and is inlined away). A separator
+/// and the item after it stand or fall together: if either backtracks, the
+/// fold ends before the separator, so a trailing one is left to whatever
+/// follows. Fewer than `$min` items is the failure of item `seen + 1`; the
+/// fold stops after `$cap` items.
 macro_rules! fold_loop {
-    ($input:ident, $min:ident, $p:ident, $init:ident, $tracked:ident, |$acc:ident, $v:ident| $step:expr) => {{
+    ($input:ident, $min:ident, $cap:ident, $sep:ident, $p:ident, $init:ident, $tracked:ident, |$acc:ident, $v:ident| $step:expr) => {{
         let mut $acc = $init();
         let mut seen = 0usize;
         let base = if $tracked { $input.state.fold.base } else { 0 };
@@ -1338,10 +1345,18 @@ macro_rules! fold_loop {
                 input.state.fold.at = at;
             }
         };
-        loop {
+        while seen < $cap {
             let cp = $input.checkpoint();
             let start = $input.current_token_start();
-            match $p.parse_next($input) {
+            let item = if seen == 0 {
+                $p.parse_next($input)
+            } else {
+                match $sep.parse_next($input) {
+                    Ok(_) => $p.parse_next($input),
+                    Err(e) => Err(e),
+                }
+            };
+            match item {
                 Ok($v) => {
                     // Zero-progress guard: otherwise the loop spins forever
                     // when the element matches without consuming anything.
@@ -1373,6 +1388,13 @@ macro_rules! fold_loop {
     }};
 }
 
+/// The separator of a fold written without `sep =`: it matches the empty
+/// input, so the items follow each other directly.
+#[inline(always)]
+pub fn no_sep<B: Slice, S, E>(_: &mut Input<B, S>) -> Result<(), ErrMode<E>> {
+    Ok(())
+}
+
 fn fold_impl<'a, B: Slice, S, O, Acc, P, I, F, E>(
     min: usize,
     mut p: P,
@@ -1387,7 +1409,12 @@ where
     F: FnMut(Acc, O) -> Acc,
     E: RtError<'a, S, B>,
 {
-    move |input| fold_loop!(input, min, p, init, tracked, |acc, v| acc = step(acc, v))
+    let cap = usize::MAX;
+    let mut sep = no_sep::<B, S, E>;
+    move |input| {
+        fold_loop!(input, min, cap, sep, p, init, tracked, |acc, v| acc =
+            step(acc, v))
+    }
 }
 
 fn fold_in_place_impl<'a, B: Slice, S, O, Acc, P, I, F, E>(
@@ -1404,7 +1431,67 @@ where
     F: FnMut(&mut Acc, O),
     E: RtError<'a, S, B>,
 {
-    move |input| fold_loop!(input, min, p, init, tracked, |acc, v| step(&mut acc, v))
+    let cap = usize::MAX;
+    let mut sep = no_sep::<B, S, E>;
+    move |input| {
+        fold_loop!(input, min, cap, sep, p, init, tracked, |acc, v| step(
+            &mut acc, v
+        ))
+    }
+}
+
+/// `fold(item, init, step, sep = …, min = …, max = …)`: [`fold_recording`]
+/// with a separator between the items (pass [`no_sep`] for none), at least
+/// `min` items and at most `max`. A separator is consumed only together with
+/// the item after it.
+pub fn fold_bounded<'a, B: Slice, S, O, SO, Acc, Q, P, I, F, E>(
+    min: usize,
+    max: Option<usize>,
+    mut sep: Q,
+    mut p: P,
+    mut init: I,
+    mut step: F,
+) -> impl FnMut(&mut Input<B, S>) -> Result<Acc, ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    Q: Parser<Input<B, S>, SO, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
+    I: FnMut() -> Acc,
+    F: FnMut(Acc, O) -> Acc,
+    E: RtError<'a, S, B>,
+{
+    let cap = max.unwrap_or(usize::MAX);
+    let tracked = false;
+    move |input| {
+        fold_loop!(input, min, cap, sep, p, init, tracked, |acc, v| acc =
+            step(acc, v))
+    }
+}
+
+/// [`fold_bounded`] with an in-place step, as [`fold_in_place_recording`].
+pub fn fold_in_place_bounded<'a, B: Slice, S, O, SO, Acc, Q, P, I, F, E>(
+    min: usize,
+    max: Option<usize>,
+    mut sep: Q,
+    mut p: P,
+    mut init: I,
+    mut step: F,
+) -> impl FnMut(&mut Input<B, S>) -> Result<Acc, ErrMode<E>>
+where
+    S: Clone + std::fmt::Debug,
+    Q: Parser<Input<B, S>, SO, ErrMode<E>>,
+    P: Parser<Input<B, S>, O, ErrMode<E>>,
+    I: FnMut() -> Acc,
+    F: FnMut(&mut Acc, O),
+    E: RtError<'a, S, B>,
+{
+    let cap = max.unwrap_or(usize::MAX);
+    let tracked = false;
+    move |input| {
+        fold_loop!(input, min, cap, sep, p, init, tracked, |acc, v| step(
+            &mut acc, v
+        ))
+    }
 }
 
 /// A labelled alternative (`# "…"`). If it fails at its starting position,
