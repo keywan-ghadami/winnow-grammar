@@ -42,11 +42,14 @@
   only when there is a separator.
 
 - **Computed fold bounds: `fold(..., min = expr, max = expr)`.** `min` and
-  `max` take a `usize` expression as well as a literal, as the bounds of
-  `x{lo, hi}` do (ADR 26 D3): a value bound before the fold or a rule
-  parameter, read where the parser reaches it. A computed `min` above the
-  `max` fails the fold (in memory a backtrack, under `#[stream]` the fold's
-  short error). Works in memory, in place and under `#[stream]`. The model's
+  `max` take an expression of any integer type as well as a literal, as the
+  bounds of `x{lo, hi}` do (ADR 26 D3): over a value bound before the fold or
+  a rule parameter, evaluated once where the parser reaches it, and read as a
+  repetition bound is (a bound below zero is below every count). Where no
+  count fits - a computed `max` below zero or below the `min` - the fold fails
+  where it stands (in memory a backtrack, under `#[stream]` the fold's short
+  error, with the same offset and message); a computed `max = 0` takes no
+  item. Works in memory, in place and under `#[stream]`. The model's
   `Pattern::Fold` and `ModelPattern::Fold` gain `computed:
   Option<Box<FoldBounds>>`. `tests/fold_computed_bounds_test.rs`.
 

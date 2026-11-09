@@ -890,9 +890,10 @@ rule T = "bool"
   rather than merely unexpected here, and that is fatal by design.
 - **`par_fold(rule, init, step, merge)`**: `fold` plus a merge, over a `#[frame]`
   rule — see **Frames and parallel parsing** below.
-- **`fold(rule, init, step)`**: Repeats `rule` zero or more times, threading an
-  accumulator instead of collecting. `init` is called once to build the starting
-  value; `step` receives `(accumulator, item)` and returns the next accumulator.
+- **`fold(rule, init, step)`**: Repeats `rule` zero or more times (bounded by
+  `min` and `max`, below), threading an accumulator instead of collecting.
+  `init` is called once to build the starting value; `step` receives
+  `(accumulator, item)` and returns the next accumulator.
 
   Use it wherever `rule*` would build a `Vec` you only intend to reduce — the
   collection is the memory cost on large inputs, not the parse. A data file with
@@ -915,9 +916,9 @@ rule T = "bool"
   # }
   ```
 
-  Like `rule*`, a fold matches zero occurrences, so it succeeds on empty input
-  and yields the initial accumulator. Bindings inside `rule` are consumed by
-  `step` and do not escape to the surrounding action.
+  Like `rule*`, a fold without `min` matches zero occurrences, so it succeeds
+  on empty input and yields the initial accumulator. Bindings inside `rule`
+  are consumed by `step` and do not escape to the surrounding action.
 
   After `step`, a fold takes three named arguments, in any order:
 
@@ -926,14 +927,22 @@ rule T = "bool"
     it, so a trailing separator (`1, 2,`) is left to what follows the fold.
   - **`min = n`**: at least `n` items. With fewer, the fold fails where the
     next item should have started, with that item's error.
-  - **`max = n`**: at most `n` items (`n >= 1`, and not below `min`). After the
-    `n`-th item the fold stops, and the rest is left to what follows.
+  - **`max = n`**: at most `n` items. After the `n`-th item the fold stops,
+    and the rest is left to what follows.
 
-  `min` and `max` also take an expression of type `usize`, read where the
-  parser reaches the fold: a value bound before it or a rule parameter, as in
-  `n:usize ":" v:fold(item, init, step, min = n, max = n)` for a counted list.
-  A computed `min` above the `max` makes the fold fail; a literal one is
-  refused where it is written.
+  `min` and `max` also take a computed bound: a Rust expression over a value
+  (a binding written earlier in the same sequence, or a rule parameter - see
+  *Values: arguments, bounds and guards*), of any integer type, as the bounds
+  of `x{lo, hi}` take it. A counted list is
+  `n:usize ":" v:fold(item, init, step, min = n, max = n)`.
+  A computed bound is evaluated once, where the parser reaches the fold, and
+  read as a repetition bound is: the fold takes `k` items with
+  `min <= k <= max`, and a bound below zero is below every `k`. So a computed
+  `min` below zero is no minimum, a computed `max = 0` takes no item, and a
+  computed `max` below zero or below the `min` - computed or literal - lets no
+  `k` through: the fold fails where it stands, as a backtrack, so the next
+  alternative is tried. With both sides literal, `max = 0` and a `min` above
+  the `max` are refused where they are written.
 
   ```rust
   # use winnow_grammar::grammar;
