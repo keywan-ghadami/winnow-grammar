@@ -161,6 +161,9 @@ pub enum ModelPattern {
         min: usize,
         /// `max = n`: the most items (default unbounded).
         max: Option<usize>,
+        /// `min = expr` / `max = expr`: the computed sides; see
+        /// `parser::Pattern::Fold`.
+        computed: Option<Box<crate::parser::FoldBounds>>,
         span: proc_macro2::Span,
     },
     LexicalScope(Box<ModelPattern>, proc_macro2::Span),
@@ -443,6 +446,7 @@ impl From<parser::Pattern> for ModelPattern {
                 sep,
                 min,
                 max,
+                computed,
                 kw_span,
             } => ModelPattern::Fold {
                 binding,
@@ -453,6 +457,7 @@ impl From<parser::Pattern> for ModelPattern {
                 sep: sep.map(|s| Box::new((*s).into())),
                 min,
                 max,
+                computed,
                 span: kw_span,
             },
             parser::Pattern::Count {

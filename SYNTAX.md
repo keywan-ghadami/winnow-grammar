@@ -929,6 +929,12 @@ rule T = "bool"
   - **`max = n`**: at most `n` items (`n >= 1`, and not below `min`). After the
     `n`-th item the fold stops, and the rest is left to what follows.
 
+  `min` and `max` also take an expression of type `usize`, read where the
+  parser reaches the fold: a value bound before it or a rule parameter, as in
+  `n:usize ":" v:fold(item, init, step, min = n, max = n)` for a counted list.
+  A computed `min` above the `max` makes the fold fail; a literal one is
+  refused where it is written.
+
   ```rust
   # use winnow_grammar::grammar;
   # fn main() {

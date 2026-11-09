@@ -41,6 +41,15 @@
   loop, and the item functions of a streamed fold take the separator flag
   only when there is a separator.
 
+- **Computed fold bounds: `fold(..., min = expr, max = expr)`.** `min` and
+  `max` take a `usize` expression as well as a literal, as the bounds of
+  `x{lo, hi}` do (ADR 26 D3): a value bound before the fold or a rule
+  parameter, read where the parser reaches it. A computed `min` above the
+  `max` fails the fold (in memory a backtrack, under `#[stream]` the fold's
+  short error). Works in memory, in place and under `#[stream]`. The model's
+  `Pattern::Fold` and `ModelPattern::Fold` gain `computed:
+  Option<Box<FoldBounds>>`. `tests/fold_computed_bounds_test.rs`.
+
 ### Fixed
 
 - **Generated code names the standard library by full path.** The annotation
