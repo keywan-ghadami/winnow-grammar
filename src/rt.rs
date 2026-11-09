@@ -1327,16 +1327,37 @@ where
 /// one without moving the accumulator - the very cost the in-place form is
 /// there to avoid.
 ///
-/// Every item after the first is preceded by `$sep` (a fold without `sep =`
-/// passes [`no_sep`], which matches nothing and is inlined away). A separator
-/// and the item after it stand or fall together: if either backtracks, the
-/// fold ends before the separator, so a trailing one is left to whatever
-/// follows. Fewer than `$min` items is the failure of item `seen + 1`; the
-/// fold stops after `$cap` items.
+/// Without `$cap` and `$sep` the plain fold: a loop that parses one item
+/// after the other. With them, every item after the first is preceded by
+/// `$sep`; a separator and the item after it stand or fall together: if
+/// either backtracks, the fold ends before the separator, so a trailing one
+/// is left to whatever follows. The fold stops after `$cap` items. Fewer
+/// than `$min` items is the failure of item `seen + 1`.
+///
+/// Two arms and not one with [`no_sep`] and `usize::MAX` for the plain fold:
+/// the separator's branch, even folded away, costs the plain fold 2
+/// instructions per item and the fold of a `par_fold` 6 (callgrind,
+/// `examples/stream_profile.rs`).
 macro_rules! fold_loop {
-    ($input:ident, $min:ident, $cap:ident, $sep:ident, $p:ident, $init:ident, $tracked:ident, |$acc:ident, $v:ident| $step:expr) => {{
+    ($input:ident, $min:ident, $p:ident, $init:ident, $tracked:ident, |$acc:ident, $v:ident| $step:expr) => {
+        fold_loop!(@body $input, $min, $init, $tracked, |$acc, $v| $step, seen, [loop], $p.parse_next($input))
+    };
+    ($input:ident, $min:ident, $cap:ident, $sep:ident, $p:ident, $init:ident, $tracked:ident, |$acc:ident, $v:ident| $step:expr) => {
+        fold_loop!(@body $input, $min, $init, $tracked, |$acc, $v| $step, seen, [while seen < $cap], {
+            let sep = if seen == 0 {
+                Ok(())
+            } else {
+                $sep.parse_next($input).map(|_| ())
+            };
+            match sep {
+                Ok(()) => $p.parse_next($input),
+                Err(e) => Err(e),
+            }
+        })
+    };
+    (@body $input:ident, $min:ident, $init:ident, $tracked:ident, |$acc:ident, $v:ident| $step:expr, $seen:ident, [$($head:tt)*], $item:expr) => {{
         let mut $acc = $init();
-        let mut seen = 0usize;
+        let mut $seen = 0usize;
         let base = if $tracked { $input.state.fold.base } else { 0 };
         // Where the fold stopped, for the replay - see `FoldProgress`.
         let stopped = |input: &mut Input<B, S>, seen: usize, at: usize| {
@@ -1345,33 +1366,26 @@ macro_rules! fold_loop {
                 input.state.fold.at = at;
             }
         };
-        while seen < $cap {
+        $($head)* {
             let cp = $input.checkpoint();
             let start = $input.current_token_start();
-            let item = if seen == 0 {
-                $p.parse_next($input)
-            } else {
-                match $sep.parse_next($input) {
-                    Ok(_) => $p.parse_next($input),
-                    Err(e) => Err(e),
-                }
-            };
+            let item = $item;
             match item {
                 Ok($v) => {
                     // Zero-progress guard: otherwise the loop spins forever
                     // when the element matches without consuming anything.
                     if $input.current_token_start() == start {
                         $input.reset(&cp);
-                        stopped($input, seen, start);
+                        stopped($input, $seen, start);
                         break;
                     }
                     $step;
-                    seen += 1;
+                    $seen += 1;
                 }
                 Err(ErrMode::Backtrack(e)) => {
-                    let e = e.item(base + seen + 1);
-                    stopped($input, seen, start);
-                    if seen < $min {
+                    let e = e.item(base + $seen + 1);
+                    stopped($input, $seen, start);
+                    if $seen < $min {
                         return Err(ErrMode::Backtrack(e));
                     }
                     e.record(&mut $input.state, start);
@@ -1379,7 +1393,7 @@ macro_rules! fold_loop {
                     break;
                 }
                 Err(e) => {
-                    stopped($input, seen, start);
+                    stopped($input, $seen, start);
                     return Err(e);
                 }
             }
@@ -1409,12 +1423,7 @@ where
     F: FnMut(Acc, O) -> Acc,
     E: RtError<'a, S, B>,
 {
-    let cap = usize::MAX;
-    let mut sep = no_sep::<B, S, E>;
-    move |input| {
-        fold_loop!(input, min, cap, sep, p, init, tracked, |acc, v| acc =
-            step(acc, v))
-    }
+    move |input| fold_loop!(input, min, p, init, tracked, |acc, v| acc = step(acc, v))
 }
 
 fn fold_in_place_impl<'a, B: Slice, S, O, Acc, P, I, F, E>(
@@ -1431,13 +1440,7 @@ where
     F: FnMut(&mut Acc, O),
     E: RtError<'a, S, B>,
 {
-    let cap = usize::MAX;
-    let mut sep = no_sep::<B, S, E>;
-    move |input| {
-        fold_loop!(input, min, cap, sep, p, init, tracked, |acc, v| step(
-            &mut acc, v
-        ))
-    }
+    move |input| fold_loop!(input, min, p, init, tracked, |acc, v| step(&mut acc, v))
 }
 
 /// `fold(item, init, step, sep = …, min = …, max = …)`: [`fold_recording`]

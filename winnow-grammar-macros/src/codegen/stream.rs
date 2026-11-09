@@ -64,7 +64,7 @@ impl Codegen<'_> {
         let body = self.stream_level(path, 0, &view, &mut helpers, false);
         let call = |f: &syn::Ident, args: TokenStream| {
             quote_spanned! {span=>
-                |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass| {
+                |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, _: usize| {
                     if pass.diagnose() {
                         #f::<__WgS, ::winnow_grammar::ParseError>(input, #args)
                             .map_err(::winnow_grammar::rt::stream::Fail::from)
@@ -186,7 +186,7 @@ impl Codegen<'_> {
                 |r| quote! { -> ::core::result::Result<#r, ::winnow_grammar::rt::stream::Fail> },
             );
             quote_spanned! {span=>
-                |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass| #ret {
+                |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, _: usize| #ret {
                     if pass.diagnose() {
                         #f::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
                             .map_err(::winnow_grammar::rt::stream::Fail::from)
@@ -413,6 +413,14 @@ impl Codegen<'_> {
         };
         // A separator comes before every item but the first, and is taken
         // only with the item after it, as in memory.
+        let (sep_param, sep_arg) = if sep.is_some() {
+            (
+                quote_spanned! {span=> __sep: bool, },
+                quote_spanned! {span=> __item > 1, },
+            )
+        } else {
+            (quote! {}, quote! {})
+        };
         let sep_parse = match sep {
             Some(sep) => {
                 let sep_parser = self.generate_parser_expr(sep, lexical, true);
@@ -450,7 +458,7 @@ impl Codegen<'_> {
             #[allow(dead_code, non_snake_case, unused_variables, unused_mut)]
             fn #item_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
                 #input: &mut #input_ty,
-                __sep: bool,
+                #sep_param
                 #(#a_names: #a_types),*
             ) -> ::winnow::Result<#item_ret, ::winnow::error::ErrMode<__WgEr>> {
                 use ::winnow::Parser;
@@ -503,7 +511,7 @@ impl Codegen<'_> {
         // `max = N`: the fold takes no item past the N-th.
         let at_max = match max {
             Some(m) => quote_spanned! {span=>
-                if pass.item() > #m {
+                if __item > #m {
                     return ::core::result::Result::Ok(false);
                 }
             },
@@ -524,14 +532,13 @@ impl Codegen<'_> {
             let mut __acc = ::core::option::Option::Some((#init)());
             let mut __step = #step_fn(&__acc, #step);
             let mut __n = 0usize;
-            while __stream.items(&[#(#rules),*], &mut __n, |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass| {
+            while __stream.items(&[#(#rules),*], &mut __n, |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, __item: usize| {
                 #at_max
-                let __sep = pass.item() > 1;
                 let __v = if pass.diagnose() {
-                    #item_fn::<__WgS, ::winnow_grammar::ParseError>(input, __sep, #(#args),*)
+                    #item_fn::<__WgS, ::winnow_grammar::ParseError>(input, #sep_arg #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 } else {
-                    #item_fn::<__WgS, ::winnow::error::EmptyError>(input, __sep, #(#args),*)
+                    #item_fn::<__WgS, ::winnow::error::EmptyError>(input, #sep_arg #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 };
                 if ::winnow_grammar::rt::stream::commit(input, pass) {
