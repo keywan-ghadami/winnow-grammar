@@ -1836,6 +1836,7 @@ impl<'a> Codegen<'a> {
                 sep,
                 min,
                 max,
+                computed,
                 ..
             } => {
                 let p = self.generate_parser_expr(pattern, is_lexical, false);
@@ -1857,7 +1858,7 @@ impl<'a> Codegen<'a> {
                 );
                 // `sep`, `min` and `max` (never on a `par_fold`, which the
                 // parser refuses) take the bounded form.
-                if sep.is_some() || *min > 0 || max.is_some() {
+                if sep.is_some() || *min > 0 || max.is_some() || computed.is_some() {
                     let fold = if in_place {
                         quote_spanned! {span=> ::winnow_grammar::rt::fold_in_place_bounded }
                     } else {
@@ -1878,6 +1879,31 @@ impl<'a> Codegen<'a> {
                         Some(m) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
                         None => quote_spanned! {span=> ::core::option::Option::None },
                     };
+                    // Computed sides (ADR 26 D3) are evaluated where the
+                    // parser gets here; a `min` above the `max` fails.
+                    if let Some(c) = computed {
+                        let lo = match &c.min {
+                            Some(e) => quote_spanned! {span=> #e },
+                            None => quote_spanned! {span=> #min },
+                        };
+                        let hi = match &c.max {
+                            Some(e) => quote_spanned! {span=> ::core::option::Option::Some(#e) },
+                            None => {
+                                quote_spanned! {span=> { let __m: ::core::option::Option<usize> = #max; __m } }
+                            }
+                        };
+                        return quote_spanned! {span=>
+                            (|i: &mut #input_ty| match ::winnow_grammar::rt::bounds(#lo, #hi) {
+                                ::core::option::Option::Some((__lo, __hi)) => ::winnow::Parser::parse_next(
+                                    &mut #fold(__lo, __hi, #sep, #p, #init, #step),
+                                    i,
+                                ),
+                                ::core::option::Option::None => ::core::result::Result::Err(
+                                    ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow::error::ParserError<_>>::from_input(i)),
+                                ),
+                            })
+                        };
+                    }
                     return quote_spanned! {span=> #fold(#min, #max, #sep, #p, #init, #step) };
                 }
                 let fold = match (merge.is_some(), in_place) {

@@ -382,6 +382,7 @@ impl Codegen<'_> {
             sep,
             min,
             max,
+            computed,
             ..
         } = &rule.variants[0].pattern[level.at]
         else {
@@ -508,18 +509,55 @@ impl Codegen<'_> {
         } else {
             (quote! {}, quote! {})
         };
+        // Computed sides (ADR 26 D3) are evaluated once, before the first
+        // item; a `min` above the `max` fails as too few items would.
+        let bounds = match computed {
+            Some(c) => {
+                let lo = match &c.min {
+                    Some(e) => quote_spanned! {span=> #e },
+                    None => quote_spanned! {span=> #min },
+                };
+                let hi = match (&c.max, max) {
+                    (Some(e), _) => quote_spanned! {span=> ::core::option::Option::Some(#e) },
+                    (None, Some(m)) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
+                    (None, None) => quote_spanned! {span=> ::core::option::Option::None::<usize> },
+                };
+                quote_spanned! {span=>
+                    let (__lo, __hi) = match ::winnow_grammar::rt::bounds(#lo, #hi) {
+                        ::core::option::Option::Some(__b) => __b,
+                        ::core::option::Option::None => {
+                            return ::core::result::Result::Err(__stream.short());
+                        }
+                    };
+                }
+            }
+            None => quote! {},
+        };
         // `max = N`: the fold takes no item past the N-th.
-        let at_max = match max {
-            Some(m) => quote_spanned! {span=>
+        let at_max = match (computed, max) {
+            (Some(_), _) => quote_spanned! {span=>
+                if let ::core::option::Option::Some(__m) = __hi {
+                    if __item > __m {
+                        return ::core::result::Result::Ok(false);
+                    }
+                }
+            },
+            (None, Some(m)) => quote_spanned! {span=>
                 if __item > #m {
                     return ::core::result::Result::Ok(false);
                 }
             },
-            None => quote! {},
+            (None, None) => quote! {},
         };
         // `min = N`: fewer items fail the parse with what the next one
         // expected, as in memory.
-        let short = if *min > 0 {
+        let short = if computed.is_some() {
+            quote_spanned! {span=>
+                if __n < __lo {
+                    return ::core::result::Result::Err(__stream.short());
+                }
+            }
+        } else if *min > 0 {
             quote_spanned! {span=>
                 if __n < #min {
                     return ::core::result::Result::Err(__stream.short());
@@ -529,6 +567,7 @@ impl Codegen<'_> {
             quote! {}
         };
         quote_spanned! {span=>
+            #bounds
             let mut __acc = ::core::option::Option::Some((#init)());
             let mut __step = #step_fn(&__acc, #step);
             let mut __n = 0usize;

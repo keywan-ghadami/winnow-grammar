@@ -949,6 +949,11 @@ pub enum Pattern {
         min: usize,
         /// `max = n`: the most items the fold takes (default unbounded).
         max: Option<usize>,
+        /// `min = expr` / `max = expr`: a side computed where the parser gets
+        /// here (ADR 26 D3, as `item{lo, hi}`). Its literal field above is
+        /// then the default (`min` 0, `max` unbounded), so the analyses see
+        /// what any count allows. Boxed: absent in nearly every fold.
+        computed: Option<Box<FoldBounds>>,
         /// The span of the keyword, `fold` or `par_fold`.
         kw_span: proc_macro2::Span,
     },
@@ -965,6 +970,13 @@ pub enum Pattern {
         message: Option<syn::LitStr>,
         kw_token: Token![if],
     },
+}
+
+/// The computed sides of a fold's `min` and `max`; `None` is a literal side.
+#[derive(Debug, Clone)]
+pub struct FoldBounds {
+    pub min: Option<syn::Expr>,
+    pub max: Option<syn::Expr>,
 }
 
 /// The bounds of a repetition that are computed (ADR 26 D3): `{e}`, `{e,}`,
@@ -1564,6 +1576,7 @@ impl ToTokens for Pattern {
                 sep,
                 min,
                 max,
+                computed,
                 ..
             } => {
                 if let Some(b) = binding {
@@ -1604,6 +1617,18 @@ impl ToTokens for Pattern {
                         token::Eq::default().to_tokens(t);
                         syn::LitInt::new(&m.to_string(), proc_macro2::Span::call_site())
                             .to_tokens(t);
+                    }
+                    let computed = computed.as_deref();
+                    for (name, e) in [
+                        ("min", computed.and_then(|c| c.min.as_ref())),
+                        ("max", computed.and_then(|c| c.max.as_ref())),
+                    ] {
+                        if let Some(e) = e {
+                            token::Comma::default().to_tokens(t);
+                            Ident::new(name, proc_macro2::Span::call_site()).to_tokens(t);
+                            token::Eq::default().to_tokens(t);
+                            e.to_tokens(t);
+                        }
                     }
                 });
             }
@@ -1839,6 +1864,7 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
             None
         };
         let (mut sep, mut min, mut max) = (None, None, None);
+        let (mut dyn_min, mut dyn_max) = (None, None);
         while content.peek(Token![,]) {
             let _ = content.parse::<Token![,]>()?;
             let name: Ident = content.parse().map_err(|e| {
@@ -1858,19 +1884,30 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
             let _ = content.parse::<Token![=]>()?;
             match name.to_string().as_str() {
                 "sep" if sep.is_none() => sep = Some(Box::new(content.parse::<Pattern>()?)),
-                "min" if min.is_none() => {
-                    min = Some(content.parse::<syn::LitInt>()?.base10_parse::<usize>()?)
-                }
-                "max" if max.is_none() => {
-                    let lit = content.parse::<syn::LitInt>()?;
-                    let n: usize = lit.base10_parse()?;
-                    if n == 0 {
-                        return Err(syn::Error::new(
-                            lit.span(),
-                            "`max = 0` matches nothing; a fold takes at least one item",
-                        ));
+                "min" if min.is_none() && dyn_min.is_none() => {
+                    match content.parse::<syn::Expr>()? {
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: Lit::Int(lit), ..
+                        }) => min = Some(lit.base10_parse::<usize>()?),
+                        e => dyn_min = Some(e),
                     }
-                    max = Some(n);
+                }
+                "max" if max.is_none() && dyn_max.is_none() => {
+                    match content.parse::<syn::Expr>()? {
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: Lit::Int(lit), ..
+                        }) => {
+                            let n: usize = lit.base10_parse()?;
+                            if n == 0 {
+                                return Err(syn::Error::new(
+                                    lit.span(),
+                                    "`max = 0` matches nothing; a fold takes at least one item",
+                                ));
+                            }
+                            max = Some(n);
+                        }
+                        e => dyn_max = Some(e),
+                    }
                 }
                 "sep" | "min" | "max" => {
                     return Err(syn::Error::new(
@@ -1907,6 +1944,12 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
             sep,
             min,
             max,
+            computed: (dyn_min.is_some() || dyn_max.is_some()).then(|| {
+                Box::new(FoldBounds {
+                    min: dyn_min,
+                    max: dyn_max,
+                })
+            }),
             kw_span,
         })
     } else if input.peek(kw::count) {
