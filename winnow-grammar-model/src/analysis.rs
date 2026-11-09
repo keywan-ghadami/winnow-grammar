@@ -751,9 +751,9 @@ fn find_unused_rules(grammar: &GrammarDefinition) -> HashSet<String> {
     let mut queue = VecDeque::new();
 
     // Roots are:
-    // 1. All `pub` rules
+    // 1. All rules visible outside the grammar (`pub`, `pub(crate)`, …)
     for rule in &grammar.rules {
-        if rule.is_pub {
+        if !matches!(rule.vis, syn::Visibility::Inherited) {
             used.insert(rule.name.to_string());
             queue.push_back(rule.name.to_string());
         }

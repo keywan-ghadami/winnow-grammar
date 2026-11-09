@@ -1,0 +1,48 @@
+error[E0364]: `parse_doc` is only public within the crate, and cannot be re-exported outside
+  --> tests/ui/visibility.rs:31:27
+   |
+31 | pub use outer::inner::G::{parse_doc, parse_doc_reader, parse_docs_reader_each};
+   |                           ^^^^^^^^^
+   |
+note: consider marking `parse_doc` as `pub` in the imported module
+  --> tests/ui/visibility.rs:31:27
+   |
+31 | pub use outer::inner::G::{parse_doc, parse_doc_reader, parse_docs_reader_each};
+   |                           ^^^^^^^^^
+
+error[E0364]: `parse_doc_reader` is only public within the crate, and cannot be re-exported outside
+  --> tests/ui/visibility.rs:31:38
+   |
+31 | pub use outer::inner::G::{parse_doc, parse_doc_reader, parse_docs_reader_each};
+   |                                      ^^^^^^^^^^^^^^^^
+   |
+note: consider marking `parse_doc_reader` as `pub` in the imported module
+  --> tests/ui/visibility.rs:31:38
+   |
+31 | pub use outer::inner::G::{parse_doc, parse_doc_reader, parse_docs_reader_each};
+   |                                      ^^^^^^^^^^^^^^^^
+
+error[E0364]: `parse_docs_reader_each` is only public within the crate, and cannot be re-exported outside
+  --> tests/ui/visibility.rs:31:56
+   |
+31 | pub use outer::inner::G::{parse_doc, parse_doc_reader, parse_docs_reader_each};
+   |                                                        ^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: consider marking `parse_docs_reader_each` as `pub` in the imported module
+  --> tests/ui/visibility.rs:31:56
+   |
+31 | pub use outer::inner::G::{parse_doc, parse_doc_reader, parse_docs_reader_each};
+   |                                                        ^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0603]: function `parse_near` is private
+  --> tests/ui/visibility.rs:35:30
+   |
+35 |     let _ = outer::inner::G::parse_near::<()>;
+   |                              ^^^^^^^^^^ private function
+   |
+note: the function `parse_near` is defined here
+  --> tests/ui/visibility.rs:7:9
+   |
+ 7 |         winnow_grammar::grammar! {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `winnow_grammar::grammar` (in Nightly builds, run with -Z macro-backtrace for more info)

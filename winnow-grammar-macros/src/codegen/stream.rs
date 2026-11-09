@@ -24,11 +24,7 @@ impl Codegen<'_> {
         let span = Span::mixed_site();
         let state_bound = self.state_bound();
         let input_ty = self.input_ty();
-        let vis = if rule.is_pub {
-            quote! { pub }
-        } else {
-            quote! {}
-        };
+        let vis = &rule.vis;
         let (kind, view) = if self.is_bytes() {
             (
                 quote! { ::winnow_grammar::rt::stream::Bytes },

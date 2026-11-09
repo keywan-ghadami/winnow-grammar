@@ -16,6 +16,13 @@
   callgrind counts the same instructions before and after for 200 000
   collected elements (386 125 212 both). SYNTAX.md, *Collections*.
 
+- **Any visibility on a rule.** A rule takes `pub(crate)`, `pub(super)` or
+  `pub(in path)` as well as `pub`, and every function generated for it
+  (`parse_r`, `parse_r_reader`, `parse_r_reader_each`) gets it, so a crate
+  can keep a grammar's entry points out of its public API. The model's
+  `Rule::is_pub: bool` is now `Rule::vis: syn::Visibility`. SYNTAX.md,
+  *Rules*; `tests/visibility_test.rs`, `tests/ui/visibility.rs`.
+
 ### Fixed
 
 - **Generated code names the standard library by full path.** The annotation
