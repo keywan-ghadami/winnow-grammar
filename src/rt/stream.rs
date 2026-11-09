@@ -211,21 +211,12 @@ pub struct Pass {
     last: bool,
     /// A taken item parsed again, for what it records: not taken again.
     replay: bool,
-    /// The number of the fold's item being parsed, from 1; 0 outside a fold.
-    item: usize,
 }
 
 impl Pass {
     /// The diagnosing pass, with `ParseError`; otherwise the fast one.
     pub fn diagnose(&self) -> bool {
         self.diagnose
-    }
-
-    /// The number of the fold's item this step parses, from 1: a separator
-    /// comes before every item but the first, and `max = N` ends the fold
-    /// before item N + 1.
-    pub fn item(&self) -> usize {
-        self.item
     }
 }
 
@@ -406,7 +397,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     /// inside, outermost first.
     pub fn chunk<T, F>(&mut self, rules: &[&'static str], mut f: F) -> Result<T, ParseError>
     where
-        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<T, Fail>,
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail>,
     {
         let r = self.run(rules, &mut f, None);
         match self.finished(r)? {
@@ -417,7 +408,15 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
 
     /// Items of the fold, as many as the input that has arrived decides: `f`
     /// parses one and, where [`commit`] says so, hands it to the step,
-    /// answering whether it did. `n` counts the items taken, and numbers an
+    /// answering whether it did. Its third argument is the number of the
+    /// item, from 1: a separator comes before every item but the first, and
+    /// `max = N` ends the fold before item N + 1.
+    ///
+    /// The number is an argument and not a field of [`Pass`]: a `Pass` that
+    /// changes from item to item keeps LLVM from hoisting the pass out of
+    /// the loop, which cost every streamed fold 31 instructions per item
+    /// (callgrind, `examples/stream_profile.rs`), whether it used the number
+    /// or not. A fold without `sep` and `max` leaves the argument unread. `n` counts the items taken, and numbers an
     /// item in an error. `true` asks to be called again, after a read;
     /// `false` is the end of the fold, at the position before the item that
     /// did not come.
@@ -432,7 +431,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         mut f: F,
     ) -> Result<bool, ParseError>
     where
-        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<bool, Fail>,
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<bool, Fail>,
     {
         let r = self.items_once(rules, n, &mut f);
         self.finished(r)
@@ -445,7 +444,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         f: &mut F,
     ) -> Result<bool, ParseError>
     where
-        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<bool, Fail>,
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<bool, Fail>,
     {
         enum Stop {
             Refill,
@@ -471,7 +470,6 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             diagnose: mode == Diagnose::Eager,
             last,
             replay: false,
-            item: 0,
         };
         let origin = self.base + self.pos;
         let window = self.visible - self.pos;
@@ -521,11 +519,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                     input.state.reach = usize::MAX;
                 }
                 let cp = input.checkpoint();
-                let here = Pass {
-                    item: *n + 1,
-                    ..pass
-                };
-                let r = f(&mut input, &here);
+                let r = f(&mut input, &pass, *n + 1);
                 if input.state.touched && !last {
                     input.reset(&cp);
                     if let Some(s) = snapshot {
@@ -608,7 +602,6 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             diagnose: true,
             last,
             replay: false,
-            item: 0,
         };
         match stop {
             Stop::Refill => {
@@ -701,7 +694,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     /// nothing may be left.
     pub fn finish<F>(&mut self, f: F) -> Result<(), ParseError>
     where
-        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<(), Fail>,
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<(), Fail>,
     {
         // Every cut scope is closed by now: a step closes its own, the
         // reader closes those that span steps, and a step parsed again
@@ -772,7 +765,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         item: Option<usize>,
     ) -> Result<Option<T>, ParseError>
     where
-        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<T, Fail>,
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail>,
     {
         let mode = self.context().diagnose;
         let zst = std::mem::size_of::<S>() == 0;
@@ -803,13 +796,11 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 diagnose: mode == Diagnose::Eager,
                 last,
                 replay: false,
-                item: 0,
             };
             let diagnose = Pass {
                 diagnose: true,
                 last,
                 replay: false,
-                item: 0,
             };
             let depth = self.cut_depth();
             let (r, touched) = self.attempt(self.pos, rules, f, first, item);
@@ -897,7 +888,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         snapshot: Option<S>,
         last: bool,
     ) where
-        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<T, Fail>,
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail>,
     {
         // What the fast pass recovered stays; the replay's goes.
         let saved = {
@@ -913,7 +904,6 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             diagnose: true,
             last,
             replay: true,
-            item: 0,
         };
         let (_, touched) = self.attempt(self.pos, rules, f, pass, None);
         if touched && !last {
@@ -942,7 +932,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         item: Option<usize>,
         last: bool,
     ) where
-        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<T, Fail>,
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail>,
     {
         let (Some(prev), Some(n)) = (self.prev_item, item) else {
             return;
@@ -955,7 +945,6 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             diagnose: true,
             last,
             replay: true,
-            item: 0,
         };
         self.prune();
         let earlier: Vec<Reaching> = self
@@ -986,7 +975,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         item: Option<usize>,
     ) -> (Result<(T, usize), Fail>, bool)
     where
-        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass) -> Result<T, Fail>,
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail>,
     {
         let origin = self.base + start;
         let mut ctx = self.ctx.take().expect("the context is back between steps");
@@ -1011,11 +1000,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             )),
             state: ctx,
         };
-        let pass = Pass {
-            item: item.unwrap_or(pass.item),
-            ..pass
-        };
-        let r = f(&mut input, &pass);
+        let r = f(&mut input, &pass, item.unwrap_or(0));
         let consumed = input.current_token_start();
         let r = match r {
             Ok(v) => Ok((v, consumed)),

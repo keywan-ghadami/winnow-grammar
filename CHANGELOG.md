@@ -30,9 +30,16 @@
   fewer than `min` items the fold fails with the next item's error, and a
   stream that ends short gives the same error at the same offset (new:
   `rt::fold_bounded`, `rt::fold_in_place_bounded`, `rt::no_sep`,
-  `Pass::item`, `Stream::short`). `max = 0`, `min > max`, a repeated or
+  `Stream::short`; the closure of `Stream::items` takes the item's number
+  as a third argument). `max = 0`, `min > max`, a repeated or
   unknown argument and any of them on `par_fold` are refused where they are
   written. SYNTAX.md, *fold*.
+
+  A fold that uses none of them costs what it did before (callgrind,
+  `scripts/profile-stream.sh` and `scripts/profile-cut.sh`, identical
+  instructions per row and per statement): the plain fold keeps its own
+  loop, and the item functions of a streamed fold take the separator flag
+  only when there is a separator.
 
 ### Fixed
 
