@@ -30,6 +30,14 @@ rule name -> ReturnType = pattern -> { action_code }
 - **`pattern`**: The grammar pattern to match.
 - **`action_code`**: A Rust block that constructs the return value.
 
+A visibility before the rule name (`pub`, `pub(crate)`, `pub(super)`,
+`pub(in path)`) is given to every function generated for the rule:
+`parse_name`, and under `#[stream]` also `parse_name_reader` and
+`parse_name_reader_each`. The functions live in the module the grammar
+generates (`pub mod Name { … }`), so the visibility is read from there:
+`pub(super)` reaches the module that holds `grammar!`, `pub(crate)` the
+whole crate. A rule without one is private to the grammar.
+
 ### Lexical vs. Syntactic Rules (Case Sensitivity)
 
 The casing of a rule's name determines its whitespace handling:
