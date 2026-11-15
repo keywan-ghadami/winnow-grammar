@@ -945,10 +945,6 @@ fn compute_first_sets_and_errors(
     (first_sets, errors)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "over the limit when the lint came in; split it, then drop this"
-)]
 fn collect_first_from_sequence(
     patterns: &[ModelPattern],
     first_sets: &HashMap<String, HashSet<String>>,
@@ -956,161 +952,96 @@ fn collect_first_from_sequence(
     acc: &mut HashSet<String>,
 ) {
     for p in patterns {
-        match p {
-            ModelPattern::Lit {
-                lit: Lit::Str(s), ..
-            } => {
-                acc.insert(format!("\"{}\"", s.value()));
-                return;
-            }
-            ModelPattern::Lit {
-                lit: Lit::Char(c), ..
-            } => {
-                acc.insert(format!("'{}'", c.value()));
-                return;
-            }
-            ModelPattern::Lit { .. } => {
-                acc.insert("LIT".to_string());
-                return;
-            }
-            ModelPattern::RuleCall { rule_path, .. } => {
-                let name = rule_path.segments.last().unwrap().ident.to_string();
-                if let Some(fs) = first_sets.get(&name) {
-                    acc.extend(fs.clone());
-                } else {
-                    acc.insert(format!("<{}>", name));
-                }
-                if !nullable_rules.contains(&name) {
-                    return;
-                }
-            }
-            ModelPattern::Group { alts, .. } => {
-                let mut group_nullable = false;
-                for (alt, _, _) in alts {
-                    collect_first_from_sequence(alt, first_sets, nullable_rules, acc);
-                    if is_sequence_nullable(alt, nullable_rules) {
-                        group_nullable = true;
-                    }
-                }
-                if !group_nullable {
-                    return;
-                }
-            }
-            ModelPattern::Bracketed(..) => {
-                acc.insert("Bracket".to_string());
-                return;
-            }
-            ModelPattern::Braced(..) => {
-                acc.insert("Brace".to_string());
-                return;
-            }
-            ModelPattern::Parenthesized(..) => {
-                acc.insert("Paren".to_string());
-                return;
-            }
-
-            ModelPattern::Optional(inner, _)
-            | ModelPattern::Repeat(inner, _)
-            | ModelPattern::Peek(inner, _, _) => {
-                collect_first_from_sequence(
-                    std::slice::from_ref(inner),
-                    first_sets,
-                    nullable_rules,
-                    acc,
-                );
-                continue;
-            }
-            ModelPattern::Plus(inner, _) => {
-                collect_first_from_sequence(
-                    std::slice::from_ref(inner),
-                    first_sets,
-                    nullable_rules,
-                    acc,
-                );
-                if !is_pattern_nullable_precise(inner, nullable_rules) {
-                    return;
-                }
-            }
-            ModelPattern::Bounded { pattern, min, .. } => {
-                collect_first_from_sequence(
-                    std::slice::from_ref(pattern),
-                    first_sets,
-                    nullable_rules,
-                    acc,
-                );
-                if *min > 0 && !is_pattern_nullable_precise(pattern, nullable_rules) {
-                    return;
-                }
-            }
-            ModelPattern::SpanBinding(inner, _, _) => {
-                collect_first_from_sequence(
-                    std::slice::from_ref(inner),
-                    first_sets,
-                    nullable_rules,
-                    acc,
-                );
-                if !is_pattern_nullable_precise(inner, nullable_rules) {
-                    return;
-                }
-            }
-            ModelPattern::Not(_inner, _) => {
-                continue;
-            }
-            ModelPattern::Recover { body, .. } => {
-                collect_first_from_sequence(
-                    std::slice::from_ref(body),
-                    first_sets,
-                    nullable_rules,
-                    acc,
-                );
-            }
-            ModelPattern::Until { pattern, .. } => {
-                collect_first_from_sequence(
-                    std::slice::from_ref(pattern),
-                    first_sets,
-                    nullable_rules,
-                    acc,
-                );
-            }
-            ModelPattern::Fold { pattern, min, .. } => {
-                collect_first_from_sequence(
-                    std::slice::from_ref(pattern),
-                    first_sets,
-                    nullable_rules,
-                    acc,
-                );
-                if *min > 0 && !is_pattern_nullable_precise(pattern, nullable_rules) {
-                    return;
-                }
-            }
-            ModelPattern::Count { pattern, .. } => {
-                collect_first_from_sequence(
-                    std::slice::from_ref(pattern),
-                    first_sets,
-                    nullable_rules,
-                    acc,
-                );
-                if !is_pattern_nullable_precise(pattern, nullable_rules) {
-                    return;
-                }
-            }
-            ModelPattern::LexicalScope(pattern, _) | ModelPattern::SpacedScope(pattern, _) => {
-                collect_first_from_sequence(
-                    std::slice::from_ref(pattern),
-                    first_sets,
-                    nullable_rules,
-                    acc,
-                );
-                if !is_pattern_nullable_precise(pattern, nullable_rules) {
-                    return;
-                }
-            }
-            ModelPattern::Fail { .. } => {
-                // Fail does not contribute tokens to FIRST set and stops execution.
-                return;
-            }
-            _ => {}
+        if !collect_first_from_pattern(p, first_sets, nullable_rules, acc) {
+            return;
         }
+    }
+}
+
+/// Adds the FIRST tokens of one pattern of a sequence to `acc`, and says
+/// whether collection goes on to the next pattern (that is, whether the
+/// pattern may match empty input).
+fn collect_first_from_pattern(
+    p: &ModelPattern,
+    first_sets: &HashMap<String, HashSet<String>>,
+    nullable_rules: &HashSet<String>,
+    acc: &mut HashSet<String>,
+) -> bool {
+    // FIRST of a single inner pattern; `true` if it may match empty input.
+    let inner_first = |inner: &ModelPattern, acc: &mut HashSet<String>| {
+        collect_first_from_sequence(std::slice::from_ref(inner), first_sets, nullable_rules, acc);
+        is_pattern_nullable_precise(inner, nullable_rules)
+    };
+    match p {
+        ModelPattern::Lit {
+            lit: Lit::Str(s), ..
+        } => {
+            acc.insert(format!("\"{}\"", s.value()));
+            false
+        }
+        ModelPattern::Lit {
+            lit: Lit::Char(c), ..
+        } => {
+            acc.insert(format!("'{}'", c.value()));
+            false
+        }
+        ModelPattern::Lit { .. } => {
+            acc.insert("LIT".to_string());
+            false
+        }
+        ModelPattern::RuleCall { rule_path, .. } => {
+            let name = rule_path.segments.last().unwrap().ident.to_string();
+            if let Some(fs) = first_sets.get(&name) {
+                acc.extend(fs.clone());
+            } else {
+                acc.insert(format!("<{}>", name));
+            }
+            nullable_rules.contains(&name)
+        }
+        ModelPattern::Group { alts, .. } => {
+            let mut group_nullable = false;
+            for (alt, _, _) in alts {
+                collect_first_from_sequence(alt, first_sets, nullable_rules, acc);
+                if is_sequence_nullable(alt, nullable_rules) {
+                    group_nullable = true;
+                }
+            }
+            group_nullable
+        }
+        ModelPattern::Bracketed(..) => {
+            acc.insert("Bracket".to_string());
+            false
+        }
+        ModelPattern::Braced(..) => {
+            acc.insert("Brace".to_string());
+            false
+        }
+        ModelPattern::Parenthesized(..) => {
+            acc.insert("Paren".to_string());
+            false
+        }
+        // Always continue, whatever the inner pattern's nullability.
+        ModelPattern::Optional(inner, _)
+        | ModelPattern::Repeat(inner, _)
+        | ModelPattern::Peek(inner, _, _)
+        | ModelPattern::Recover { body: inner, .. }
+        | ModelPattern::Until { pattern: inner, .. } => {
+            inner_first(inner, acc);
+            true
+        }
+        ModelPattern::Plus(inner, _)
+        | ModelPattern::SpanBinding(inner, _, _)
+        | ModelPattern::Count { pattern: inner, .. }
+        | ModelPattern::LexicalScope(inner, _)
+        | ModelPattern::SpacedScope(inner, _) => inner_first(inner, acc),
+        ModelPattern::Bounded { pattern, min, .. } | ModelPattern::Fold { pattern, min, .. } => {
+            let nullable = inner_first(pattern, acc);
+            *min == 0 || nullable
+        }
+        // Fail does not contribute tokens to FIRST set and stops execution.
+        ModelPattern::Fail { .. } => false,
+        // Not, and patterns that consume nothing.
+        _ => true,
     }
 }
 

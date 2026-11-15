@@ -7,13 +7,7 @@ use winnow_grammar_model::{
 };
 
 impl<'a> Codegen<'a> {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
-        let rt_error = self.rt_error();
-        let input_ty = self.input_ty();
         let state_bound = self.state_bound();
         if super::is_template(rule) {
             // Template rules are not compiled as functions of their own.
@@ -28,15 +22,9 @@ impl<'a> Codegen<'a> {
             self.frames.boundary_for(&rule_name_str).map(str::to_owned);
         let span = Span::mixed_site();
         let fn_name = format_ident!("parse_{}", rule_name, span = span);
-        let inner_fn_name = format_ident!("parse_{}_inner", rule_name, span = span);
+        let input_ty = self.input_ty();
         let ret_type = &rule.return_type;
-        let input = &self.input_ident;
-        // The public parser reports `ParseError`; inside, the rule is generic
-        // over its error type `__WgEr` (ADR 17): the entry point instantiates it
-        // twice, once with `EmptyError` for the fast pass and once with
-        // `ParseError` for the diagnosing one.
         let err_type = quote_spanned! { span=> ::winnow_grammar::ParseError };
-        let inner_err_type = quote_spanned! { span=> ::winnow::error::ErrMode<__WgEr> };
 
         let mut params_tokens = Vec::new();
         let mut inner_params_tokens = Vec::new();
@@ -55,79 +43,148 @@ impl<'a> Codegen<'a> {
             }
         }
 
-        let (recursive_refs, base_refs) =
-            analysis::split_left_recursive(&rule.name, &rule.variants);
-
-        let lhs_ident = format_ident!("lhs", span = span);
         // **A `par_fold` rule skips nothing**, whatever its name says: not at
         // its start, not between its items. A piece begins at a frame, so
         // whitespace skipped there in one go would belong to a frame in
         // pieces, and the chunk count would change the result - the same
-        // reason its entry point skips nothing (below). Its body is the fold
-        // and nothing else, so the rule is lexical in all but name.
+        // reason its entry point skips nothing (`entry_body`). Its body is the
+        // fold and nothing else, so the rule is lexical in all but name.
         let is_lexical =
             rule.is_lexical || is_ws_rule || self.frames.par_folds.contains_key(&rule_name_str);
-
-        let body = if recursive_refs.is_empty() {
-            self.generate_variants_body(
-                &rule.variants,
-                ret_type,
-                is_lexical,
-                true,
-                rule.label.as_deref(),
-            )
-        // is_rule_start=true
-        } else if base_refs.is_empty() {
-            quote_spanned! {span=>
-                compile_error!("Left-recursive rule requires at least one non-recursive base variant.")
-            }
-        } else {
-            let base_owned: Vec<RuleVariant> = base_refs.into_iter().cloned().collect();
-            let recursive_owned: Vec<RuleVariant> = recursive_refs.into_iter().cloned().collect();
-
-            let base_parser = self.generate_variants_body(
-                &base_owned,
-                ret_type,
-                is_lexical,
-                true,
-                rule.label.as_deref(),
-            );
-            let loop_body = self.generate_recursive_loop_body(
-                &recursive_owned,
-                ret_type,
-                &lhs_ident,
-                is_lexical,
-            );
-
-            quote_spanned! {span=>
-                let mut #lhs_ident = #base_parser?;
-                loop {
-                    #loop_body
-                    break;
-                }
-                ::core::result::Result::Ok(#lhs_ident)
-            }
-        };
+        let body = self.rule_body(rule, is_lexical);
 
         let vis = &rule.vis;
-
         let gen_params = &rule.generics.params;
-        let gen_where = &rule.generics.where_clause;
-
-        let mut all_generics =
-            quote! { 'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error };
-        if !gen_params.is_empty() {
-            all_generics.extend(quote! {, #gen_params});
-        }
-
-        let where_preds = if let Some(w) = gen_where {
+        let where_preds = if let Some(w) = &rule.generics.where_clause {
             let p = &w.predicates;
             quote! { #p, }
         } else {
             quote! {}
         };
 
-        let ws_shadow = if is_ws_rule {
+        let inner_fn = self.inner_fn(rule, &inner_params_tokens, &body, &where_preds);
+
+        let mut outer_generics = quote! {'a, __WgS: ::std::fmt::Debug + Clone #state_bound };
+        if !gen_params.is_empty() {
+            outer_generics.extend(quote! {, #gen_params});
+        }
+
+        let outer_fn_body = self.entry_body(rule, &arg_names);
+
+        // Outer function signature doesn't need to specify for<'a> if it already uses 'a in its signature
+        // A doc comment on a rule belongs on the parser it generates; the
+        // validator rejects every other attribute, so this is the whole set.
+        let docs = rule
+            .attrs
+            .iter()
+            .filter(|a| a.path().is_ident("doc"))
+            .collect::<Vec<_>>();
+
+        let outer_fn = quote_spanned! {span=>
+            #(#docs)*
+            #vis fn #fn_name<#outer_generics> (#(#params_tokens),*) -> impl ::winnow::Parser<
+                #input_ty,
+                #ret_type,
+                #err_type
+            >
+            where
+                #where_preds
+            {
+                #outer_fn_body
+            }
+        };
+
+        let frame_fns = self.generate_frame_fns(rule);
+        let stream_fns = self.generate_stream_fns(rule);
+
+        quote! {
+            #inner_fn
+            #outer_fn
+            #frame_fns
+            #stream_fns
+        }
+    }
+
+    /// The body of a rule's parser: its variants as alternatives or, when
+    /// some of them are left-recursive, the base variants followed by a loop
+    /// that applies the recursive ones to the result so far.
+    fn rule_body(&self, rule: &Rule, is_lexical: bool) -> TokenStream {
+        let span = Span::mixed_site();
+        let ret_type = &rule.return_type;
+        let (recursive_refs, base_refs) =
+            analysis::split_left_recursive(&rule.name, &rule.variants);
+
+        if recursive_refs.is_empty() {
+            // is_rule_start=true
+            return self.generate_variants_body(
+                &rule.variants,
+                ret_type,
+                is_lexical,
+                true,
+                rule.label.as_deref(),
+            );
+        }
+        if base_refs.is_empty() {
+            return quote_spanned! {span=>
+                compile_error!("Left-recursive rule requires at least one non-recursive base variant.")
+            };
+        }
+        let lhs_ident = format_ident!("lhs", span = span);
+        let base_owned: Vec<RuleVariant> = base_refs.into_iter().cloned().collect();
+        let recursive_owned: Vec<RuleVariant> = recursive_refs.into_iter().cloned().collect();
+
+        let base_parser = self.generate_variants_body(
+            &base_owned,
+            ret_type,
+            is_lexical,
+            true,
+            rule.label.as_deref(),
+        );
+        let loop_body =
+            self.generate_recursive_loop_body(&recursive_owned, ret_type, &lhs_ident, is_lexical);
+
+        quote_spanned! {span=>
+            let mut #lhs_ident = #base_parser?;
+            loop {
+                #loop_body
+                break;
+            }
+            ::core::result::Result::Ok(#lhs_ident)
+        }
+    }
+
+    /// `parse_<rule>_inner`: the rule's body, generic over the error type,
+    /// labelled with the rule's name and - while it runs - on the stack of
+    /// rule names that recorded errors pick up.
+    fn inner_fn(
+        &self,
+        rule: &Rule,
+        inner_params_tokens: &[TokenStream],
+        body: &TokenStream,
+        where_preds: &TokenStream,
+    ) -> TokenStream {
+        let rt_error = self.rt_error();
+        let input_ty = self.input_ty();
+        let state_bound = self.state_bound();
+        let input = &self.input_ident;
+        let span = Span::mixed_site();
+        let rule_name_str = rule.name.to_string();
+        let inner_fn_name = format_ident!("parse_{}_inner", rule.name, span = span);
+        let ret_type = &rule.return_type;
+        // The public parser reports `ParseError`; inside, the rule is generic
+        // over its error type `__WgEr` (ADR 17): the entry point instantiates it
+        // twice, once with `EmptyError` for the fast pass and once with
+        // `ParseError` for the diagnosing one.
+        let inner_err_type = quote_spanned! { span=> ::winnow::error::ErrMode<__WgEr> };
+
+        let gen_params = &rule.generics.params;
+        let mut all_generics =
+            quote! { 'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error };
+        if !gen_params.is_empty() {
+            all_generics.extend(quote! {, #gen_params});
+        }
+
+        let ws_shadow = if rule_name_str == "WS" {
             quote_spanned! {span=>
                 #[allow(dead_code)]
                 fn WS<'a, __WgS: ::std::fmt::Debug + Clone, __WgEr>(_: &mut #input_ty) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
@@ -138,7 +195,7 @@ impl<'a> Codegen<'a> {
             quote! {}
         };
 
-        let inner_fn = quote_spanned! {span=>
+        quote_spanned! {span=>
             #[allow(dead_code)]
             fn #inner_fn_name<#all_generics>(#input: &mut #input_ty, #(#inner_params_tokens),*) -> ::winnow::Result<#ret_type, #inner_err_type>
             where
@@ -176,12 +233,18 @@ impl<'a> Codegen<'a> {
                 }
                 result
             }
-        };
-
-        let mut outer_generics = quote! {'a, __WgS: ::std::fmt::Debug + Clone #state_bound };
-        if !gen_params.is_empty() {
-            outer_generics.extend(quote! {, #gen_params});
         }
+    }
+
+    /// The body of the public `parse_<rule>()`: the entry point running the
+    /// inner parser in a fast pass and, if that fails, a diagnosing one.
+    fn entry_body(&self, rule: &Rule, arg_names: &[TokenStream]) -> TokenStream {
+        let input_ty = self.input_ty();
+        let span = Span::mixed_site();
+        let rule_name_str = rule.name.to_string();
+        let inner_fn_name = format_ident!("parse_{}_inner", rule.name, span = span);
+        let ret_type = &rule.return_type;
+        let err_type = quote_spanned! { span=> ::winnow_grammar::ParseError };
 
         // The entry point tolerates whitespace around the input - except on a
         // `par_fold` rule. Its parser runs once per *piece* when the input is
@@ -230,43 +293,10 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=> ::winnow_grammar::rt::entry }
         };
 
-        let outer_fn_body = quote! {
+        quote! {
             move |input: &mut #input_ty| -> ::winnow::Result<#ret_type, #err_type> {
                 #entry(input, #fast, #slow)
             }
-        };
-
-        // Outer function signature doesn't need to specify for<'a> if it already uses 'a in its signature
-        // A doc comment on a rule belongs on the parser it generates; the
-        // validator rejects every other attribute, so this is the whole set.
-        let docs = rule
-            .attrs
-            .iter()
-            .filter(|a| a.path().is_ident("doc"))
-            .collect::<Vec<_>>();
-
-        let outer_fn = quote_spanned! {span=>
-            #(#docs)*
-            #vis fn #fn_name<#outer_generics> (#(#params_tokens),*) -> impl ::winnow::Parser<
-                #input_ty,
-                #ret_type,
-                #err_type
-            >
-            where
-                #where_preds
-            {
-                #outer_fn_body
-            }
-        };
-
-        let frame_fns = self.generate_frame_fns(rule);
-        let stream_fns = self.generate_stream_fns(rule);
-
-        quote! {
-            #inner_fn
-            #outer_fn
-            #frame_fns
-            #stream_fns
         }
     }
 

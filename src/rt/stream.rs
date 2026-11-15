@@ -266,6 +266,20 @@ pub fn commit<B: Slice, S: Clone + std::fmt::Debug>(input: &Input<B, S>, pass: &
     !pass.replay && input.current_token_start() > 0 && (pass.last || !input.state.touched)
 }
 
+/// Why a step stopped parsing items from its window.
+enum Stop {
+    /// An item may need more input than the window has: read more.
+    Refill,
+    /// An item needs more than the lookahead holds.
+    TooFar,
+    /// The items ended.
+    Ended,
+    /// An item was taken and the caller wants no more.
+    Halted,
+    /// An item failed.
+    Failed(Fail),
+}
+
 /// An item taken whose failures reached its own end: where it starts, the
 /// furthest a failure of it got, and its number - all in `buf`.
 #[derive(Debug, Clone, Copy)]
@@ -437,10 +451,6 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         self.finished(r)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
     fn items_once<F>(
         &mut self,
         rules: &[&'static str],
@@ -450,13 +460,6 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<bool, Fail>,
     {
-        enum Stop {
-            Refill,
-            TooFar,
-            Ended,
-            Halted,
-            Failed(Fail),
-        }
         let mode = self.context().diagnose;
         let zst = std::mem::size_of::<S>() == 0;
         let lazy = zst || mode == Diagnose::Replay;
@@ -476,8 +479,6 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             replay: false,
         };
         let origin = self.base + self.pos;
-        let window = self.visible - self.pos;
-        let lookahead = self.lookahead;
         let mut ctx = self.ctx.take().expect("the context is back between steps");
         let recovered = ctx.recovered.len();
         ctx.touched = false;
@@ -491,99 +492,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         if pass.diagnose {
             ctx.rules.extend_from_slice(rules);
         }
-        let mut prev = None;
-        let (k, track) = (self.k, TRACK);
-        let mut reaching = Vec::new();
-        let (stop, at, mut ctx) = {
-            let mut input = Input {
-                input: winnow::stream::LocatingSlice::new(K::view(
-                    &self.buf.bytes()[self.pos..self.visible],
-                )),
-                state: ctx,
-            };
-            // What an eager pass recorded before the item being parsed.
-            let mut recorded = None;
-            let stop = loop {
-                let at = input.current_token_start();
-                // Filled to the lookahead, every item gets all of it: one that
-                // would start with less waits for the next window.
-                if !lazy && !last && window - at < lookahead {
-                    break Stop::Refill;
-                }
-                let snapshot = (!zst && (mode == Diagnose::Replay || (lazy && !last)))
-                    .then(|| input.state.user_state.clone());
-                let saved = (input.state.recoveries, input.state.recovered.len());
-                // What an eager pass recorded before this item: an attempt
-                // that is parsed again with more input records nothing.
-                if pass.diagnose {
-                    recorded = saved_furthest(&input.state);
-                }
-                input.state.touched = false;
-                if track {
-                    input.state.reach = usize::MAX;
-                }
-                let cp = input.checkpoint();
-                let r = f(&mut input, &pass, *n + 1);
-                if input.state.touched && !last {
-                    input.reset(&cp);
-                    if let Some(s) = snapshot {
-                        input.state.user_state = s;
-                    }
-                    input.state.recoveries = saved.0;
-                    input.state.recovered.truncate(saved.1);
-                    // An item begins with no cut open - the window starts
-                    // with none, and an item that matched closed its own -
-                    // so what this try left open goes.
-                    drop_open_cuts(&mut input.state.cut_stash);
-                    if pass.diagnose {
-                        input.state.furthest = recorded.take();
-                    }
-                    break if window - at >= lookahead {
-                        Stop::TooFar
-                    } else {
-                        Stop::Refill
-                    };
-                }
-                match r {
-                    Ok(true) => {
-                        *n += 1;
-                        prev = Some(at);
-                        // A failure within `k` of where the item ended, or
-                        // past it: one of what follows may have to beat it.
-                        let reach = input.state.reach;
-                        if track && reach <= input.eof_offset() + k {
-                            reaching.push(Reaching {
-                                start: at,
-                                reach: window - reach,
-                                n: *n,
-                            });
-                        }
-                    }
-                    Ok(false) => break Stop::Ended,
-                    // Taken - `commit` held, so it did not touch the end -
-                    // and the caller wants no more.
-                    Err(Fail::Stop) => {
-                        *n += 1;
-                        break Stop::Halted;
-                    }
-                    Err(Fail::Backtrack(e)) => {
-                        input.reset(&cp);
-                        if let Some(e) = e {
-                            e.item(*n + 1).record(&mut input.state, at);
-                        }
-                        break Stop::Ended;
-                    }
-                    Err(fail) => {
-                        input.reset(&cp);
-                        if let Some(s) = snapshot {
-                            input.state.user_state = s;
-                        }
-                        break Stop::Failed(fail);
-                    }
-                }
-            };
-            (stop, input.current_token_start(), input.state)
-        };
+        let (stop, at, mut ctx, prev, reaching) = self.scan_window(ctx, f, n, &pass, mode, lazy);
         ctx.rules.clear();
         ctx.origin = 0;
         end_step(&mut self.furthest, &mut self.cut_stash, &mut ctx, origin);
@@ -602,6 +511,142 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         }));
         self.pos += at;
         self.prune();
+        self.settle(stop, rules, n, f, &pass, mode)
+    }
+
+    /// Parses items from the window until one stops the step: the item
+    /// loop, whole, with where it stopped, the context back, the start of
+    /// the last item taken and the failures that reach past their item.
+    fn scan_window<F>(
+        &self,
+        ctx: ParseContext<S>,
+        f: &mut F,
+        n: &mut usize,
+        pass: &Pass,
+        mode: Diagnose,
+        lazy: bool,
+    ) -> (Stop, usize, ParseContext<S>, Option<usize>, Vec<Reaching>)
+    where
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<bool, Fail>,
+    {
+        let zst = std::mem::size_of::<S>() == 0;
+        let last = pass.last;
+        let window = self.visible - self.pos;
+        let lookahead = self.lookahead;
+        let mut prev = None;
+        let (k, track) = (self.k, TRACK);
+        let mut reaching = Vec::new();
+        let mut input = Input {
+            input: winnow::stream::LocatingSlice::new(K::view(
+                &self.buf.bytes()[self.pos..self.visible],
+            )),
+            state: ctx,
+        };
+        // What an eager pass recorded before the item being parsed.
+        let mut recorded = None;
+        let stop = loop {
+            let at = input.current_token_start();
+            // Filled to the lookahead, every item gets all of it: one that
+            // would start with less waits for the next window.
+            if !lazy && !last && window - at < lookahead {
+                break Stop::Refill;
+            }
+            let snapshot = (!zst && (mode == Diagnose::Replay || (lazy && !last)))
+                .then(|| input.state.user_state.clone());
+            let saved = (input.state.recoveries, input.state.recovered.len());
+            // What an eager pass recorded before this item: an attempt
+            // that is parsed again with more input records nothing.
+            if pass.diagnose {
+                recorded = saved_furthest(&input.state);
+            }
+            input.state.touched = false;
+            if track {
+                input.state.reach = usize::MAX;
+            }
+            let cp = input.checkpoint();
+            let r = f(&mut input, pass, *n + 1);
+            if input.state.touched && !last {
+                input.reset(&cp);
+                if let Some(s) = snapshot {
+                    input.state.user_state = s;
+                }
+                input.state.recoveries = saved.0;
+                input.state.recovered.truncate(saved.1);
+                // An item begins with no cut open - the window starts
+                // with none, and an item that matched closed its own -
+                // so what this try left open goes.
+                drop_open_cuts(&mut input.state.cut_stash);
+                if pass.diagnose {
+                    input.state.furthest = recorded.take();
+                }
+                break if window - at >= lookahead {
+                    Stop::TooFar
+                } else {
+                    Stop::Refill
+                };
+            }
+            match r {
+                Ok(true) => {
+                    *n += 1;
+                    prev = Some(at);
+                    // A failure within `k` of where the item ended, or
+                    // past it: one of what follows may have to beat it.
+                    let reach = input.state.reach;
+                    if track && reach <= input.eof_offset() + k {
+                        reaching.push(Reaching {
+                            start: at,
+                            reach: window - reach,
+                            n: *n,
+                        });
+                    }
+                }
+                Ok(false) => break Stop::Ended,
+                // Taken - `commit` held, so it did not touch the end -
+                // and the caller wants no more.
+                Err(Fail::Stop) => {
+                    *n += 1;
+                    break Stop::Halted;
+                }
+                Err(Fail::Backtrack(e)) => {
+                    input.reset(&cp);
+                    if let Some(e) = e {
+                        e.item(*n + 1).record(&mut input.state, at);
+                    }
+                    break Stop::Ended;
+                }
+                Err(fail) => {
+                    input.reset(&cp);
+                    if let Some(s) = snapshot {
+                        input.state.user_state = s;
+                    }
+                    break Stop::Failed(fail);
+                }
+            }
+        };
+        (
+            stop,
+            input.current_token_start(),
+            input.state,
+            prev,
+            reaching,
+        )
+    }
+
+    /// Acts on how the step stopped: reads more, takes the error, or parses
+    /// again with the diagnosing pass for what the fast one did not record.
+    fn settle<F>(
+        &mut self,
+        stop: Stop,
+        rules: &[&'static str],
+        n: &mut usize,
+        f: &mut F,
+        pass: &Pass,
+        mode: Diagnose,
+    ) -> Result<bool, ParseError>
+    where
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<bool, Fail>,
+    {
+        let last = pass.last;
         let diagnose = Pass {
             diagnose: true,
             last,

@@ -570,10 +570,6 @@ fn check_sequence(seq: &[ModelPattern], lexical: bool, rule: &Rule, cx: &Cx) -> 
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "over the limit when the lint came in; split it, then drop this"
-)]
 fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::Result<()> {
     match p {
         ModelPattern::Cut(_) | ModelPattern::Fail { .. } | ModelPattern::Guard { .. } => Ok(()),
@@ -592,74 +588,17 @@ fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::
         }
         ModelPattern::RuleCall {
             rule_path, args, ..
-        } => {
-            let name = rule_path
-                .segments
-                .last()
-                .map(|s| s.ident.to_string())
-                .unwrap_or_default();
-            for a in args {
-                let Some(pat) = a.pattern() else {
-                    continue;
-                };
-                check_pattern(pat, lexical, rule, cx)?;
-            }
-            if cx.user_rules.contains(&name) {
-                // Reached; checked as a rule of its own.
-                return Ok(());
-            }
-            if name == FRAME_END {
-                return Err(cx.err(
-                    p.span(),
-                    format!(
-                        "`frame_end` inside rule `{}` - it is the boundary itself, and",
-                        rule.name
-                    ),
-                ));
-            }
-            if cx.builtins.contains(&name) && cx.builtin_overlaps(&name) {
-                return Err(cx.err(
-                    p.span(),
-                    format!("the built-in `{name}` in rule `{}`", rule.name),
-                ));
-            }
-            Ok(())
-        }
+        } => check_call(p, rule_path, args, lexical, rule, cx),
         // `until` consumes anything up to its terminator. Inside a frame the
         // terminator has to cover the boundary, so that the scan stops at or
         // before it; the terminator itself is not consumed, so its text is
         // not the concern here.
-        ModelPattern::Until { pattern, .. } => {
-            let covered = terminator_alternatives(pattern, cx.user_rules, cx.literal_rules)
-                .is_some_and(|alts| covers(&alts, cx.boundary));
-            if covered {
-                Ok(())
-            } else {
-                Err(syn::Error::new(
-                    p.span(),
-                    format!(
-                        "`until(…)` in rule `{}` can run through the boundary {:?} of frame `{}`; \
-                         add the boundary as an alternative of the terminator so the scan stops \
-                         there: `until(… | frame_end)`",
-                        rule.name, cx.boundary, cx.frame
-                    ),
-                ))
-            }
-        }
+        ModelPattern::Until { pattern, .. } => check_until(p, pattern, rule, cx),
         // The skip would have to stop at the boundary and the synchronization
         // token would have to consume it, or neither; there is no
         // `recover(…)` that is sound under a frame. The same recovery is a
         // frame-local alternative: `(item | until("\n")) "\n"`.
-        ModelPattern::Recover { .. } => Err(syn::Error::new(
-            p.span(),
-            format!(
-                "`recover(…)` in rule `{}` skips input up to a synchronization token that is \
-                 then consumed; under the boundary {:?} of frame `{}` that skip cannot be kept \
-                 inside the frame. Recover per frame instead, with an alternative that takes the \
-                 rest of the frame: `(… | until(frame_end)) frame_end`",
-                rule.name, cx.boundary, cx.frame
-            ),
-        )),
+        ModelPattern::Recover { .. } => Err(recover_under_frame(p, rule, cx)),
         ModelPattern::Group { alts, .. } => {
             for (seq, _, _) in alts {
                 check_sequence(seq, lexical, rule, cx)?;
@@ -712,6 +651,83 @@ fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::
         ModelPattern::LexicalScope(inner, _) => check_pattern(inner, true, rule, cx),
         ModelPattern::SpacedScope(inner, _) => check_pattern(inner, false, rule, cx),
     }
+}
+
+/// A rule call under a frame: its argument patterns are checked, and a
+/// built-in that can consume the boundary (or `frame_end` itself) is an
+/// error. A user rule is checked as a rule of its own.
+fn check_call(
+    p: &ModelPattern,
+    rule_path: &syn::Path,
+    args: &[Argument],
+    lexical: bool,
+    rule: &Rule,
+    cx: &Cx,
+) -> syn::Result<()> {
+    let name = rule_path
+        .segments
+        .last()
+        .map(|s| s.ident.to_string())
+        .unwrap_or_default();
+    for a in args {
+        let Some(pat) = a.pattern() else {
+            continue;
+        };
+        check_pattern(pat, lexical, rule, cx)?;
+    }
+    if cx.user_rules.contains(&name) {
+        // Reached; checked as a rule of its own.
+        return Ok(());
+    }
+    if name == FRAME_END {
+        return Err(cx.err(
+            p.span(),
+            format!(
+                "`frame_end` inside rule `{}` - it is the boundary itself, and",
+                rule.name
+            ),
+        ));
+    }
+    if cx.builtins.contains(&name) && cx.builtin_overlaps(&name) {
+        return Err(cx.err(
+            p.span(),
+            format!("the built-in `{name}` in rule `{}`", rule.name),
+        ));
+    }
+    Ok(())
+}
+
+/// `until(…)` under a frame: its terminator must cover the boundary.
+fn check_until(p: &ModelPattern, pattern: &ModelPattern, rule: &Rule, cx: &Cx) -> syn::Result<()> {
+    let covered = terminator_alternatives(pattern, cx.user_rules, cx.literal_rules)
+        .is_some_and(|alts| covers(&alts, cx.boundary));
+    if covered {
+        Ok(())
+    } else {
+        Err(syn::Error::new(
+            p.span(),
+            format!(
+                "`until(…)` in rule `{}` can run through the boundary {:?} of frame `{}`; \
+                 add the boundary as an alternative of the terminator so the scan stops \
+                 there: `until(… | frame_end)`",
+                rule.name, cx.boundary, cx.frame
+            ),
+        ))
+    }
+}
+
+/// The error for `recover(…)` under a frame, which is never sound there.
+fn recover_under_frame(p: &ModelPattern, rule: &Rule, cx: &Cx) -> syn::Error {
+    syn::Error::new(
+        p.span(),
+        format!(
+            "`recover(…)` in rule `{}` skips input up to a synchronization token that is \
+             then consumed; under the boundary {:?} of frame `{}` that skip cannot be kept \
+             inside the frame. Recover per frame instead, with an alternative that takes the \
+             rest of the frame: `(… | until(frame_end)) frame_end`",
+            rule.name, cx.boundary, cx.frame
+        ),
+    )
 }
 
 /// Can the built-in ever consume this character? Conservative: an unknown

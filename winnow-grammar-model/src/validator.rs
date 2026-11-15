@@ -221,10 +221,6 @@ fn validate_pattern_sequence(
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "over the limit when the lint came in; split it, then drop this"
-)]
 fn validate_pattern(
     pattern: &ModelPattern,
     all_defs: &HashSet<String>,
@@ -233,57 +229,7 @@ fn validate_pattern(
     match pattern {
         ModelPattern::RuleCall {
             rule_path, args, ..
-        } => {
-            // Check if it's a multi-segment path (e.g., imported call)
-            let rule_name_opt = rule_path.get_ident().map(|ident| ident.to_string());
-
-            if let Some(rule_name_str) = rule_name_opt {
-                let rule_name_ident = if let Some(ident) = rule_path.get_ident() {
-                    ident
-                } else {
-                    &rule_path.segments[1].ident
-                };
-
-                // Check if rule_name is in all_defs OR in params (as a grammar parameter)
-                let is_param = params.iter().any(|p| p.name == *rule_name_ident);
-
-                let is_portable_builtin =
-                    rule_name_ident == "separated" || rule_name_ident == "repeated";
-
-                if !all_defs.contains(&rule_name_str) && !is_param && !is_portable_builtin {
-                    if rule_name_str == BYTES_BUILTIN {
-                        return Err(syn::Error::new(
-                            rule_path.span(),
-                            "`bytes(p)` exists only in a grammar that declares `input bytes;`; \
-                             a text grammar's input is already text, so `text(p)` is what \
-                             captures it",
-                        ));
-                    }
-                    if rule_name_str == BYTE_BUILTIN {
-                        return Err(syn::Error::new(
-                            rule_path.span(),
-                            "`byte` exists only in a grammar that declares `input bytes;`; \
-                             a text grammar's input is characters, so `any` is what reads one",
-                        ));
-                    }
-                    return Err(syn::Error::new(
-                        rule_path.span(),
-                        format!("Undefined rule: '{}'", rule_name_str),
-                    ));
-                }
-            } else {
-                // Imported/namespaced calls are assumed valid external references.
-            }
-
-            for arg in args {
-                match arg {
-                    Argument::Positional(p) | Argument::Named(_, p) => {
-                        validate_pattern(p, all_defs, params)?;
-                    }
-                    Argument::Value(..) => {}
-                }
-            }
-        }
+        } => validate_rule_call(rule_path, args, all_defs, params)?,
         ModelPattern::Repeat(inner, _)
         | ModelPattern::Plus(inner, _)
         | ModelPattern::Optional(inner, _)
@@ -341,6 +287,65 @@ fn validate_pattern(
         }
         ModelPattern::Fail { .. } => {}
         _ => {}
+    }
+    Ok(())
+}
+
+/// Checks a rule call: a local name must be a rule, a grammar parameter or
+/// a portable built-in, and each argument pattern is validated in turn.
+fn validate_rule_call(
+    rule_path: &syn::Path,
+    args: &[Argument],
+    all_defs: &HashSet<String>,
+    params: &[RuleParameter],
+) -> syn::Result<()> {
+    // Check if it's a multi-segment path (e.g., imported call)
+    let rule_name_opt = rule_path.get_ident().map(|ident| ident.to_string());
+
+    if let Some(rule_name_str) = rule_name_opt {
+        let rule_name_ident = if let Some(ident) = rule_path.get_ident() {
+            ident
+        } else {
+            &rule_path.segments[1].ident
+        };
+
+        // Check if rule_name is in all_defs OR in params (as a grammar parameter)
+        let is_param = params.iter().any(|p| p.name == *rule_name_ident);
+
+        let is_portable_builtin = rule_name_ident == "separated" || rule_name_ident == "repeated";
+
+        if !all_defs.contains(&rule_name_str) && !is_param && !is_portable_builtin {
+            if rule_name_str == BYTES_BUILTIN {
+                return Err(syn::Error::new(
+                    rule_path.span(),
+                    "`bytes(p)` exists only in a grammar that declares `input bytes;`; \
+                         a text grammar's input is already text, so `text(p)` is what \
+                         captures it",
+                ));
+            }
+            if rule_name_str == BYTE_BUILTIN {
+                return Err(syn::Error::new(
+                    rule_path.span(),
+                    "`byte` exists only in a grammar that declares `input bytes;`; \
+                         a text grammar's input is characters, so `any` is what reads one",
+                ));
+            }
+            return Err(syn::Error::new(
+                rule_path.span(),
+                format!("Undefined rule: '{}'", rule_name_str),
+            ));
+        }
+    } else {
+        // Imported/namespaced calls are assumed valid external references.
+    }
+
+    for arg in args {
+        match arg {
+            Argument::Positional(p) | Argument::Named(_, p) => {
+                validate_pattern(p, all_defs, params)?;
+            }
+            Argument::Value(..) => {}
+        }
     }
     Ok(())
 }

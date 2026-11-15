@@ -392,10 +392,6 @@ impl<'a> Codegen<'a> {
     /// The indexed match of one element `f`, its value in `v`. What the
     /// match yields is pushed to `yields`; what has to run once the whole
     /// run matched - a called rule's action (§8d) - goes to `after`.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
     fn fixed_match(
         &self,
         f: &Fixed,
@@ -424,95 +420,9 @@ impl<'a> Codegen<'a> {
             // that a mismatch after it leaves nothing done twice when the
             // elements run as written.
             Fixed::Call(elements, rule, _) => {
-                let mut matches = TokenStream::new();
-                let mut lets = TokenStream::new();
-                for (k, inner) in elements.iter().enumerate() {
-                    let w = format_ident!("{}_{}", v, k, span = span);
-                    matches.extend(self.fixed_match(inner, &w, fail, yields, after));
-                    if let Some(name) = inner.binding() {
-                        lets.extend(quote_spanned! {span=>
-                            #[allow(unused_variables)]
-                            let #name = #w;
-                        });
-                    }
-                }
-                let ret = &rule.return_type;
-                let action = &rule.variants[0].action;
-                let input = &self.input_ident;
-                // The rule's action sees what it sees in its own function:
-                // its bindings and the context (`variants.rs`).
-                let state = quote! { let _state = &mut #input.state; };
-                after.extend(quote_spanned! {span=>
-                    let #v_pat: #ret = {
-                        #lets
-                        #state
-                        { #action }
-                    };
-                });
-                matches
+                self.fixed_call_match(elements, rule, v, &v_pat, fail, yields, after)
             }
-            // An element nobody named is matched and not sliced: a cut
-            // of the text is two character-boundary checks (#23).
-            // One ASCII byte, the usual separator or sign: compared as a
-            // byte, its text cut where the compare shows a boundary, and
-            // an optional one taken without a branch on whether it is
-            // there - a sign is as often there as not.
-            Fixed::Lit(bytes, b_) if bytes.len() == 1 => {
-                let byte = bytes[0];
-                let value = b_.map(|_| {
-                    let cut = self.byte_text(&s, &at);
-                    quote_spanned! {span=> let #v = #cut; }
-                });
-                quote_spanned! {span=>
-                    if #b.get(#at) != ::core::option::Option::Some(&#byte) { break 'fixed #fail; }
-                    #value
-                    #at += 1;
-                }
-            }
-            Fixed::OptLit(bytes, b_) if bytes.len() == 1 => {
-                let byte = bytes[0];
-                let value = b_.map(|_| {
-                    let cut = self.byte_text(&s, &at);
-                    quote_spanned! {span=>
-                        let #v = if hit { ::core::option::Option::Some(#cut) } else { ::core::option::Option::None };
-                    }
-                });
-                quote_spanned! {span=>
-                    let hit = #b.get(#at) == ::core::option::Option::Some(&#byte);
-                    #value
-                    #at += usize::from(hit);
-                }
-            }
-            Fixed::Lit(bytes, b_) => {
-                let n = bytes.len();
-                let lit = syn::LitByteStr::new(bytes, span);
-                let value = b_.map(|_| quote_spanned! {span=> let #v = &#s[#at..#at + #n]; });
-                quote_spanned! {span=>
-                    if !#b[#at..].starts_with(#lit) { break 'fixed #fail; }
-                    #value
-                    #at += #n;
-                }
-            }
-            Fixed::OptLit(bytes, b_) if b_.is_none() => {
-                let n = bytes.len();
-                let lit = syn::LitByteStr::new(bytes, span);
-                quote_spanned! {span=>
-                    if #b[#at..].starts_with(#lit) { #at += #n; }
-                }
-            }
-            Fixed::OptLit(bytes, _) => {
-                let n = bytes.len();
-                let lit = syn::LitByteStr::new(bytes, span);
-                quote_spanned! {span=>
-                    let #v_pat = if #b[#at..].starts_with(#lit) {
-                        let v = &#s[#at..#at + #n];
-                        #at += #n;
-                        ::core::option::Option::Some(v)
-                    } else {
-                        ::core::option::Option::None
-                    };
-                }
-            }
+            Fixed::Lit(..) | Fixed::OptLit(..) => self.lit_match(f, v, &v_pat, fail),
             Fixed::Digit(class, _) => {
                 let test = class.test();
                 quote_spanned! {span=>
@@ -552,45 +462,183 @@ impl<'a> Codegen<'a> {
                     #value
                 }
             }
-            // The value as the digits are matched: `max` of them always
-            // fit, so the wrapping operations never wrap, and the result
-            // is the one `str::parse` gives. No digit at all is `dec`'s
-            // error, left to the elements (`min` is at least one), and
-            // `max` is at most 38, the most any type takes.
-            Fixed::Dec(ty, min, max, _) => {
-                // One test per digit, written out: a short field is a
-                // few compares, not a loop with a counter.
-                let mut digits = TokenStream::new();
-                for k in 0..*max {
-                    let step = if k == 0 {
-                        quote_spanned! {span=> value = (c - b'0') as #ty; }
-                    } else {
-                        quote_spanned! {span=> value = value.wrapping_mul(10).wrapping_add((c - b'0') as #ty); }
-                    };
-                    let missing = if k < *min {
-                        quote_spanned! {span=> break 'fixed #fail }
-                    } else {
-                        quote_spanned! {span=> break 'dec }
-                    };
-                    digits.extend(quote_spanned! {span=>
-                        match #b.get(#at) {
-                            ::core::option::Option::Some(&c) if c.is_ascii_digit() => {
-                                #step
-                                #at += 1;
-                            }
-                            _ => #missing,
-                        }
-                    });
-                }
+            Fixed::Dec(ty, min, max, _) => self.dec_match(ty, *min, *max, &v_pat, fail),
+        }
+    }
+
+    /// The match of a literal, optional or not, its text in `v` when it is
+    /// bound.
+    fn lit_match(
+        &self,
+        f: &Fixed,
+        v: &syn::Ident,
+        v_pat: &TokenStream,
+        fail: &TokenStream,
+    ) -> TokenStream {
+        let span = Span::mixed_site();
+        let s = format_ident!("__fixed_s", span = span);
+        let b = format_ident!("__fixed_b", span = span);
+        let at = format_ident!("__fixed_at", span = span);
+        match f {
+            // An element nobody named is matched and not sliced: a cut
+            // of the text is two character-boundary checks (#23).
+            // One ASCII byte, the usual separator or sign: compared as a
+            // byte, its text cut where the compare shows a boundary, and
+            // an optional one taken without a branch on whether it is
+            // there - a sign is as often there as not.
+            Fixed::Lit(bytes, b_) if bytes.len() == 1 => {
+                let byte = bytes[0];
+                let value = b_.map(|_| {
+                    let cut = self.byte_text(&s, &at);
+                    quote_spanned! {span=> let #v = #cut; }
+                });
                 quote_spanned! {span=>
-                    let mut value: #ty = 0;
-                    #[allow(unused_labels)]
-                    'dec: {
-                        #digits
-                    }
-                    let #v_pat = value;
+                    if #b.get(#at) != ::core::option::Option::Some(&#byte) { break 'fixed #fail; }
+                    #value
+                    #at += 1;
                 }
             }
+            Fixed::OptLit(bytes, b_) if bytes.len() == 1 => {
+                let byte = bytes[0];
+                let value = b_.map(|_| {
+                let cut = self.byte_text(&s, &at);
+                quote_spanned! {span=>
+                    let #v = if hit { ::core::option::Option::Some(#cut) } else { ::core::option::Option::None };
+                }
+            });
+                quote_spanned! {span=>
+                    let hit = #b.get(#at) == ::core::option::Option::Some(&#byte);
+                    #value
+                    #at += usize::from(hit);
+                }
+            }
+            Fixed::Lit(bytes, b_) => {
+                let n = bytes.len();
+                let lit = syn::LitByteStr::new(bytes, span);
+                let value = b_.map(|_| quote_spanned! {span=> let #v = &#s[#at..#at + #n]; });
+                quote_spanned! {span=>
+                    if !#b[#at..].starts_with(#lit) { break 'fixed #fail; }
+                    #value
+                    #at += #n;
+                }
+            }
+            Fixed::OptLit(bytes, b_) if b_.is_none() => {
+                let n = bytes.len();
+                let lit = syn::LitByteStr::new(bytes, span);
+                quote_spanned! {span=>
+                    if #b[#at..].starts_with(#lit) { #at += #n; }
+                }
+            }
+            Fixed::OptLit(bytes, _) => {
+                let n = bytes.len();
+                let lit = syn::LitByteStr::new(bytes, span);
+                quote_spanned! {span=>
+                    let #v_pat = if #b[#at..].starts_with(#lit) {
+                        let v = &#s[#at..#at + #n];
+                        #at += #n;
+                        ::core::option::Option::Some(v)
+                    } else {
+                        ::core::option::Option::None
+                    };
+                }
+            }
+            _ => unreachable!("only literals reach here"),
+        }
+    }
+
+    /// The match of a called rule taken in (ADR 24 §8d): its elements in
+    /// the call's place, and its action pushed to `after`, to run on what
+    /// they bound once the whole run matched.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "fixed_match's state, handed down unchanged"
+    )]
+    fn fixed_call_match(
+        &self,
+        elements: &[Fixed],
+        rule: &Rule,
+        v: &syn::Ident,
+        v_pat: &TokenStream,
+        fail: &TokenStream,
+        yields: &mut Vec<syn::Ident>,
+        after: &mut TokenStream,
+    ) -> TokenStream {
+        let span = Span::mixed_site();
+        let mut matches = TokenStream::new();
+        let mut lets = TokenStream::new();
+        for (k, inner) in elements.iter().enumerate() {
+            let w = format_ident!("{}_{}", v, k, span = span);
+            matches.extend(self.fixed_match(inner, &w, fail, yields, after));
+            if let Some(name) = inner.binding() {
+                lets.extend(quote_spanned! {span=>
+                    #[allow(unused_variables)]
+                    let #name = #w;
+                });
+            }
+        }
+        let ret = &rule.return_type;
+        let action = &rule.variants[0].action;
+        let input = &self.input_ident;
+        // The rule's action sees what it sees in its own function:
+        // its bindings and the context (`variants.rs`).
+        let state = quote! { let _state = &mut #input.state; };
+        after.extend(quote_spanned! {span=>
+            let #v_pat: #ret = {
+                #lets
+                #state
+                { #action }
+            };
+        });
+        matches
+    }
+
+    /// The value of `dec<ty>` as its digits are matched: `max` of them
+    /// always fit, so the wrapping operations never wrap, and the result is
+    /// the one `str::parse` gives. No digit at all is `dec`'s error, left
+    /// to the elements (`min` is at least one), and `max` is at most 38,
+    /// the most any type takes.
+    fn dec_match(
+        &self,
+        ty: &syn::Type,
+        min: usize,
+        max: usize,
+        v_pat: &TokenStream,
+        fail: &TokenStream,
+    ) -> TokenStream {
+        let span = Span::mixed_site();
+        let b = format_ident!("__fixed_b", span = span);
+        let at = format_ident!("__fixed_at", span = span);
+        // One test per digit, written out: a short field is a
+        // few compares, not a loop with a counter.
+        let mut digits = TokenStream::new();
+        for k in 0..max {
+            let step = if k == 0 {
+                quote_spanned! {span=> value = (c - b'0') as #ty; }
+            } else {
+                quote_spanned! {span=> value = value.wrapping_mul(10).wrapping_add((c - b'0') as #ty); }
+            };
+            let missing = if k < min {
+                quote_spanned! {span=> break 'fixed #fail }
+            } else {
+                quote_spanned! {span=> break 'dec }
+            };
+            digits.extend(quote_spanned! {span=>
+                match #b.get(#at) {
+                    ::core::option::Option::Some(&c) if c.is_ascii_digit() => {
+                        #step
+                        #at += 1;
+                    }
+                    _ => #missing,
+                }
+            });
+        }
+        quote_spanned! {span=>
+            let mut value: #ty = 0;
+            #[allow(unused_labels)]
+            'dec: {
+                #digits
+            }
+            let #v_pat = value;
         }
     }
 
@@ -603,19 +651,15 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
-    fn fixed_run(&self, run: &[&Fixed], patterns: &[ModelPattern], in_cut: bool) -> TokenStream {
+    /// Binds the rest of the input: `__fixed_s` as text or bytes, and
+    /// `__fixed_b` as its bytes, which the indexed match reads.
+    fn slice_of_rest(&self) -> TokenStream {
         let rts = self.rts();
         let span = Span::mixed_site();
         let input = &self.input_ident;
         let s = format_ident!("__fixed_s", span = span);
         let b = format_ident!("__fixed_b", span = span);
-        let at = format_ident!("__fixed_at", span = span);
-
-        let slice_of_rest = if self.is_bytes() {
+        if self.is_bytes() {
             quote_spanned! {span=>
                 let #s: &'a [u8] = #rts::rest(#input);
                 let #b = #s;
@@ -625,7 +669,34 @@ impl<'a> Codegen<'a> {
                 let #s: &'a str = #rts::rest(#input);
                 let #b = #s.as_bytes();
             }
-        };
+        }
+    }
+
+    /// The run's elements generated as they always were, a `=>` among them
+    /// included: what runs when the indexed match does not.
+    fn fixed_fallback(&self, patterns: &[ModelPattern], in_cut: bool) -> Vec<TokenStream> {
+        let mut cut = in_cut;
+        patterns
+            .iter()
+            .map(|p| {
+                if let ModelPattern::Cut(_) = p {
+                    cut = true;
+                }
+                self.generate_step(p, cut, true)
+            })
+            .collect()
+    }
+
+    /// A run of fixed-shape elements (ADR 24 §8): matched by index over the
+    /// rest of the input on the fast pass, and as written otherwise or when
+    /// the indexed match fails.
+    fn fixed_run(&self, run: &[&Fixed], patterns: &[ModelPattern], in_cut: bool) -> TokenStream {
+        let rts = self.rts();
+        let span = Span::mixed_site();
+        let input = &self.input_ident;
+        let at = format_ident!("__fixed_at", span = span);
+
+        let slice_of_rest = self.slice_of_rest();
         // What a failed match breaks out with: the run either yields its
         // values or, with none, only whether it matched.
         let fail = if run.iter().any(|f| Self::yields_values(f)) {
@@ -650,16 +721,7 @@ impl<'a> Codegen<'a> {
         // The fallback: the same elements, generated as they always were,
         // a `=>` among them included, their bindings handed out as the
         // indexed match's would be.
-        let mut cut = in_cut;
-        let fallback: Vec<TokenStream> = patterns
-            .iter()
-            .map(|p| {
-                if let ModelPattern::Cut(_) = p {
-                    cut = true;
-                }
-                self.generate_step(p, cut, true)
-            })
-            .collect();
+        let fallback = self.fixed_fallback(patterns, in_cut);
         let prelude = quote_spanned! {span=>
             #slice_of_rest
             let mut #at = 0usize;

@@ -13,13 +13,10 @@ use super::Codegen;
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use winnow_grammar_model::model::{ModelPattern, Rule};
+use winnow_grammar_model::parser::FoldBounds;
 use winnow_grammar_model::stream::{Level, StreamPath};
 
 impl Codegen<'_> {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
     pub fn generate_stream_fns(&self, rule: &Rule) -> TokenStream {
         let name = rule.name.to_string();
         let Some(path) = self.streams.paths.get(&name) else {
@@ -66,50 +63,9 @@ impl Codegen<'_> {
             }
         };
         let body = self.stream_level(path, 0, &view, &mut helpers, false);
-        let call = |f: &syn::Ident, args: TokenStream| {
-            quote_spanned! {span=>
-                |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, _: usize| {
-                    if pass.diagnose() {
-                        #f::<__WgS, ::winnow_grammar::ParseError>(input, #args)
-                            .map_err(::winnow_grammar::rt::stream::Fail::from)
-                    } else {
-                        #f::<__WgS, ::winnow::error::EmptyError>(input, #args)
-                            .map_err(::winnow_grammar::rt::stream::Fail::from)
-                    }
-                }
-            }
-        };
-        let finish = call(&end_fn, quote! {});
+        let finish = step_call(&view, &end_fn, &[]);
         let each_fn = if path.each {
-            let each_fn = format_ident!("parse_{}_reader_each", rule.name, span = span);
-            let body = self.stream_level(path, 0, &view, &mut TokenStream::new(), true);
-            let item = self.stream_item_type(path);
-            let params = params.clone();
-            quote_spanned! {span=>
-                /// [`#reader_fn`], showing `each` every item of the fold as
-                /// it is taken, before the fold's step takes it. `each`
-                /// returning `Break(b)` ends the parse there - nothing after
-                /// that item is read - with `Ok(Break(b))`; a parse that
-                /// reads to the end is `Ok(Continue(value))`. Items are seen
-                /// once each, in order; the grammar's fold runs as it always
-                /// does (ADR 27 §3).
-                #[allow(dead_code, non_snake_case, unused_mut, unused_variables, clippy::let_unit_value)]
-                #vis fn #each_fn<__WgS: ::std::fmt::Debug + Clone #state_bound, __WgB>(
-                    reader: impl ::std::io::Read,
-                    context: &mut ::winnow_grammar::ParseContext<__WgS>,
-                    reading: ::winnow_grammar::rt::Reading,
-                    #(#params,)*
-                    mut each: impl for<'a> FnMut(&#item) -> ::core::ops::ControlFlow<__WgB>,
-                ) -> ::core::result::Result<::core::ops::ControlFlow<__WgB, #ret>, ::winnow_grammar::ParseError> {
-                    let mut __broken: ::core::option::Option<__WgB> = ::core::option::Option::None;
-                    let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::new(
-                        reader, context, reading, #k,
-                    );
-                    let __value = #body;
-                    __stream.finish(#finish)?;
-                    ::core::result::Result::Ok(::core::ops::ControlFlow::Continue(__value))
-                }
-            }
+            self.stream_each_fn(rule, path, &view, &kind, &finish, &params)
         } else {
             quote! {}
         };
@@ -140,12 +96,55 @@ impl Codegen<'_> {
         }
     }
 
+    /// `parse_<rule>_reader_each` of a stream rule whose fold has `each`:
+    /// the reader function, showing every item to a callback.
+    fn stream_each_fn(
+        &self,
+        rule: &Rule,
+        path: &StreamPath,
+        view: &TokenStream,
+        kind: &TokenStream,
+        finish: &TokenStream,
+        params: &[TokenStream],
+    ) -> TokenStream {
+        let span = Span::mixed_site();
+        let state_bound = self.state_bound();
+        let vis = &rule.vis;
+        let ret = &rule.return_type;
+        let k = self.edge_k;
+        let reach = self.reach;
+        let each_fn = format_ident!("parse_{}_reader_each", rule.name, span = span);
+        let body = self.stream_level(path, 0, view, &mut TokenStream::new(), true);
+        let item = self.stream_item_type(path);
+        quote_spanned! {span=>
+            /// [`#reader_fn`], showing `each` every item of the fold as
+            /// it is taken, before the fold's step takes it. `each`
+            /// returning `Break(b)` ends the parse there - nothing after
+            /// that item is read - with `Ok(Break(b))`; a parse that
+            /// reads to the end is `Ok(Continue(value))`. Items are seen
+            /// once each, in order; the grammar's fold runs as it always
+            /// does (ADR 27 §3).
+            #[allow(dead_code, non_snake_case, unused_mut, unused_variables, clippy::let_unit_value)]
+            #vis fn #each_fn<__WgS: ::std::fmt::Debug + Clone #state_bound, __WgB>(
+                reader: impl ::std::io::Read,
+                context: &mut ::winnow_grammar::ParseContext<__WgS>,
+                reading: ::winnow_grammar::rt::Reading,
+                #(#params,)*
+                mut each: impl for<'a> FnMut(&#item) -> ::core::ops::ControlFlow<__WgB>,
+            ) -> ::core::result::Result<::core::ops::ControlFlow<__WgB, #ret>, ::winnow_grammar::ParseError> {
+                let mut __broken: ::core::option::Option<__WgB> = ::core::option::Option::None;
+                let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::new(
+                    reader, context, reading, #k,
+                );
+                let __value = #body;
+                __stream.finish(#finish)?;
+                ::core::result::Result::Ok(::core::ops::ControlFlow::Continue(__value))
+            }
+        }
+    }
+
     /// The code of level `j` of the path, as a block whose value is the
     /// value of the rule; its step functions go to `helpers`.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
     fn stream_level(
         &self,
         path: &StreamPath,
@@ -157,114 +156,9 @@ impl Codegen<'_> {
         let span = Span::mixed_site();
         let level: &Level = &path.levels[j];
         let rule = self.rule(&level.rule);
-        let stream_rule = &path.levels[0].rule;
         let v = &rule.variants[0];
         let at = level.at;
-        let lexical = rule.is_lexical;
-        let input_ty = self.input_ty();
-        let rt_error = self.rt_error();
-        let state_bound = self.state_bound();
-        let input = &self.input_ident;
-        let rules: Vec<&str> = path.levels[..=j].iter().map(|l| l.rule.as_str()).collect();
-        let skip = quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(WS, #input)?; };
-
-        let params: Vec<(syn::Ident, syn::Type)> = rule
-            .params
-            .iter()
-            .map(|p| (p.name.clone(), p.ty.clone().expect("value parameter")))
-            .collect();
-        let typed = |vals: &[(syn::Ident, syn::Type)]| {
-            vals.iter()
-                .map(|(n, t)| quote! { #n: #t })
-                .collect::<Vec<_>>()
-        };
-        let names = |vals: &[(syn::Ident, syn::Type)]| {
-            vals.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()
-        };
-        let clones = |vals: &[(syn::Ident, syn::Type)]| {
-            vals.iter()
-                .map(|(n, _)| quote! { ::core::clone::Clone::clone(&#n) })
-                .collect::<Vec<_>>()
-        };
-        let types = |vals: &[(syn::Ident, syn::Type)]| {
-            vals.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>()
-        };
-        let call = |f: &syn::Ident, args: &[TokenStream], ret: Option<TokenStream>| {
-            let ret = ret.map(
-                |r| quote! { -> ::core::result::Result<#r, ::winnow_grammar::rt::stream::Fail> },
-            );
-            quote_spanned! {span=>
-                |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, _: usize| #ret {
-                    if pass.diagnose() {
-                        #f::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
-                            .map_err(::winnow_grammar::rt::stream::Fail::from)
-                    } else {
-                        #f::<__WgS, ::winnow::error::EmptyError>(input, #(#args),*)
-                            .map_err(::winnow_grammar::rt::stream::Fail::from)
-                    }
-                }
-            }
-        };
-
-        // --- The prefix: the entry point's skip at the top, the rule's own
-        // at its start, its elements before `at`, and the skip before the
-        // element at `at`.
-        let prefix_fn = format_ident!("__stream_{}_{}_prefix", stream_rule, j, span = span);
-        let mut steps = TokenStream::new();
-        if j == 0 {
-            steps.extend(skip.clone());
-        }
-        if !lexical {
-            steps.extend(skip.clone());
-        }
-        // A cut here holds into the suffix, so its scope is not closed here:
-        // the driver closes it after the suffix (`scope_begin`/`scope_end`).
-        steps.extend(self.generate_sequence_steps_unscoped(&v.pattern[..at], false, lexical));
-        // The skip before the element at `at`: under the prefix's cut, if
-        // it has one, as in memory.
-        let prefix_cut = v.pattern[..at]
-            .iter()
-            .any(|p| matches!(p, ModelPattern::Cut(_)));
-        if !lexical && at > 0 {
-            steps.extend(Self::skip_stmt(input, prefix_cut));
-        }
-        let next_params: Vec<(syn::Ident, syn::Type)> = match path.levels.get(j + 1) {
-            Some(next) => self
-                .rule(&next.rule)
-                .params
-                .iter()
-                .map(|p| (p.name.clone(), p.ty.clone().expect("value parameter")))
-                .collect(),
-            None => Vec::new(),
-        };
-        let next_args: Vec<TokenStream> = match &v.pattern[at] {
-            ModelPattern::RuleCall { args, .. } if j + 1 < path.levels.len() => args
-                .iter()
-                .map(|a| self.generate_argument_expr(a, lexical))
-                .collect(),
-            _ => Vec::new(),
-        };
-        let carried = &level.carried;
-        let (c_names, c_types) = (names(carried), types(carried));
-        let a_types = types(&next_params);
-        let p_typed = typed(&params);
-        helpers.extend(quote_spanned! {span=>
-            #[allow(dead_code, non_snake_case, unused_variables, unused_mut, clippy::let_unit_value)]
-            fn #prefix_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
-                #input: &mut #input_ty,
-                #(#p_typed),*
-            ) -> ::winnow::Result<((#(#c_types,)*), (#(#a_types,)*)), ::winnow::error::ErrMode<__WgEr>> {
-                use ::winnow::Parser;
-                use ::winnow::prelude::*;
-                #steps
-                ::core::result::Result::Ok(((#(#c_names,)*), (#(#next_args,)*)))
-            }
-        });
-        let a_names = names(&next_params);
-        let prefix_call = call(&prefix_fn, &clones(&params), None);
-        let prefix = quote_spanned! {span=>
-            let ((#(#c_names,)*), (#(#a_names,)*)) = __stream.chunk(&[#(#rules),*], #prefix_call)?;
-        };
+        let (prefix, prefix_cut) = self.stream_prefix(path, j, view, helpers);
 
         // --- The element at `at`: the next rule's level, or the fold.
         let (middle, middle_value) = match path.levels.get(j + 1) {
@@ -286,42 +180,7 @@ impl Codegen<'_> {
             Some(b) => quote_spanned! {span=> let #b = __path; },
             None => quote! {},
         };
-
-        // --- The suffix: its elements, after the skip before the first.
-        let suffix_fn = format_ident!("__stream_{}_{}_suffix", stream_rule, j, span = span);
-        let suffix_pats = &v.pattern[at + 1..];
-        let cut = v.pattern[..=at]
-            .iter()
-            .any(|p| matches!(p, ModelPattern::Cut(_)));
-        let mut steps = TokenStream::new();
-        if !lexical && !suffix_pats.is_empty() {
-            steps.extend(Self::skip_stmt(input, cut));
-        }
-        steps.extend(self.generate_sequence_steps(suffix_pats, cut, lexical));
-        let returned = &level.returned;
-        let (r_names, r_types) = (names(returned), types(returned));
-        let mut s_in = params.clone();
-        s_in.extend(carried.iter().cloned());
-        if let (Some(b), Some(ty)) = (&binding, &path_param) {
-            s_in.push((b.clone(), ty.clone()));
-        }
-        let s_typed = typed(&s_in);
-        helpers.extend(quote_spanned! {span=>
-            #[allow(dead_code, non_snake_case, unused_variables, unused_mut, clippy::let_unit_value)]
-            fn #suffix_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
-                #input: &mut #input_ty,
-                #(#s_typed),*
-            ) -> ::winnow::Result<(#(#r_types,)*), ::winnow::error::ErrMode<__WgEr>> {
-                use ::winnow::Parser;
-                use ::winnow::prelude::*;
-                #steps
-                ::core::result::Result::Ok((#(#r_names,)*))
-            }
-        });
-        let suffix_call = call(&suffix_fn, &clones(&s_in), None);
-        let suffix = quote_spanned! {span=>
-            let (#(#r_names,)*) = __stream.chunk(&[#(#rules),*], #suffix_call)?;
-        };
+        let suffix = self.stream_suffix(path, j, view, helpers, binding.as_ref(), path_param);
 
         // --- The action, between steps, with the context.
         let ret = &rule.return_type;
@@ -364,49 +223,166 @@ impl Codegen<'_> {
         }
     }
 
-    /// The fold of the last rule of the path: `__path` is its value.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
-    fn stream_fold(
+    /// The prefix step of level `j`: the entry point's skip at the top, the
+    /// rule's own at its start, its elements before `at`, and the skip
+    /// before the element at `at`. Its function goes to `helpers`; returned
+    /// are the statement that runs it and whether it has a cut.
+    fn stream_prefix(
         &self,
         path: &StreamPath,
         j: usize,
         view: &TokenStream,
         helpers: &mut TokenStream,
-        each: bool,
+    ) -> (TokenStream, bool) {
+        let span = Span::mixed_site();
+        let level: &Level = &path.levels[j];
+        let rule = self.rule(&level.rule);
+        let v = &rule.variants[0];
+        let at = level.at;
+        let lexical = rule.is_lexical;
+        let input = &self.input_ident;
+        let skip = quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(WS, #input)?; };
+        let params = value_params(rule);
+        let prefix_fn = format_ident!("__stream_{}_{}_prefix", path.levels[0].rule, j, span = span);
+        let mut steps = TokenStream::new();
+        if j == 0 {
+            steps.extend(skip.clone());
+        }
+        if !lexical {
+            steps.extend(skip);
+        }
+        // A cut here holds into the suffix, so its scope is not closed here:
+        // the driver closes it after the suffix (`scope_begin`/`scope_end`).
+        steps.extend(self.generate_sequence_steps_unscoped(&v.pattern[..at], false, lexical));
+        // The skip before the element at `at`: under the prefix's cut, if
+        // it has one, as in memory.
+        let prefix_cut = v.pattern[..at]
+            .iter()
+            .any(|p| matches!(p, ModelPattern::Cut(_)));
+        if !lexical && at > 0 {
+            steps.extend(Self::skip_stmt(input, prefix_cut));
+        }
+        let next_params = match path.levels.get(j + 1) {
+            Some(next) => value_params(self.rule(&next.rule)),
+            None => Vec::new(),
+        };
+        let next_args: Vec<TokenStream> = match &v.pattern[at] {
+            ModelPattern::RuleCall { args, .. } if j + 1 < path.levels.len() => args
+                .iter()
+                .map(|a| self.generate_argument_expr(a, lexical))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let (c_names, c_types) = (names(&level.carried), types(&level.carried));
+        let a_types = types(&next_params);
+        let p_typed = typed(&params);
+        let (input_ty, rt_error, state_bound) =
+            (self.input_ty(), self.rt_error(), self.state_bound());
+        helpers.extend(quote_spanned! {span=>
+            #[allow(dead_code, non_snake_case, unused_variables, unused_mut, clippy::let_unit_value)]
+            fn #prefix_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
+                #input: &mut #input_ty,
+                #(#p_typed),*
+            ) -> ::winnow::Result<((#(#c_types,)*), (#(#a_types,)*)), ::winnow::error::ErrMode<__WgEr>> {
+                use ::winnow::Parser;
+                use ::winnow::prelude::*;
+                #steps
+                ::core::result::Result::Ok(((#(#c_names,)*), (#(#next_args,)*)))
+            }
+        });
+        let a_names = names(&next_params);
+        let rules = path_rules(path, j);
+        let prefix_call = step_call(view, &prefix_fn, &clones(&params));
+        let prefix = quote_spanned! {span=>
+            let ((#(#c_names,)*), (#(#a_names,)*)) = __stream.chunk(&[#(#rules),*], #prefix_call)?;
+        };
+        (prefix, prefix_cut)
+    }
+
+    /// The suffix step of level `j`: its elements after `at`, after the
+    /// skip before the first. It takes the rule's parameters, what the
+    /// prefix carried and the value at `at` (when that is bound and is the
+    /// next level's); its function goes to `helpers`, the statement that
+    /// runs it is returned.
+    fn stream_suffix(
+        &self,
+        path: &StreamPath,
+        j: usize,
+        view: &TokenStream,
+        helpers: &mut TokenStream,
+        binding: Option<&syn::Ident>,
+        path_param: Option<syn::Type>,
     ) -> TokenStream {
         let span = Span::mixed_site();
-        let level = &path.levels[j];
+        let level: &Level = &path.levels[j];
         let rule = self.rule(&level.rule);
-        let stream_rule = &path.levels[0].rule;
+        let v = &rule.variants[0];
+        let at = level.at;
         let lexical = rule.is_lexical;
+        let input = &self.input_ident;
+        let suffix_fn = format_ident!("__stream_{}_{}_suffix", path.levels[0].rule, j, span = span);
+        let suffix_pats = &v.pattern[at + 1..];
+        let cut = v.pattern[..=at]
+            .iter()
+            .any(|p| matches!(p, ModelPattern::Cut(_)));
+        let mut steps = TokenStream::new();
+        if !lexical && !suffix_pats.is_empty() {
+            steps.extend(Self::skip_stmt(input, cut));
+        }
+        steps.extend(self.generate_sequence_steps(suffix_pats, cut, lexical));
+        let returned = &level.returned;
+        let (r_names, r_types) = (names(returned), types(returned));
+        let mut s_in = value_params(rule);
+        s_in.extend(level.carried.iter().cloned());
+        if let (Some(b), Some(ty)) = (binding, path_param) {
+            s_in.push((b.clone(), ty));
+        }
+        let s_typed = typed(&s_in);
+        let (input_ty, rt_error, state_bound) =
+            (self.input_ty(), self.rt_error(), self.state_bound());
+        helpers.extend(quote_spanned! {span=>
+            #[allow(dead_code, non_snake_case, unused_variables, unused_mut, clippy::let_unit_value)]
+            fn #suffix_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
+                #input: &mut #input_ty,
+                #(#s_typed),*
+            ) -> ::winnow::Result<(#(#r_types,)*), ::winnow::error::ErrMode<__WgEr>> {
+                use ::winnow::Parser;
+                use ::winnow::prelude::*;
+                #steps
+                ::core::result::Result::Ok((#(#r_names,)*))
+            }
+        });
+        let rules = path_rules(path, j);
+        let suffix_call = step_call(view, &suffix_fn, &clones(&s_in));
+        quote_spanned! {span=>
+            let (#(#r_names,)*) = __stream.chunk(&[#(#rules),*], #suffix_call)?;
+        }
+    }
+
+    /// Emits the two helpers of a streamed fold: the item parser (with the
+    /// separator before it, past the first item) and the identity function
+    /// that makes the step take items of any buffer's lifetime. Returns
+    /// whether the step changes its accumulator in place.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the parts of one fold, taken apart by the caller"
+    )]
+    fn stream_fold_fns(
+        &self,
+        stream_rule: &str,
+        item_rule: &str,
+        pattern: &ModelPattern,
+        sep: Option<&ModelPattern>,
+        step: &syn::Expr,
+        lexical: bool,
+        helpers: &mut TokenStream,
+    ) -> bool {
+        let span = Span::mixed_site();
+        let item_rule = self.rule(item_rule);
         let input = &self.input_ident;
         let input_ty = self.input_ty();
         let rt_error = self.rt_error();
         let state_bound = self.state_bound();
-        let rules: Vec<&str> = path.levels[..=j].iter().map(|l| l.rule.as_str()).collect();
-        let ModelPattern::Fold {
-            pattern,
-            init,
-            step,
-            sep,
-            min,
-            max,
-            computed,
-            ..
-        } = &rule.variants[0].pattern[level.at]
-        else {
-            unreachable!("the model checked that the path ends in a fold")
-        };
-        let ModelPattern::RuleCall {
-            rule_path, args, ..
-        } = &**pattern
-        else {
-            unreachable!("the model checked that a streamed fold's item is a rule call")
-        };
-        let item_rule = self.rule(&rule_path.segments.last().unwrap().ident.to_string());
         let item_ret = &item_rule.return_type;
         let item_inner = format_ident!("parse_{}_inner", item_rule.name, span = span);
         let item_fn = format_ident!("__stream_{}_item", stream_rule, span = span);
@@ -426,13 +402,10 @@ impl Codegen<'_> {
         };
         // A separator comes before every item but the first, and is taken
         // only with the item after it, as in memory.
-        let (sep_param, sep_arg) = if sep.is_some() {
-            (
-                quote_spanned! {span=> __sep: bool, },
-                quote_spanned! {span=> __item > 1, },
-            )
+        let sep_param = if sep.is_some() {
+            quote_spanned! {span=> __sep: bool, }
         } else {
-            (quote! {}, quote! {})
+            quote! {}
         };
         let sep_parse = match sep {
             Some(sep) => {
@@ -456,7 +429,7 @@ impl Codegen<'_> {
         // A step whose accumulator is written `&mut` changes it in place, as
         // in the fold everywhere else (ADR 24 §11).
         let in_place = matches!(
-            &**step,
+            step,
             syn::Expr::Closure(c) if matches!(
                 c.inputs.first(),
                 Some(syn::Pat::Type(t)) if matches!(&*t.ty, syn::Type::Reference(r) if r.mutability.is_some())
@@ -488,6 +461,60 @@ impl Codegen<'_> {
                 f
             }
         });
+        in_place
+    }
+
+    /// The fold of the last rule of the path: `__path` is its value.
+    fn stream_fold(
+        &self,
+        path: &StreamPath,
+        j: usize,
+        view: &TokenStream,
+        helpers: &mut TokenStream,
+        each: bool,
+    ) -> TokenStream {
+        let span = Span::mixed_site();
+        let level = &path.levels[j];
+        let rule = self.rule(&level.rule);
+        let stream_rule = &path.levels[0].rule;
+        let lexical = rule.is_lexical;
+        let rules: Vec<&str> = path.levels[..=j].iter().map(|l| l.rule.as_str()).collect();
+        let ModelPattern::Fold {
+            pattern,
+            init,
+            step,
+            sep,
+            min,
+            max,
+            computed,
+            ..
+        } = &rule.variants[0].pattern[level.at]
+        else {
+            unreachable!("the model checked that the path ends in a fold")
+        };
+        let ModelPattern::RuleCall {
+            rule_path, args, ..
+        } = &**pattern
+        else {
+            unreachable!("the model checked that a streamed fold's item is a rule call")
+        };
+        let item_rule = rule_path.segments.last().unwrap().ident.to_string();
+        let item_fn = format_ident!("__stream_{}_item", stream_rule, span = span);
+        let step_fn = format_ident!("__stream_{}_step", stream_rule, span = span);
+        let in_place = self.stream_fold_fns(
+            stream_rule,
+            &item_rule,
+            pattern,
+            sep.as_deref(),
+            step,
+            lexical,
+            helpers,
+        );
+        let sep_arg = if sep.is_some() {
+            quote_spanned! {span=> __item > 1, }
+        } else {
+            quote! {}
+        };
         let args: Vec<TokenStream> = args
             .iter()
             .map(|a| self.generate_argument_expr(a, lexical))
@@ -502,82 +529,8 @@ impl Codegen<'_> {
                 __acc = ::core::option::Option::Some(__step(__a, __v));
             }
         };
-        // `_reader_each`: the caller sees the item before the step takes it,
-        // and may stop the parse there.
-        let (tap, stopped) = if each {
-            (
-                quote_spanned! {span=>
-                    if let ::core::ops::ControlFlow::Break(__b) = each(&__v) {
-                        __broken = ::core::option::Option::Some(__b);
-                        return ::core::result::Result::Err(::winnow_grammar::rt::stream::Fail::Stop);
-                    }
-                },
-                quote_spanned! {span=>
-                    if let ::core::option::Option::Some(__b) = __broken.take() {
-                        return ::core::result::Result::Ok(::core::ops::ControlFlow::Break(__b));
-                    }
-                },
-            )
-        } else {
-            (quote! {}, quote! {})
-        };
-        // Computed sides (ADR 26 D3) are evaluated once, before the first
-        // item; a `min` above the `max` fails as too few items would.
-        let bounds = match computed {
-            Some(c) => {
-                let lo = match &c.min {
-                    Some(e) => quote_spanned! {span=> #e },
-                    None => quote_spanned! {span=> #min },
-                };
-                let hi = match (&c.max, max) {
-                    (Some(e), _) => quote_spanned! {span=> ::core::option::Option::Some(#e) },
-                    (None, Some(m)) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
-                    (None, None) => quote_spanned! {span=> ::core::option::Option::None::<usize> },
-                };
-                quote_spanned! {span=>
-                    let (__lo, __hi) = match ::winnow_grammar::rt::bounds(#lo, #hi) {
-                        ::core::option::Option::Some(__b) => __b,
-                        ::core::option::Option::None => {
-                            return ::core::result::Result::Err(__stream.short());
-                        }
-                    };
-                }
-            }
-            None => quote! {},
-        };
-        // `max = N`: the fold takes no item past the N-th.
-        let at_max = match (computed, max) {
-            (Some(_), _) => quote_spanned! {span=>
-                if let ::core::option::Option::Some(__m) = __hi {
-                    if __item > __m {
-                        return ::core::result::Result::Ok(false);
-                    }
-                }
-            },
-            (None, Some(m)) => quote_spanned! {span=>
-                if __item > #m {
-                    return ::core::result::Result::Ok(false);
-                }
-            },
-            (None, None) => quote! {},
-        };
-        // `min = N`: fewer items fail the parse with what the next one
-        // expected, as in memory.
-        let short = if computed.is_some() {
-            quote_spanned! {span=>
-                if __n < __lo {
-                    return ::core::result::Result::Err(__stream.short());
-                }
-            }
-        } else if *min > 0 {
-            quote_spanned! {span=>
-                if __n < #min {
-                    return ::core::result::Result::Err(__stream.short());
-                }
-            }
-        } else {
-            quote! {}
-        };
+        let (tap, stopped) = each_tap(each);
+        let (bounds, at_max, short) = fold_bounds(computed.as_deref(), *min, *max);
         quote_spanned! {span=>
             #bounds
             let mut __acc = ::core::option::Option::Some((#init)());
@@ -628,5 +581,155 @@ impl Codegen<'_> {
             .iter()
             .find(|r| r.name == name)
             .expect("the model checked the path")
+    }
+}
+
+/// A value parameter or carried value of a step function: name and type.
+type Value = (syn::Ident, syn::Type);
+
+/// The parameters of a rule on a stream path, which are all values.
+fn value_params(rule: &Rule) -> Vec<Value> {
+    rule.params
+        .iter()
+        .map(|p| (p.name.clone(), p.ty.clone().expect("value parameter")))
+        .collect()
+}
+
+/// `name: Type` for each value, as parameters.
+fn typed(vals: &[Value]) -> Vec<TokenStream> {
+    vals.iter().map(|(n, t)| quote! { #n: #t }).collect()
+}
+
+/// The names of the values.
+fn names(vals: &[Value]) -> Vec<syn::Ident> {
+    vals.iter().map(|(n, _)| n.clone()).collect()
+}
+
+/// The types of the values.
+fn types(vals: &[Value]) -> Vec<syn::Type> {
+    vals.iter().map(|(_, t)| t.clone()).collect()
+}
+
+/// A clone of each value, as arguments.
+fn clones(vals: &[Value]) -> Vec<TokenStream> {
+    vals.iter()
+        .map(|(n, _)| quote! { ::core::clone::Clone::clone(&#n) })
+        .collect()
+}
+
+/// The rules of the path down to level `j`, for the stream's error context.
+fn path_rules(path: &StreamPath, j: usize) -> Vec<&str> {
+    path.levels[..=j].iter().map(|l| l.rule.as_str()).collect()
+}
+
+/// The closure `Stream::chunk` runs a step function `f` with: in the
+/// diagnosing pass with `ParseError`, otherwise with `EmptyError`.
+fn step_call(view: &TokenStream, f: &syn::Ident, args: &[TokenStream]) -> TokenStream {
+    let span = Span::mixed_site();
+    quote_spanned! {span=>
+        |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, _: usize| {
+            if pass.diagnose() {
+                #f::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
+                    .map_err(::winnow_grammar::rt::stream::Fail::from)
+            } else {
+                #f::<__WgS, ::winnow::error::EmptyError>(input, #(#args),*)
+                    .map_err(::winnow_grammar::rt::stream::Fail::from)
+            }
+        }
+    }
+}
+
+/// The bounds of a streamed fold, as the code before its loop (computed
+/// sides, ADR 26 D3), the check that ends it at `max`, and the check after
+/// it that fails short of `min`.
+fn fold_bounds(
+    computed: Option<&FoldBounds>,
+    min: usize,
+    max: Option<usize>,
+) -> (TokenStream, TokenStream, TokenStream) {
+    let span = Span::mixed_site();
+    // Computed sides (ADR 26 D3) are evaluated once, before the first
+    // item; a `min` above the `max` fails as too few items would.
+    let bounds = match computed {
+        Some(c) => {
+            let lo = match &c.min {
+                Some(e) => quote_spanned! {span=> #e },
+                None => quote_spanned! {span=> #min },
+            };
+            let hi = match (&c.max, max) {
+                (Some(e), _) => quote_spanned! {span=> ::core::option::Option::Some(#e) },
+                (None, Some(m)) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
+                (None, None) => quote_spanned! {span=> ::core::option::Option::None::<usize> },
+            };
+            quote_spanned! {span=>
+                let (__lo, __hi) = match ::winnow_grammar::rt::bounds(#lo, #hi) {
+                    ::core::option::Option::Some(__b) => __b,
+                    ::core::option::Option::None => {
+                        return ::core::result::Result::Err(__stream.short());
+                    }
+                };
+            }
+        }
+        None => quote! {},
+    };
+    // `max = N`: the fold takes no item past the N-th.
+    let at_max = match (computed, max) {
+        (Some(_), _) => quote_spanned! {span=>
+            if let ::core::option::Option::Some(__m) = __hi {
+                if __item > __m {
+                    return ::core::result::Result::Ok(false);
+                }
+            }
+        },
+        (None, Some(m)) => quote_spanned! {span=>
+            if __item > #m {
+                return ::core::result::Result::Ok(false);
+            }
+        },
+        (None, None) => quote! {},
+    };
+    // `min = N`: fewer items fail the parse with what the next one
+    // expected, as in memory.
+    let short = if computed.is_some() {
+        quote_spanned! {span=>
+            if __n < __lo {
+                return ::core::result::Result::Err(__stream.short());
+            }
+        }
+    } else if min > 0 {
+        quote_spanned! {span=>
+            if __n < #min {
+                return ::core::result::Result::Err(__stream.short());
+            }
+        }
+    } else {
+        quote! {}
+    };
+    (bounds, at_max, short)
+}
+
+/// For `_reader_each`: the check that hands each item to the caller before
+/// the step takes it (and stops the parse on `Break`), and the check after
+/// the loop that returns that `Break`. Empty otherwise.
+fn each_tap(each: bool) -> (TokenStream, TokenStream) {
+    let span = Span::mixed_site();
+    // `_reader_each`: the caller sees the item before the step takes it,
+    // and may stop the parse there.
+    if each {
+        (
+            quote_spanned! {span=>
+                if let ::core::ops::ControlFlow::Break(__b) = each(&__v) {
+                    __broken = ::core::option::Option::Some(__b);
+                    return ::core::result::Result::Err(::winnow_grammar::rt::stream::Fail::Stop);
+                }
+            },
+            quote_spanned! {span=>
+                if let ::core::option::Option::Some(__b) = __broken.take() {
+                    return ::core::result::Result::Ok(::core::ops::ControlFlow::Break(__b));
+                }
+            },
+        )
+    } else {
+        (quote! {}, quote! {})
     }
 }

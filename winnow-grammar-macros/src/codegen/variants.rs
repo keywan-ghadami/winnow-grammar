@@ -4,10 +4,6 @@ use quote::{quote, quote_spanned};
 use winnow_grammar_model::model::{ModelPattern, RuleVariant};
 
 impl<'a> Codegen<'a> {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
     pub fn generate_variants_body(
         &self,
         variants: &[RuleVariant],
@@ -16,10 +12,8 @@ impl<'a> Codegen<'a> {
         is_rule_start: bool,
         label: Option<&str>,
     ) -> TokenStream {
-        let input_ty = self.input_ty();
         let span = Span::mixed_site();
         let input = &self.input_ident;
-        let origin = self.origin();
 
         // A rule-level `# "…"` substitutes for the expectations of *every*
         // alternative, and only when the rule failed where it began. So the
@@ -37,166 +31,15 @@ impl<'a> Codegen<'a> {
         let hoist = is_rule_start && (label.is_some() || variants.len() > 1);
         let skip_inside = is_rule_start && !hoist;
 
-        let variant_parsers = variants.iter().map(|v| {
-            let mut steps_code = TokenStream::new();
-            let use_with_span = v.with_span;
-            let is_explicit = v.is_explicit;
-
-            // 1. Optional Leading WS
-            if skip_inside && !is_lexical {
-                steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
-            }
-
-            // 2. Capture Start
-            if use_with_span {
-                steps_code
-                    .extend(quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; });
-            }
-
-            // 3. Parse Steps
-            let sequence_steps = self.generate_sequence_steps(&v.pattern, false, is_lexical);
-            steps_code.extend(sequence_steps);
-
-            // 4. Capture End and Define _span
-            if use_with_span {
-                steps_code
-                    .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; });
-                steps_code.extend(quote! { #[allow(unused_variables)] let _span = start..end; });
-            }
-
-            let action = &v.action;
-            // Every action gets the context, whether or not it uses it: the
-            // `_` prefix silences the unused binding, and the alternative -
-            // searching the action's token text for `_state` - fired on the
-            // word inside a string literal or a comment and made the binding's
-            // name a hidden part of the API. `&mut` so that an action can both
-            // read the context and intern into it (ADR 18 §2). `Stateful`
-            // keeps its state in a public field; it has no `state_mut()`.
-            let state_injection = quote! { let _state = &mut #input.state; };
-
-            let final_expr = if use_with_span && !is_explicit {
-                // Implicit action -> use WithSpan
-                quote! {
-                    ::core::result::Result::Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, _span))
-                }
-            } else {
-                // Explicit action (user handles _span if needed) OR no span requested
-                quote! {
-                    ::core::result::Result::Ok({ #action })
-                }
-            };
-
-            let closure = quote_spanned! {span=>
-                |#input: &mut #input_ty| {
-                    #steps_code
-                    #state_injection
-                    #final_expr
-                }
-            };
-            // `# "…"`: if the alternative fails at its starting position, its
-            // name counts as the expectation. Until now the label was parsed
-            // and discarded.
-            let labelled = match &v.label {
-                Some(label) => quote_spanned! {span=> ::winnow_grammar::rt::labelled(#label, #closure) },
-                None => closure,
-            };
-            // An alternative that cannot begin with the next byte is not tried
-            // in the fast pass - see `first_bytes`. Only where the position is
-            // known: a lexical rule's own, or a syntactic rule's after its
-            // hoisted skip.
-            let guard = if is_lexical || hoist {
-                self.first_bytes.alternative(&v.pattern, !is_lexical)
-            } else {
-                None
-            };
-            let guarded = match guard {
-                Some(set) => {
-                    let [a, b, c, d] = set.0;
-                    quote_spanned! {span=> ::winnow_grammar::rt::first_byte(::winnow_grammar::rt::ByteSet([#a, #b, #c, #d]), #labelled) }
-                }
-                None => labelled,
-            };
-            // What an alternative found is kept when it had begun - see
-            // `rt::alternative`.
-            quote_spanned! {span=> ::winnow_grammar::rt::alternative(#guarded) }
-        });
-
         if variants.len() == 1 {
-            let v = &variants[0];
-            let mut steps_code = TokenStream::new();
-            let use_with_span = v.with_span;
-            let is_explicit = v.is_explicit;
-
-            if skip_inside && !is_lexical {
-                steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
-            }
-
-            if use_with_span {
-                steps_code
-                    .extend(quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; });
-            }
-
-            steps_code.extend(self.generate_sequence_steps(&v.pattern, false, is_lexical));
-
-            if use_with_span {
-                steps_code
-                    .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; });
-                steps_code.extend(quote! { #[allow(unused_variables)] let _span = start..end; });
-            }
-
-            let action = &v.action;
-            // Every action gets the context, whether or not it uses it: the
-            // `_` prefix silences the unused binding, and the alternative -
-            // searching the action's token text for `_state` - fired on the
-            // word inside a string literal or a comment and made the binding's
-            // name a hidden part of the API. `&mut` so that an action can both
-            // read the context and intern into it (ADR 18 §2). `Stateful`
-            // keeps its state in a public field; it has no `state_mut()`.
-            let state_injection = quote! { let _state = &mut #input.state; };
-
-            let final_expr = if use_with_span && !is_explicit {
-                quote! {
-                    ::core::result::Result::Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, _span))
-                }
-            } else {
-                // An action written by the user comes without its braces and
-                // may contain statements (`-> { let x = …; x }`); it gets the
-                // braces back here - previously its tokens ended up in
-                // expression position ("expected expression, found `let`
-                // statement"). An action synthesized by the parser is always a
-                // single expression (`()`, a binding, a tuple) and stays
-                // unbraced - `{ () }` would be a Clippy finding.
-                if v.is_explicit {
-                    quote! { ::core::result::Result::Ok({ #action }) }
-                } else {
-                    quote! { ::core::result::Result::Ok(#action) }
-                }
-            };
-
-            let body = quote_spanned! {span=>
-                {
-                    #steps_code
-                    #state_injection
-                    #final_expr
-                }
-            };
-            // A single-variant rule may be labelled too (`# "…"`): if it fails
-            // at its starting position, its name is the expectation.
-            let body = match &v.label {
-                Some(label) => quote_spanned! {span=>
-                    {
-                        let mut __labelled = ::winnow_grammar::rt::labelled(
-                            #label,
-                            |#input: &mut #input_ty| #body,
-                        );
-                        ::winnow::Parser::parse_next(&mut __labelled, #input)
-                    }
-                },
-                None => body,
-            };
+            let body = self.single_variant_body(&variants[0], ret_type, is_lexical, skip_inside);
             self.wrap_in_rule_label(body, label, is_rule_start, is_lexical)
         } else {
-            let alt = super::expr::alt_of(variant_parsers.collect());
+            let variant_parsers = variants
+                .iter()
+                .map(|v| self.alternative_parser(v, ret_type, is_lexical, hoist, skip_inside))
+                .collect();
+            let alt = super::expr::alt_of(variant_parsers);
             let body = quote_spanned! {span=>
                 #alt.parse_next(#input)
             };
@@ -214,6 +57,173 @@ impl<'a> Codegen<'a> {
                 body
             };
             self.wrap_in_rule_label(body, label, is_rule_start, is_lexical)
+        }
+    }
+
+    /// The steps of one alternative before its action: the leading skip
+    /// when it is its own, its elements, and the `_span` they cover when the
+    /// alternative asked for it.
+    fn variant_steps(&self, v: &RuleVariant, is_lexical: bool, skip_inside: bool) -> TokenStream {
+        let input = &self.input_ident;
+        let origin = self.origin();
+        let mut steps_code = TokenStream::new();
+
+        // 1. Optional Leading WS
+        if skip_inside && !is_lexical {
+            steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
+        }
+
+        // 2. Capture Start
+        if v.with_span {
+            steps_code
+                .extend(quote! { let start = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; });
+        }
+
+        // 3. Parse Steps
+        steps_code.extend(self.generate_sequence_steps(&v.pattern, false, is_lexical));
+
+        // 4. Capture End and Define _span
+        if v.with_span {
+            steps_code
+                .extend(quote! { let end = ::winnow::combinator::empty.with_span().parse_next(#input).map(|(_, s)| s.start)? #origin; });
+            steps_code.extend(quote! { #[allow(unused_variables)] let _span = start..end; });
+        }
+        steps_code
+    }
+
+    /// Every action gets the context, whether or not it uses it: the `_`
+    /// prefix silences the unused binding, and the alternative - searching
+    /// the action's token text for `_state` - fired on the word inside a
+    /// string literal or a comment and made the binding's name a hidden part
+    /// of the API. `&mut` so that an action can both read the context and
+    /// intern into it (ADR 18 §2). `Stateful` keeps its state in a public
+    /// field; it has no `state_mut()`.
+    fn state_injection(&self) -> TokenStream {
+        let input = &self.input_ident;
+        quote! { let _state = &mut #input.state; }
+    }
+
+    /// One alternative of several, as the parser `alt` tries: labelled,
+    /// guarded by the bytes it can begin with, and kept when it had begun.
+    fn alternative_parser(
+        &self,
+        v: &RuleVariant,
+        ret_type: &syn::Type,
+        is_lexical: bool,
+        hoist: bool,
+        skip_inside: bool,
+    ) -> TokenStream {
+        let input_ty = self.input_ty();
+        let span = Span::mixed_site();
+        let input = &self.input_ident;
+        let steps_code = self.variant_steps(v, is_lexical, skip_inside);
+        let action = &v.action;
+        let state_injection = self.state_injection();
+
+        let final_expr = if v.with_span && !v.is_explicit {
+            // Implicit action -> use WithSpan
+            quote! {
+                ::core::result::Result::Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, _span))
+            }
+        } else {
+            // Explicit action (user handles _span if needed) OR no span requested
+            quote! {
+                ::core::result::Result::Ok({ #action })
+            }
+        };
+
+        let closure = quote_spanned! {span=>
+            |#input: &mut #input_ty| {
+                #steps_code
+                #state_injection
+                #final_expr
+            }
+        };
+        // `# "…"`: if the alternative fails at its starting position, its
+        // name counts as the expectation. Until now the label was parsed
+        // and discarded.
+        let labelled = match &v.label {
+            Some(label) => {
+                quote_spanned! {span=> ::winnow_grammar::rt::labelled(#label, #closure) }
+            }
+            None => closure,
+        };
+        // An alternative that cannot begin with the next byte is not tried
+        // in the fast pass - see `first_bytes`. Only where the position is
+        // known: a lexical rule's own, or a syntactic rule's after its
+        // hoisted skip.
+        let guard = if is_lexical || hoist {
+            self.first_bytes.alternative(&v.pattern, !is_lexical)
+        } else {
+            None
+        };
+        let guarded = match guard {
+            Some(set) => {
+                let [a, b, c, d] = set.0;
+                quote_spanned! {span=> ::winnow_grammar::rt::first_byte(::winnow_grammar::rt::ByteSet([#a, #b, #c, #d]), #labelled) }
+            }
+            None => labelled,
+        };
+        // What an alternative found is kept when it had begun - see
+        // `rt::alternative`.
+        quote_spanned! {span=> ::winnow_grammar::rt::alternative(#guarded) }
+    }
+
+    /// The body of a rule of one alternative: its steps and action inline,
+    /// no closure for `alt` to call.
+    fn single_variant_body(
+        &self,
+        v: &RuleVariant,
+        ret_type: &syn::Type,
+        is_lexical: bool,
+        skip_inside: bool,
+    ) -> TokenStream {
+        let input_ty = self.input_ty();
+        let span = Span::mixed_site();
+        let input = &self.input_ident;
+        let steps_code = self.variant_steps(v, is_lexical, skip_inside);
+        let action = &v.action;
+        let state_injection = self.state_injection();
+
+        let final_expr = if v.with_span && !v.is_explicit {
+            quote! {
+                ::core::result::Result::Ok(<#ret_type as ::winnow_grammar::WithSpan<_>>::with_span({ #action }, _span))
+            }
+        } else {
+            // An action written by the user comes without its braces and
+            // may contain statements (`-> { let x = …; x }`); it gets the
+            // braces back here - previously its tokens ended up in
+            // expression position ("expected expression, found `let`
+            // statement"). An action synthesized by the parser is always a
+            // single expression (`()`, a binding, a tuple) and stays
+            // unbraced - `{ () }` would be a Clippy finding.
+            if v.is_explicit {
+                quote! { ::core::result::Result::Ok({ #action }) }
+            } else {
+                quote! { ::core::result::Result::Ok(#action) }
+            }
+        };
+
+        let body = quote_spanned! {span=>
+            {
+                #steps_code
+                #state_injection
+                #final_expr
+            }
+        };
+        // A single-variant rule may be labelled too (`# "…"`): if it fails
+        // at its starting position, its name is the expectation.
+        match &v.label {
+            Some(label) => quote_spanned! {span=>
+                {
+                    let mut __labelled = ::winnow_grammar::rt::labelled(
+                        #label,
+                        |#input: &mut #input_ty| #body,
+                    );
+                    ::winnow::Parser::parse_next(&mut __labelled, #input)
+                }
+            },
+            None => body,
         }
     }
 

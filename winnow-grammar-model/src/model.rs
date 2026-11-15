@@ -322,10 +322,6 @@ impl From<parser::RuleVariant> for RuleVariant {
 }
 
 impl From<parser::Pattern> for ModelPattern {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
     fn from(p: parser::Pattern) -> Self {
         match p {
             parser::Pattern::Cut(token) => ModelPattern::Cut(token.span()), // FatArrow has .span()
@@ -341,6 +337,55 @@ impl From<parser::Pattern> for ModelPattern {
                 generics,
                 args: args.into_iter().map(Into::into).collect(),
             },
+            parser::Pattern::Group { .. }
+            | parser::Pattern::Bracketed { .. }
+            | parser::Pattern::Braced { .. }
+            | parser::Pattern::Parenthesized { .. } => Self::from_nested(p),
+            parser::Pattern::Optional(p, token) => {
+                ModelPattern::Optional(Box::new((*p).into()), token.span)
+            } // Question has .span (field)
+            parser::Pattern::Repeat(p, token) => {
+                ModelPattern::Repeat(Box::new((*p).into()), token.span)
+            } // Star has .span (field)
+            parser::Pattern::Plus(p, token) => {
+                ModelPattern::Plus(Box::new((*p).into()), token.span)
+            } // Plus has .span (field)
+            parser::Pattern::Bounded {
+                pattern,
+                min,
+                max,
+                dynamic,
+                token,
+            } => ModelPattern::Bounded {
+                pattern: Box::new((*pattern).into()),
+                min,
+                max,
+                dynamic,
+                span: token.span.join(),
+            },
+            parser::Pattern::SpanBinding(p, id, token) => {
+                ModelPattern::SpanBinding(Box::new((*p).into()), id, token.span)
+                // At has .span (field)
+            }
+            parser::Pattern::Recover { .. }
+            | parser::Pattern::Peek(..)
+            | parser::Pattern::Not(..)
+            | parser::Pattern::Until { .. }
+            | parser::Pattern::Fold { .. }
+            | parser::Pattern::Count { .. }
+            | parser::Pattern::LexicalScope(..)
+            | parser::Pattern::SpacedScope(..)
+            | parser::Pattern::Fail { .. }
+            | parser::Pattern::Guard { .. } => Self::from_keyword(p),
+        }
+    }
+}
+
+impl ModelPattern {
+    /// Converts the patterns that hold a nested sequence: groups and
+    /// bracket, brace or parenthesis blocks.
+    fn from_nested(p: parser::Pattern) -> Self {
+        match p {
             parser::Pattern::Group {
                 binding,
                 alts,
@@ -389,32 +434,14 @@ impl From<parser::Pattern> for ModelPattern {
                     token.span.join(),
                 )
             }
-            parser::Pattern::Optional(p, token) => {
-                ModelPattern::Optional(Box::new((*p).into()), token.span)
-            } // Question has .span (field)
-            parser::Pattern::Repeat(p, token) => {
-                ModelPattern::Repeat(Box::new((*p).into()), token.span)
-            } // Star has .span (field)
-            parser::Pattern::Plus(p, token) => {
-                ModelPattern::Plus(Box::new((*p).into()), token.span)
-            } // Plus has .span (field)
-            parser::Pattern::Bounded {
-                pattern,
-                min,
-                max,
-                dynamic,
-                token,
-            } => ModelPattern::Bounded {
-                pattern: Box::new((*pattern).into()),
-                min,
-                max,
-                dynamic,
-                span: token.span.join(),
-            },
-            parser::Pattern::SpanBinding(p, id, token) => {
-                ModelPattern::SpanBinding(Box::new((*p).into()), id, token.span)
-                // At has .span (field)
-            }
+            _ => unreachable!("from_nested called on a non-nested pattern"),
+        }
+    }
+
+    /// Converts the keyword constructs (`recover`, `peek`, `not`, `until`,
+    /// `fold`, `count`, `lex`, `spaced`, `fail`, `guard`).
+    fn from_keyword(p: parser::Pattern) -> Self {
+        match p {
             parser::Pattern::Recover {
                 binding,
                 body,
@@ -492,6 +519,7 @@ impl From<parser::Pattern> for ModelPattern {
                 message: message.map(|m| m.value()),
                 span: kw_token.span,
             },
+            _ => unreachable!("from_keyword called on a non-keyword pattern"),
         }
     }
 }

@@ -3,7 +3,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use std::collections::HashMap;
 use winnow_grammar_model::model::{Argument, ModelPattern, Rule};
-use winnow_grammar_model::parser::DynMax;
+use winnow_grammar_model::parser::{DynBounds, DynMax};
 
 /// The widest tuple winnow implements `Alt` for.
 const ALT_MAX: usize = 9;
@@ -1675,18 +1675,12 @@ impl<'a> Codegen<'a> {
         self.edge(p, Some(pattern))
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
     fn parser_expr_node(
         &self,
         pattern: &ModelPattern,
         is_lexical: bool,
         is_discarded: bool,
     ) -> TokenStream {
-        let input_ty = self.input_ty();
-        let rts = self.rts();
         let span = Span::mixed_site();
         match pattern {
             ModelPattern::SpanBinding(inner, _, _) => {
@@ -1694,72 +1688,15 @@ impl<'a> Codegen<'a> {
                 quote_spanned! {span=> #p.with_span().map(|(v, _)| v) }
             }
             // `if(cond)` (ADR 26 D4): evaluated where the parser gets here.
-            ModelPattern::Guard { cond, message, .. } => {
-                let what = match message {
-                    Some(m) => m.clone(),
-                    None => format!("`{}`", quote!(#cond)),
-                };
-                quote_spanned! {span=>
-                    (|i: &mut #input_ty| ::winnow_grammar::rt::guard(i, #cond, #what))
-                }
-            }
+            ModelPattern::Guard { cond, message, .. } => self.guard_parser(cond, message.as_ref()),
             ModelPattern::RuleCall {
                 rule_path,
                 generics,
                 args,
                 ..
             } => self.generate_rule_call_parser(rule_path, generics, args, is_lexical),
-            ModelPattern::Lit { lit, .. } => {
-                // One ASCII byte: compared as a byte in the fast pass
-                // (ADR 24 §8a).
-                let one_byte = match lit {
-                    syn::Lit::Str(s) => {
-                        let v = s.value();
-                        (v.len() == 1 && v.as_bytes()[0].is_ascii())
-                            .then(|| (v.as_bytes()[0], None))
-                    }
-                    syn::Lit::Char(c) => c
-                        .value()
-                        .is_ascii()
-                        .then(|| (c.value() as u8, Some(c.value()))),
-                    _ => None,
-                };
-                if let Some((byte, char_lit)) = one_byte {
-                    let text = (byte as char).to_string();
-                    let char_lit = match char_lit {
-                        Some(c) => quote_spanned! {span=> ::core::option::Option::Some(#c) },
-                        None => quote_spanned! {span=> ::core::option::Option::None },
-                    };
-                    return quote_spanned! {span=> #rts::lit_byte(#byte, #text, #char_lit) };
-                }
-                // Pure literal, no ws wrapping
-                match lit {
-                    syn::Lit::Str(_) => {
-                        quote_spanned! {span=>
-                            literal(#lit)
-                                .context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::StringLiteral(#lit)))
-                        }
-                    }
-                    syn::Lit::Char(_) => {
-                        quote_spanned! {span=>
-                            literal(#lit)
-                                .context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::CharLiteral(#lit)))
-                        }
-                    }
-                    _ => quote_spanned! {span=> literal(#lit) },
-                }
-            }
-            ModelPattern::Group { alts, .. } => {
-                if alts.len() == 1 {
-                    self.generate_sequence_parser(&alts[0].0, is_lexical)
-                } else {
-                    let alts: Vec<TokenStream> = alts
-                        .iter()
-                        .map(|(seq, _, _)| self.generate_sequence_parser(seq, is_lexical))
-                        .collect();
-                    alt_of(alts)
-                }
-            }
+            ModelPattern::Lit { lit, .. } => self.lit_parser(lit),
+            ModelPattern::Group { alts, .. } => self.group_parser(alts, is_lexical),
             ModelPattern::Optional(inner, _) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 quote_spanned! {span=> ::winnow_grammar::rt::opt_recording(#p) }
@@ -1774,39 +1711,7 @@ impl<'a> Codegen<'a> {
                 pattern,
                 dynamic: Some(d),
                 ..
-            } => {
-                // Computed bounds (ADR 26 D3): evaluated where the parser
-                // gets here, then the same loop as a literal bound's, without
-                // the scans a literal bound allows.
-                let lo = &d.min;
-                let bounds = match &d.max {
-                    DynMax::Exact => quote_spanned! {span=>
-                        { let __n = #lo; ::winnow_grammar::rt::bounds(__n, ::core::option::Option::Some(__n)) }
-                    },
-                    DynMax::Open => quote_spanned! {span=>
-                        ::winnow_grammar::rt::bounds(#lo, ::core::option::Option::None::<usize>)
-                    },
-                    DynMax::To(hi) => quote_spanned! {span=>
-                        ::winnow_grammar::rt::bounds(#lo, ::core::option::Option::Some(#hi))
-                    },
-                };
-                let rep = self.generate_repetition_with(
-                    pattern,
-                    None,
-                    quote_spanned! {span=> __lo },
-                    quote_spanned! {span=> __hi },
-                    is_lexical,
-                    is_discarded,
-                );
-                quote_spanned! {span=>
-                    (|i: &mut #input_ty| match #bounds {
-                        ::core::option::Option::Some((__lo, __hi)) => ::winnow::Parser::parse_next(&mut #rep, i),
-                        ::core::option::Option::None => ::core::result::Result::Err(
-                            ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow::error::ParserError<_>>::from_input(i)),
-                        ),
-                    })
-                }
-            }
+            } => self.dynamic_repetition(pattern, d, is_lexical, is_discarded),
             ModelPattern::Bounded {
                 pattern, min, max, ..
             } => self.generate_repetition(pattern, *min, *max, is_lexical, is_discarded),
@@ -1823,21 +1728,7 @@ impl<'a> Codegen<'a> {
                 let input_ty = self.input_ty();
                 quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::commit(i)) }
             }
-            ModelPattern::Recover { body, sync, .. } => {
-                let body_parser = self.generate_parser_expr(body, is_lexical, false);
-                let sync_parser = self.generate_parser_expr(sync, is_lexical, false);
-                // Skipping to the synchronization point is the expensive half of
-                // recovery: it is what runs over the broken region, and it is
-                // reached exactly when a file has many errors.
-                let skip = self.edge(self.generate_skip_to(sync, is_lexical), None);
-                quote_spanned! {span=>
-                    ::winnow_grammar::rt::recover_recording(
-                        #body_parser,
-                        #skip,
-                        #sync_parser,
-                    )
-                }
-            }
+            ModelPattern::Recover { body, sync, .. } => self.recover_parser(body, sync, is_lexical),
             ModelPattern::Peek(inner, _, _) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 quote_spanned! {span=>
@@ -1851,106 +1742,8 @@ impl<'a> Codegen<'a> {
                 }
             }
             ModelPattern::Until { pattern, .. } => self.generate_skip_to(pattern, is_lexical),
-            ModelPattern::Count { pattern, .. } => {
-                let p = self.generate_parser_expr(pattern, is_lexical, false);
-                if !is_lexical {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p)) }
-                } else {
-                    quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, #p) }
-                }
-            }
-            ModelPattern::Fold {
-                pattern,
-                init,
-                step,
-                merge,
-                sep,
-                min,
-                max,
-                computed,
-                ..
-            } => {
-                let p = self.generate_parser_expr(pattern, is_lexical, false);
-                let p = if is_lexical {
-                    p
-                } else {
-                    quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p) }
-                };
-                // The fold of a `par_fold` rule leaves a trail for the replay
-                // of a failed fast pass (`rt::entry_framed`).
-                // A step whose accumulator is written `&mut` changes it in
-                // place (ADR 24 §11); any other step takes and returns it.
-                let in_place = matches!(
-                    &**step,
-                    syn::Expr::Closure(c) if matches!(
-                        c.inputs.first(),
-                        Some(syn::Pat::Type(t)) if matches!(&*t.ty, syn::Type::Reference(r) if r.mutability.is_some())
-                    )
-                );
-                // `sep`, `min` and `max` (never on a `par_fold`, which the
-                // parser refuses) take the bounded form.
-                if sep.is_some() || *min > 0 || max.is_some() || computed.is_some() {
-                    let fold = if in_place {
-                        quote_spanned! {span=> ::winnow_grammar::rt::fold_in_place_bounded }
-                    } else {
-                        quote_spanned! {span=> ::winnow_grammar::rt::fold_bounded }
-                    };
-                    let sep = match sep {
-                        Some(sep) => {
-                            let q = self.generate_parser_expr(sep, is_lexical, true);
-                            if is_lexical {
-                                q
-                            } else {
-                                quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #q) }
-                            }
-                        }
-                        None => quote_spanned! {span=> ::winnow_grammar::rt::no_sep },
-                    };
-                    let max = match max {
-                        Some(m) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
-                        None => quote_spanned! {span=> ::core::option::Option::None },
-                    };
-                    // Computed sides (ADR 26 D3) are evaluated where the
-                    // parser gets here; a `min` above the `max` fails.
-                    if let Some(c) = computed {
-                        let lo = match &c.min {
-                            Some(e) => quote_spanned! {span=> #e },
-                            None => quote_spanned! {span=> #min },
-                        };
-                        let hi = match &c.max {
-                            Some(e) => quote_spanned! {span=> ::core::option::Option::Some(#e) },
-                            None => {
-                                quote_spanned! {span=> { let __m: ::core::option::Option<usize> = #max; __m } }
-                            }
-                        };
-                        return quote_spanned! {span=>
-                            (|i: &mut #input_ty| match ::winnow_grammar::rt::bounds(#lo, #hi) {
-                                ::core::option::Option::Some((__lo, __hi)) => ::winnow::Parser::parse_next(
-                                    &mut #fold(__lo, __hi, #sep, #p, #init, #step),
-                                    i,
-                                ),
-                                ::core::option::Option::None => ::core::result::Result::Err(
-                                    ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow::error::ParserError<_>>::from_input(i)),
-                                ),
-                            })
-                        };
-                    }
-                    return quote_spanned! {span=> #fold(#min, #max, #sep, #p, #init, #step) };
-                }
-                let fold = match (merge.is_some(), in_place) {
-                    (true, false) => {
-                        quote_spanned! {span=> ::winnow_grammar::rt::par_fold_recording }
-                    }
-                    (false, false) => quote_spanned! {span=> ::winnow_grammar::rt::fold_recording },
-                    (true, true) => {
-                        quote_spanned! {span=> ::winnow_grammar::rt::par_fold_in_place_recording }
-                    }
-                    (false, true) => {
-                        quote_spanned! {span=> ::winnow_grammar::rt::fold_in_place_recording }
-                    }
-                };
-                quote_spanned! {span=> #fold(0, #p, #init, #step) }
-            }
+            ModelPattern::Count { pattern, .. } => self.count_parser(pattern, is_lexical),
+            ModelPattern::Fold { .. } => self.fold_parser(pattern, is_lexical),
             ModelPattern::Fail { message, .. } => match message {
                 Some(msg) => quote_spanned! {span=> ::winnow_grammar::rt::fail(#msg) },
                 None => quote_spanned! {span=> ::winnow_grammar::rt::fail("Explicit failure") },
@@ -1965,6 +1758,265 @@ impl<'a> Codegen<'a> {
                 self.generate_parser_expr(inner, false, is_discarded)
             }
         }
+    }
+
+    /// `if(cond)` (ADR 26 D4): the condition is evaluated where the parser
+    /// gets here; on failure the message, or else the condition as written.
+    fn guard_parser(&self, cond: &syn::Expr, message: Option<&String>) -> TokenStream {
+        let input_ty = self.input_ty();
+        let span = Span::mixed_site();
+        let what = match message {
+            Some(m) => m.clone(),
+            None => format!("`{}`", quote!(#cond)),
+        };
+        quote_spanned! {span=>
+            (|i: &mut #input_ty| ::winnow_grammar::rt::guard(i, #cond, #what))
+        }
+    }
+
+    /// A group: its one alternative as a sequence, or all of them as an `alt`.
+    fn group_parser(
+        &self,
+        alts: &[(Vec<ModelPattern>, Option<TokenStream>, Option<String>)],
+        is_lexical: bool,
+    ) -> TokenStream {
+        if alts.len() == 1 {
+            self.generate_sequence_parser(&alts[0].0, is_lexical)
+        } else {
+            let alts: Vec<TokenStream> = alts
+                .iter()
+                .map(|(seq, _, _)| self.generate_sequence_parser(seq, is_lexical))
+                .collect();
+            alt_of(alts)
+        }
+    }
+
+    /// `recover(body, sync)`: the body, or - when it fails - a skip to the
+    /// synchronization point and the point itself.
+    fn recover_parser(
+        &self,
+        body: &ModelPattern,
+        sync: &ModelPattern,
+        is_lexical: bool,
+    ) -> TokenStream {
+        let span = Span::mixed_site();
+        let body_parser = self.generate_parser_expr(body, is_lexical, false);
+        let sync_parser = self.generate_parser_expr(sync, is_lexical, false);
+        // Skipping to the synchronization point is the expensive half of
+        // recovery: it is what runs over the broken region, and it is
+        // reached exactly when a file has many errors.
+        let skip = self.edge(self.generate_skip_to(sync, is_lexical), None);
+        quote_spanned! {span=>
+            ::winnow_grammar::rt::recover_recording(
+                #body_parser,
+                #skip,
+                #sync_parser,
+            )
+        }
+    }
+
+    /// `count(p)`: how many times `p` matches, skipping trivia before each
+    /// match outside a lexical rule.
+    fn count_parser(&self, pattern: &ModelPattern, is_lexical: bool) -> TokenStream {
+        let input_ty = self.input_ty();
+        let span = Span::mixed_site();
+        let p = self.generate_parser_expr(pattern, is_lexical, false);
+        if !is_lexical {
+            quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p)) }
+        } else {
+            quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, #p) }
+        }
+    }
+
+    /// A literal: one ASCII byte compared as a byte (ADR 24 §8a), any other
+    /// literal matched as text with what it expected on failure.
+    fn lit_parser(&self, lit: &syn::Lit) -> TokenStream {
+        let rts = self.rts();
+        let span = Span::mixed_site();
+        // One ASCII byte: compared as a byte in the fast pass
+        // (ADR 24 §8a).
+        let one_byte = match lit {
+            syn::Lit::Str(s) => {
+                let v = s.value();
+                (v.len() == 1 && v.as_bytes()[0].is_ascii()).then(|| (v.as_bytes()[0], None))
+            }
+            syn::Lit::Char(c) => c
+                .value()
+                .is_ascii()
+                .then(|| (c.value() as u8, Some(c.value()))),
+            _ => None,
+        };
+        if let Some((byte, char_lit)) = one_byte {
+            let text = (byte as char).to_string();
+            let char_lit = match char_lit {
+                Some(c) => quote_spanned! {span=> ::core::option::Option::Some(#c) },
+                None => quote_spanned! {span=> ::core::option::Option::None },
+            };
+            return quote_spanned! {span=> #rts::lit_byte(#byte, #text, #char_lit) };
+        }
+        // Pure literal, no ws wrapping
+        match lit {
+            syn::Lit::Str(_) => {
+                quote_spanned! {span=>
+                    literal(#lit)
+                        .context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::StringLiteral(#lit)))
+                }
+            }
+            syn::Lit::Char(_) => {
+                quote_spanned! {span=>
+                    literal(#lit)
+                        .context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::CharLiteral(#lit)))
+                }
+            }
+            _ => quote_spanned! {span=> literal(#lit) },
+        }
+    }
+
+    /// A repetition with computed bounds (ADR 26 D3): the bounds are
+    /// evaluated where the parser gets here, then the same loop as a
+    /// literal bound's, without the scans a literal bound allows.
+    fn dynamic_repetition(
+        &self,
+        pattern: &ModelPattern,
+        d: &DynBounds,
+        is_lexical: bool,
+        is_discarded: bool,
+    ) -> TokenStream {
+        let input_ty = self.input_ty();
+        let span = Span::mixed_site();
+        // Computed bounds (ADR 26 D3): evaluated where the parser
+        // gets here, then the same loop as a literal bound's, without
+        // the scans a literal bound allows.
+        let lo = &d.min;
+        let bounds = match &d.max {
+            DynMax::Exact => quote_spanned! {span=>
+                { let __n = #lo; ::winnow_grammar::rt::bounds(__n, ::core::option::Option::Some(__n)) }
+            },
+            DynMax::Open => quote_spanned! {span=>
+                ::winnow_grammar::rt::bounds(#lo, ::core::option::Option::None::<usize>)
+            },
+            DynMax::To(hi) => quote_spanned! {span=>
+                ::winnow_grammar::rt::bounds(#lo, ::core::option::Option::Some(#hi))
+            },
+        };
+        let rep = self.generate_repetition_with(
+            pattern,
+            None,
+            quote_spanned! {span=> __lo },
+            quote_spanned! {span=> __hi },
+            is_lexical,
+            is_discarded,
+        );
+        quote_spanned! {span=>
+            (|i: &mut #input_ty| match #bounds {
+                ::core::option::Option::Some((__lo, __hi)) => ::winnow::Parser::parse_next(&mut #rep, i),
+                ::core::option::Option::None => ::core::result::Result::Err(
+                    ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow::error::ParserError<_>>::from_input(i)),
+                ),
+            })
+        }
+    }
+
+    /// `fold(...)`: the bounded form when it has a `sep`, a `min`, a `max` or
+    /// computed bounds, else the recording fold - in place when the step
+    /// takes its accumulator `&mut`, the `par_fold` one when it has a merge.
+    fn fold_parser(&self, fold: &ModelPattern, is_lexical: bool) -> TokenStream {
+        let input_ty = self.input_ty();
+        let span = Span::mixed_site();
+        let ModelPattern::Fold {
+            pattern,
+            init,
+            step,
+            merge,
+            sep,
+            min,
+            max,
+            computed,
+            ..
+        } = fold
+        else {
+            unreachable!("fold_parser on a non-fold pattern")
+        };
+        let p = self.generate_parser_expr(pattern, is_lexical, false);
+        let p = if is_lexical {
+            p
+        } else {
+            quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p) }
+        };
+        // The fold of a `par_fold` rule leaves a trail for the replay
+        // of a failed fast pass (`rt::entry_framed`).
+        // A step whose accumulator is written `&mut` changes it in
+        // place (ADR 24 §11); any other step takes and returns it.
+        let in_place = matches!(
+            &**step,
+            syn::Expr::Closure(c) if matches!(
+                c.inputs.first(),
+                Some(syn::Pat::Type(t)) if matches!(&*t.ty, syn::Type::Reference(r) if r.mutability.is_some())
+            )
+        );
+        // `sep`, `min` and `max` (never on a `par_fold`, which the
+        // parser refuses) take the bounded form.
+        if sep.is_some() || *min > 0 || max.is_some() || computed.is_some() {
+            let fold = if in_place {
+                quote_spanned! {span=> ::winnow_grammar::rt::fold_in_place_bounded }
+            } else {
+                quote_spanned! {span=> ::winnow_grammar::rt::fold_bounded }
+            };
+            let sep = match sep {
+                Some(sep) => {
+                    let q = self.generate_parser_expr(sep, is_lexical, true);
+                    if is_lexical {
+                        q
+                    } else {
+                        quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #q) }
+                    }
+                }
+                None => quote_spanned! {span=> ::winnow_grammar::rt::no_sep },
+            };
+            let max = match max {
+                Some(m) => quote_spanned! {span=> ::core::option::Option::Some(#m) },
+                None => quote_spanned! {span=> ::core::option::Option::None },
+            };
+            // Computed sides (ADR 26 D3) are evaluated where the
+            // parser gets here; a `min` above the `max` fails.
+            if let Some(c) = computed {
+                let lo = match &c.min {
+                    Some(e) => quote_spanned! {span=> #e },
+                    None => quote_spanned! {span=> #min },
+                };
+                let hi = match &c.max {
+                    Some(e) => quote_spanned! {span=> ::core::option::Option::Some(#e) },
+                    None => {
+                        quote_spanned! {span=> { let __m: ::core::option::Option<usize> = #max; __m } }
+                    }
+                };
+                return quote_spanned! {span=>
+                    (|i: &mut #input_ty| match ::winnow_grammar::rt::bounds(#lo, #hi) {
+                        ::core::option::Option::Some((__lo, __hi)) => ::winnow::Parser::parse_next(
+                            &mut #fold(__lo, __hi, #sep, #p, #init, #step),
+                            i,
+                        ),
+                        ::core::option::Option::None => ::core::result::Result::Err(
+                            ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow::error::ParserError<_>>::from_input(i)),
+                        ),
+                    })
+                };
+            }
+            return quote_spanned! {span=> #fold(#min, #max, #sep, #p, #init, #step) };
+        }
+        let fold = match (merge.is_some(), in_place) {
+            (true, false) => {
+                quote_spanned! {span=> ::winnow_grammar::rt::par_fold_recording }
+            }
+            (false, false) => quote_spanned! {span=> ::winnow_grammar::rt::fold_recording },
+            (true, true) => {
+                quote_spanned! {span=> ::winnow_grammar::rt::par_fold_in_place_recording }
+            }
+            (false, true) => {
+                quote_spanned! {span=> ::winnow_grammar::rt::fold_in_place_recording }
+            }
+        };
+        quote_spanned! {span=> #fold(0, #p, #init, #step) }
     }
 
     pub fn generate_sequence_parser(&self, seq: &[ModelPattern], is_lexical: bool) -> TokenStream {
