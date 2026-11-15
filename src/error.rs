@@ -602,7 +602,12 @@ impl<'s> Source<'s> {
     }
 }
 
-/// The next word (letters, digits, `_`) or the next character.
+/// The next word (letters, digits, `_`) or the next character; `None` at the
+/// end of input, where there is nothing to show.
+///
+/// At most 64 bytes are looked at, decoded lossily: `rest` is a byte slice
+/// that can end inside a character or hold invalid UTF-8, and an error
+/// message should still show *something* rather than fail itself.
 pub(crate) fn next_word(rest: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(&rest[..rest.len().min(64)]);
     let first = text.chars().next()?;

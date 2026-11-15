@@ -189,7 +189,15 @@ impl AsciiClass {
                 return n;
             }
             // Only now is anything decoded, and only this one character.
-            let c = s[n..].chars().next().expect("a boundary, so a character");
+            //
+            // Cannot fail: `s` is a `&str`, so valid UTF-8, and `n` is always a
+            // character boundary - `run` advances only over ASCII bytes, and
+            // the loop over a wide character by its `len_utf8`. Since
+            // `n < b.len()`, a character starts there.
+            let c = s[n..]
+                .chars()
+                .next()
+                .expect("n is a char boundary short of the end, so a char starts there");
             if !wide(c) {
                 return n;
             }

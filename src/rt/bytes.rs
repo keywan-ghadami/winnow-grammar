@@ -517,6 +517,10 @@ where
         let value = p.parse_next(input)?;
         let bytes = value.as_ref();
         let interner = crate::InternerOf::<I>::interner(&mut input.state.user_state);
+        // No UTF-8 check on a hit, on purpose (ADR 25 D4): the interner only
+        // holds what came to it as a `&str`, so bytes it recognises are valid
+        // UTF-8 already - the `Interner::lookup_bytes` contract. Only a miss
+        // is checked, once, below.
         if let Some(sym) = interner.lookup_bytes(bytes) {
             return Ok(sym);
         }

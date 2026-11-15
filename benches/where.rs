@@ -99,6 +99,11 @@ impl Slots {
         let tag = Self::tag(s);
         let mask = (1 << Self::BITS) - 1;
         let mut i = (tag.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - Self::BITS)) as usize;
+        // A miss is not an error here but an insert: the first empty slot
+        // takes the name. The probe always ends because the table is never
+        // full - the bench interns `CITIES.len()` names into `1 << BITS`
+        // buckets, which the assertion keeps true if either changes.
+        debug_assert!(self.names.len() < 1 << Self::BITS, "Slots is full");
         loop {
             let occupied = self.slots[i] != u32::MAX;
             if !occupied {

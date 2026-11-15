@@ -4,9 +4,93 @@
 [![Documentation](https://docs.rs/winnow-grammar/badge.svg)](https://docs.rs/winnow-grammar)
 [![License](https://img.shields.io/crates/l/winnow-grammar.svg)](https://github.com/keywan-ghadami/winnow-grammar/blob/main/LICENSE)
 
-**winnow-grammar** is a powerful parser generator for Rust that allows you to define EBNF-like grammars directly inside your code. It compiles these definitions into efficient `winnow` parsers at compile time.
+**Write the grammar. Get the parser, the error messages, the streaming and the parallelism for free.**
 
-This crate is built on top of `syn-grammar-model` but targets the `winnow` parser combinator library. While `syn-grammar` is specialized for parsing Rust code, `winnow-grammar` is designed for general-purpose parsing of text, data formats, and custom DSLs.
+winnow-grammar turns an EBNF-like grammar, written inline in your Rust code,
+into fast [`winnow`](https://crates.io/crates/winnow) parsers at compile time.
+You describe *what* the language looks like; the boilerplate a hand-written
+parser makes you repeat in every function is generated: whitespace
+between tokens, positions, backtracking, error positions and the rule stack
+behind them.
+
+```rust,ignore
+grammar! {
+    grammar Calc {
+        pub expr -> Expr =
+            l:expr "+" r:term -> { Expr::Add(Box::new(l), Box::new(r)) }
+          | t:term -> { t }
+
+        term -> Expr =
+            l:term "*" r:atom -> { Expr::Mul(Box::new(l), Box::new(r)) }
+          | a:atom -> { a }
+
+        atom -> Expr =
+            n:i64          -> { Expr::Num(n) }
+          | name:ident     -> { Expr::Var(name) }
+          | paren(e:expr)  -> { e }
+    }
+}
+
+let ast = Calc::parse_expr().parse_next(&mut input)?;   // "2 * (x + 1)"
+```
+
+That is the whole parser: precedence, parentheses, interned identifiers and
+whitespace included.
+
+## Why winnow-grammar
+
+**The grammar is the documentation.** A rule reads like the specification of
+the language, not like a parser that implements it. Left recursion is
+written the way the language is defined (`expr = expr "+" term`) and turned
+into a loop for you - no rewriting into `separated` folds by hand. (A
+left-recursive rule's type must be `Clone`.)
+
+**Good error messages without writing any.** A failed parse says what was
+expected, what was found, where - with the line and a caret - and which rules
+it was inside:
+
+```text
+expected one of: `&`, identifier; found unexpected token `)` at line 1, column 9
+in ty
+in arg
+```
+
+A parse that succeeds pays nothing for this: the diagnosis is made only when
+it fails. `recover(rule, sync)` keeps going after an error and collects every
+one of them, as an editor or a compiler wants.
+
+**Mistakes in the grammar are compile errors, at the line that has them** -
+not a stack overflow at runtime, not a branch that silently never matches:
+
+```text
+error: rule `comment` is used by `WS` but is syntactic (lowercase): a syntactic rule
+       skips whitespace at its start by calling `WS`, so `WS -> comment -> WS` recurses
+       without consuming input. Rules used for whitespace must be lexical - name it `COMMENT`.
+  --> src/main.rs:10:9
+   |
+10 |         comment = "//" until(line_ending)
+   |         ^^^^^^^
+```
+
+The same goes for indirect left recursion (`a -> b -> a`), identical
+alternatives that make one of them dead code, and misused declarations: each
+says what is wrong and what to write instead.
+
+**One grammar, every way of reading.** The grammar you wrote for a `&str` in
+memory also reads bytes (`input bytes;`), a stream larger than memory
+(`#[stream]`, from any `std::io::Read`, in bounded memory) and runs on every
+core (`par_fold`) - with the same results and the same error messages. You
+do not rewrite your parser when the input grows.
+
+**Still winnow underneath.** Every rule becomes a plain `impl Parser`. A
+hand-written winnow parser joins a grammar as an `extern rule`, and generated
+rules work inside your own combinators; you never give up control for convenience. And
+the generated code is built for speed: ASCII classes are scanned a word at a
+time, UTF-8 is decoded only where text is actually made, and identifiers are
+interned into 4-byte symbols.
+
+**Testing is a one-liner.** `winnow_grammar::testing` gives every rule
+`.parse_test("…")` with assertions on the value or on the error message.
 
 ## Documentation
 
@@ -32,71 +116,8 @@ Add `winnow-grammar` and `winnow` to your `Cargo.toml`.
 ```toml
 [dependencies]
 winnow-grammar = "0.2.0"
-winnow = "0.6"
+winnow = "1"
 ```
-
-### Cargo features
-
-`ahash` is on by default; the others are off. The crate is complete without
-any of them.
-
-| feature | what it does |
-|---|---|
-| `rayon` | `parse_<rule>_pieces` runs the pieces of a `par_fold` rule on rayon's global pool. Without it the same driver runs them in sequence - the same cut, the same answer - which is what lets a test check the split without threads. |
-| `ahash` *(default)* | The interner hashes with [`ahash`](https://crates.io/crates/ahash) instead of std's `RandomState`, seeded per process. See below. |
-| `ahash-compile-time-rng` | The same hasher seeded once per build, for WebAssembly and other targets without a random source. See below. |
-| `trace` | Turns on `winnow/debug`, which traces every rule as it runs. |
-
-**About `ahash`.** Both hashers are seeded per process, so neither can be
-driven quadratic by chosen input; `ahash` is simply faster on the short keys an
-interner sees - **15-28 % on the interner itself** (`benches/interning.rs`).
-Inside a parse the context's lookup cache hides most of that, but a program
-that looks names up *after* the parse does not go through the cache: Nikaia's
-compiler, which resolves names in its checker and its prover, is **2.5-3.6 %
-faster** as a whole with it. That is why it is the default.
-
-**WebAssembly.** `ahash` gets its seed from `getrandom`, and `getrandom` does
-not compile for `wasm32-unknown-unknown` unless the final application chooses
-a backend. Two ways, pick one:
-
-- Keep the default and choose the backend in the application, as `getrandom`
-  intends: its `wasm_js` feature plus `--cfg getrandom_backend="wasm_js"` (see
-  the [getrandom documentation](https://docs.rs/getrandom/latest/getrandom/#webassembly-support)).
-- Or take the seed from the build instead:
-
-  ```toml
-  winnow-grammar = { version = "0.2", default-features = false, features = ["ahash-compile-time-rng"] }
-  ```
-
-  Every run of one binary then hashes alike, so someone who has the binary can
-  work out colliding keys, and two builds of the same source are not
-  byte-identical. For a parser that only reads its own user's input, neither
-  matters. With both features on, the per-process seed wins.
-
-`default-features = false` with neither gives std's `RandomState`, which builds
-everywhere (on `wasm32-unknown-unknown` with fixed keys) and is the slower
-hasher.
-
-### Build one context, clone it
-
-A context is cheap to build - **46 ns** - because the interner behind it and
-the lookup cache in front of it are both created on first use, so a grammar
-that never interns pays for neither. Cloning one is cheaper still, and it is
-what you want anyway: a clone *shares the interner*, so symbols from two files
-mean the same thing, which is what ADR 14 is for.
-
-```rust,ignore
-let context = ParseContext::<()>::default();      // once
-for src in sources {
-    let mut stream = ParseInput { input: LocatingSlice::new(src), state: context.clone() };
-    let ast = Grammar::parse_file().parse_next(&mut stream)?;
-    // …
-}
-```
-
-`benches/context.rs` has the numbers, including what this used to cost: a
-context was 1.35 µs before the interner was made lazy, almost all of it
-allocating a sharded map that a non-interning grammar never read.
 
 ## Quick Start
 
@@ -189,15 +210,8 @@ fn main() {
 
 Failures come back as `winnow_grammar::ParseError` with the expectation, what
 was found, the position and the rule stack — see *Error Messages* in
-[SYNTAX.md](SYNTAX.md). A parse that succeeds pays nothing for this: the
-diagnosis is only made when a parse fails, by parsing again with the full
-engine (`ParseContext::diagnose` chooses; ADR 17).
-
-```text
-expected one of: `&`, identifier; found unexpected token `)` at line 1, column 9
-in ty
-in arg
-```
+[SYNTAX.md](SYNTAX.md). The diagnosis is only made when a parse fails, by
+parsing again with the full engine (`ParseContext::diagnose` chooses; ADR 17).
 
 ### What happens under the hood?
 
@@ -272,7 +286,7 @@ fn main() {
 ```
 
 ### Built-ins
-In addition to the portable built-ins (see [SYNTAX.md](../SYNTAX.md)), `winnow-grammar` provides the following `winnow`-specific parsers:
+In addition to the portable built-ins (see [SYNTAX.md](SYNTAX.md)), `winnow-grammar` provides the following `winnow`-specific parsers:
 
 | Parser | Description |
 |---|---|
@@ -333,8 +347,80 @@ grammar.
 ## Diagnostics
 
 `winnow-grammar` provides compile-time checks to ensure your grammar is sound. It detects:
-- **Indirect Left Recursion**: Cycles like `A -> B -> A`.
-- **Unreachable Alternatives**: Shadowing detection.
+- **Indirect left recursion**: cycles like `A -> B -> A`. (Direct left recursion,
+  `expr = expr "+" term`, is supported.)
+- **Unreachable alternatives**: an alternative that an earlier one shadows.
+- **Whitespace cycles**: a rule used by `WS` that would itself skip whitespace.
+- **Misused declarations**: `state`, `interner`, `input`, `#[stream]`,
+  `#[frame]` and `fold` arguments in places they cannot work.
+
+Each points at the offending line of the grammar and says what to write
+instead (`tests/ui/*.stderr` has every message).
+
+## Tuning
+
+### Cargo features
+
+`ahash` is on by default; the others are off. The crate is complete without
+any of them.
+
+| feature | what it does |
+|---|---|
+| `rayon` | `parse_<rule>_pieces` runs the pieces of a `par_fold` rule on rayon's global pool. Without it the same driver runs them in sequence - the same cut, the same answer - which is what lets a test check the split without threads. |
+| `ahash` *(default)* | The interner hashes with [`ahash`](https://crates.io/crates/ahash) instead of std's `RandomState`, seeded per process. See below. |
+| `ahash-compile-time-rng` | The same hasher seeded once per build, for WebAssembly and other targets without a random source. See below. |
+| `trace` | Turns on `winnow/debug`, which traces every rule as it runs. |
+
+**About `ahash`.** Both hashers are seeded per process, so neither can be
+driven quadratic by chosen input; `ahash` is simply faster on the short keys an
+interner sees - **15-28 % on the interner itself** (`benches/interning.rs`).
+Inside a parse the context's lookup cache hides most of that, but a program
+that looks names up *after* the parse does not go through the cache: Nikaia's
+compiler, which resolves names in its checker and its prover, is **2.5-3.6 %
+faster** as a whole with it. That is why it is the default.
+
+**WebAssembly.** `ahash` gets its seed from `getrandom`, and `getrandom` does
+not compile for `wasm32-unknown-unknown` unless the final application chooses
+a backend. Two ways, pick one:
+
+- Keep the default and choose the backend in the application, as `getrandom`
+  intends: its `wasm_js` feature plus `--cfg getrandom_backend="wasm_js"` (see
+  the [getrandom documentation](https://docs.rs/getrandom/latest/getrandom/#webassembly-support)).
+- Or take the seed from the build instead:
+
+  ```toml
+  winnow-grammar = { version = "0.2", default-features = false, features = ["ahash-compile-time-rng"] }
+  ```
+
+  Every run of one binary then hashes alike, so someone who has the binary can
+  work out colliding keys, and two builds of the same source are not
+  byte-identical. For a parser that only reads its own user's input, neither
+  matters. With both features on, the per-process seed wins.
+
+`default-features = false` with neither gives std's `RandomState`, which builds
+everywhere (on `wasm32-unknown-unknown` with fixed keys) and is the slower
+hasher.
+
+### Build one context, clone it
+
+A context is cheap to build - **46 ns** - because the interner behind it and
+the lookup cache in front of it are both created on first use, so a grammar
+that never interns pays for neither. Cloning one is cheaper still, and it is
+what you want anyway: a clone *shares the interner*, so symbols from two files
+mean the same thing, which is what ADR 14 is for.
+
+```rust,ignore
+let context = ParseContext::<()>::default();      // once
+for src in sources {
+    let mut stream = ParseInput { input: LocatingSlice::new(src), state: context.clone() };
+    let ast = Grammar::parse_file().parse_next(&mut stream)?;
+    // …
+}
+```
+
+`benches/context.rs` has the numbers, including what this used to cost: a
+context was 1.35 µs before the interner was made lazy, almost all of it
+allocating a sharded map that a non-interning grammar never read.
 
 ## License
 
