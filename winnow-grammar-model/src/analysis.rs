@@ -95,10 +95,6 @@ pub fn split_left_recursive<'a>(
     (recursive, base)
 }
 
-#[expect(
-    clippy::excessive_nesting,
-    reason = "nested this deep when the lint came in; flatten it, then drop this"
-)]
 fn collect_from_patterns(patterns: &[ModelPattern], kws: &mut HashSet<String>) {
     for p in patterns {
         match p {
@@ -109,14 +105,15 @@ fn collect_from_patterns(patterns: &[ModelPattern], kws: &mut HashSet<String>) {
                 // Try to tokenize the string literal to find identifiers
                 if let Ok(ts) = syn::parse_str::<proc_macro2::TokenStream>(&s) {
                     for token in ts {
-                        if let proc_macro2::TokenTree::Ident(ident) = token {
-                            let s = ident.to_string();
-                            // If syn accepts it as an Ident, it's a candidate.
-                            // We rely on syn::parse_str::<syn::Ident> to filter out reserved keywords.
-                            // We also exclude "_" because it cannot be a struct name for custom_keyword!.
-                            if s != "_" && syn::parse_str::<syn::Ident>(&s).is_ok() {
-                                kws.insert(s);
-                            }
+                        let proc_macro2::TokenTree::Ident(ident) = token else {
+                            continue;
+                        };
+                        let s = ident.to_string();
+                        // If syn accepts it as an Ident, it's a candidate.
+                        // We rely on syn::parse_str::<syn::Ident> to filter out reserved keywords.
+                        // We also exclude "_" because it cannot be a struct name for custom_keyword!.
+                        if s != "_" && syn::parse_str::<syn::Ident>(&s).is_ok() {
+                            kws.insert(s);
                         }
                     }
                 }

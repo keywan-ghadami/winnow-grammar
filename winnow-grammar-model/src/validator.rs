@@ -456,10 +456,59 @@ fn validate_argument_counts(grammar: &GrammarDefinition) -> syn::Result<()> {
     Ok(())
 }
 
-#[expect(
-    clippy::excessive_nesting,
-    reason = "nested this deep when the lint came in; flatten it, then drop this"
-)]
+/// A call's arguments against the rule it calls: as many as it has
+/// parameters, and a value only for a typed one.
+fn check_call_args(
+    rule_path: &syn::Path,
+    args: &[Argument],
+    rule_name_str: &str,
+    target_rule: &Rule,
+) -> syn::Result<()> {
+    // Removed named argument check to allow named args.
+
+    if target_rule.params.len() != args.len() {
+        // Check if user likely forgot arguments
+        if args.is_empty() && !target_rule.params.is_empty() {
+            return Err(syn::Error::new(
+                rule_path.span(),
+                format!(
+                    "Rule '{}' expects {} argument(s). To pass arguments, use named arguments like '{}(arg=value)'.",
+                    rule_name_str,
+                    target_rule.params.len(),
+                    rule_name_str
+                ),
+            ));
+        }
+
+        return Err(syn::Error::new(
+            rule_path.span(),
+            format!(
+                "Rule '{}' expects {} argument(s), but got {}.",
+                rule_name_str,
+                target_rule.params.len(),
+                args.len()
+            ),
+        ));
+    }
+    // A value goes to a typed parameter only: one that
+    // takes a parser is given a pattern (ADR 26 D2).
+    for (param, arg) in target_rule.params.iter().zip(args) {
+        if let Argument::Value(_, e) = arg {
+            let takes_parser = param.ty.as_ref().is_none_or(crate::parser::is_rule_type);
+            if takes_parser {
+                return Err(syn::Error::new_spanned(
+                    e,
+                    format!(
+                        "`{}` of rule '{}' takes a parser, not a value",
+                        param.name, rule_name_str
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_args_recursive(
     patterns: &[ModelPattern],
     rule_map: &HashMap<String, &Rule>,
@@ -469,53 +518,9 @@ fn validate_args_recursive(
             ModelPattern::RuleCall {
                 rule_path, args, ..
             } => {
-                let rule_name_opt = rule_path.get_ident().map(|ident| ident.to_string());
-
-                if let Some(rule_name_str) = rule_name_opt {
+                if let Some(rule_name_str) = rule_path.get_ident().map(|ident| ident.to_string()) {
                     if let Some(target_rule) = rule_map.get(&rule_name_str) {
-                        // Removed named argument check to allow named args.
-
-                        if target_rule.params.len() != args.len() {
-                            // Check if user likely forgot arguments
-                            if args.is_empty() && !target_rule.params.is_empty() {
-                                return Err(syn::Error::new(
-                                    rule_path.span(),
-                                    format!(
-                                        "Rule '{}' expects {} argument(s). To pass arguments, use named arguments like '{}(arg=value)'.",
-                                        rule_name_str,
-                                        target_rule.params.len(),
-                                        rule_name_str
-                                    ),
-                                ));
-                            }
-
-                            return Err(syn::Error::new(
-                                rule_path.span(),
-                                format!(
-                                    "Rule '{}' expects {} argument(s), but got {}.",
-                                    rule_name_str,
-                                    target_rule.params.len(),
-                                    args.len()
-                                ),
-                            ));
-                        }
-                        // A value goes to a typed parameter only: one that
-                        // takes a parser is given a pattern (ADR 26 D2).
-                        for (param, arg) in target_rule.params.iter().zip(args) {
-                            if let Argument::Value(_, e) = arg {
-                                let takes_parser =
-                                    param.ty.as_ref().is_none_or(crate::parser::is_rule_type);
-                                if takes_parser {
-                                    return Err(syn::Error::new_spanned(
-                                        e,
-                                        format!(
-                                            "`{}` of rule '{}' takes a parser, not a value",
-                                            param.name, rule_name_str
-                                        ),
-                                    ));
-                                }
-                            }
-                        }
+                        check_call_args(rule_path, args, &rule_name_str, target_rule)?;
                     }
                 }
 

@@ -1010,129 +1010,69 @@ impl Pattern {
         }
     }
 
-    #[expect(
-        clippy::excessive_nesting,
-        reason = "nested this deep when the lint came in; flatten it, then drop this"
-    )]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
     pub fn collect_bindings(&self, acc: &mut Vec<Ident>) {
         match self {
-            Pattern::Lit { binding, .. } => {
-                if let Some(b) = binding {
-                    acc.push(b.clone());
-                }
+            Pattern::Lit { binding, .. } | Pattern::RuleCall { binding, .. } => {
+                acc.extend(binding.clone());
             }
-            Pattern::RuleCall { binding, .. } => {
-                if let Some(b) = binding {
-                    acc.push(b.clone());
-                }
+            // A bound group or wrapper names its whole value, so the bindings
+            // inside it are not visible to the surrounding action. For a
+            // fold that value is the accumulator; the element's own bindings
+            // live inside `step`.
+            Pattern::Group {
+                binding: Some(b), ..
             }
-            Pattern::Group { binding, alts, .. } => {
-                if let Some(b) = binding {
-                    acc.push(b.clone());
-                } else {
-                    for (pats, action, _) in alts {
-                        if action.is_none() {
-                            for p in pats {
-                                p.collect_bindings(acc);
-                            }
-                        }
-                    }
-                }
+            | Pattern::Bracketed {
+                binding: Some(b), ..
             }
-            Pattern::Bracketed {
-                binding, patterns, ..
-            } => {
-                if let Some(b) = binding {
-                    acc.push(b.clone());
-                } else {
-                    for p in patterns {
-                        p.collect_bindings(acc);
-                    }
-                }
+            | Pattern::Braced {
+                binding: Some(b), ..
             }
-            Pattern::Braced {
-                binding, patterns, ..
-            } => {
-                if let Some(b) = binding {
-                    acc.push(b.clone());
-                } else {
-                    for p in patterns {
-                        p.collect_bindings(acc);
-                    }
-                }
+            | Pattern::Parenthesized {
+                binding: Some(b), ..
             }
-            Pattern::Parenthesized {
-                binding, patterns, ..
-            } => {
-                if let Some(b) = binding {
-                    acc.push(b.clone());
-                } else {
-                    for p in patterns {
-                        p.collect_bindings(acc);
-                    }
-                }
+            | Pattern::Recover {
+                binding: Some(b), ..
             }
-            Pattern::Optional(p, _) => p.collect_bindings(acc),
-            Pattern::Repeat(p, _) => p.collect_bindings(acc),
-            Pattern::Plus(p, _) => p.collect_bindings(acc),
-            Pattern::Bounded { pattern, .. } => pattern.collect_bindings(acc),
+            | Pattern::Peek(_, Some(b), _)
+            | Pattern::Until {
+                binding: Some(b), ..
+            }
+            | Pattern::Count {
+                binding: Some(b), ..
+            }
+            | Pattern::Fold {
+                binding: Some(b), ..
+            } => acc.push(b.clone()),
+            // Unbound, they let them through. A group's alternatives with an
+            // action of their own keep theirs.
+            Pattern::Group { alts, .. } => alts
+                .iter()
+                .filter(|(_, action, _)| action.is_none())
+                .flat_map(|(pats, _, _)| pats)
+                .for_each(|p| p.collect_bindings(acc)),
+            Pattern::Bracketed { patterns, .. }
+            | Pattern::Braced { patterns, .. }
+            | Pattern::Parenthesized { patterns, .. } => {
+                patterns.iter().for_each(|p| p.collect_bindings(acc));
+            }
+            Pattern::Recover { body: p, .. }
+            | Pattern::Peek(p, None, _)
+            | Pattern::Until { pattern: p, .. }
+            | Pattern::Count { pattern: p, .. }
+            | Pattern::Fold { pattern: p, .. }
+            | Pattern::Optional(p, _)
+            | Pattern::Repeat(p, _)
+            | Pattern::Plus(p, _)
+            | Pattern::Bounded { pattern: p, .. }
+            | Pattern::Not(p, _)
+            | Pattern::LexicalScope(p, _)
+            | Pattern::SpacedScope(p, _) => p.collect_bindings(acc),
             Pattern::SpanBinding(p, id, _) => {
                 acc.push(id.clone());
                 p.collect_bindings(acc);
             }
-            Pattern::Recover { binding, body, .. } => {
-                if let Some(b) = binding {
-                    acc.push(b.clone());
-                } else {
-                    body.collect_bindings(acc);
-                }
-            }
-            Pattern::Peek(p, binding, _) => {
-                if let Some(b) = binding {
-                    acc.push(b.clone());
-                } else {
-                    p.collect_bindings(acc);
-                }
-            }
-            Pattern::Not(p, _) => p.collect_bindings(acc),
-            Pattern::Until {
-                binding, pattern, ..
-            } => {
-                if let Some(b) = binding {
-                    acc.push(b.clone());
-                } else {
-                    pattern.collect_bindings(acc);
-                }
-            }
-            Pattern::Count {
-                binding, pattern, ..
-            } => {
-                if let Some(b) = binding {
-                    acc.push(b.clone());
-                } else {
-                    pattern.collect_bindings(acc);
-                }
-            }
-            Pattern::Fold {
-                binding, pattern, ..
-            } => {
-                // The accumulator is the value, so a binding names it; the
-                // element's own bindings live inside `step` and are not visible
-                // to the surrounding action.
-                if let Some(b) = binding {
-                    acc.push(b.clone());
-                } else {
-                    pattern.collect_bindings(acc);
-                }
-            }
-            Pattern::LexicalScope(p, _) => p.collect_bindings(acc),
-            Pattern::SpacedScope(p, _) => p.collect_bindings(acc),
-            Pattern::Fail { .. } | Pattern::Guard { .. } => {}
-            Pattern::Cut(_) => {}
+            Pattern::Fail { .. } | Pattern::Guard { .. } | Pattern::Cut(_) => {}
         }
     }
 

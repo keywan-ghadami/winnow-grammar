@@ -93,25 +93,22 @@ mod tests {
 
     /// Haystacks of every length up to past two AVX2 vectors, with the
     /// needles at the start, at the end, in between, and nowhere.
-    #[expect(
-        clippy::excessive_nesting,
-        reason = "nested this deep when the lint came in; flatten it, then drop this"
-    )]
     fn haystacks() -> Vec<Vec<u8>> {
         let mut out = Vec::new();
         for len in 0..80usize {
             let base: Vec<u8> = (0..len).map(|i| b'a' + (i % 23) as u8).collect();
             out.push(base.clone());
-            for at in [0, len / 2, len.saturating_sub(1)] {
+            for at in [0, len / 2, len.saturating_sub(1)]
+                .into_iter()
+                .filter(|&at| at < len)
+            {
                 for needle in [b';', b'\n', b'\r', 0xc3] {
-                    if at < len {
-                        let mut h = base.clone();
-                        h[at] = needle;
-                        out.push(h.clone());
-                        if at + 3 < len {
-                            h[at + 3] = b'\n';
-                            out.push(h);
-                        }
+                    let mut h = base.clone();
+                    h[at] = needle;
+                    out.push(h.clone());
+                    if at + 3 < len {
+                        h[at + 3] = b'\n';
+                        out.push(h);
                     }
                 }
             }
