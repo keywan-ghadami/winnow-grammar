@@ -58,6 +58,55 @@ fn seq_of(parsers: Vec<TokenStream>, input_ty: &TokenStream) -> TokenStream {
     }
 }
 
+/// Whether a guard in a sequence reads a label bound before it in the same
+/// sequence (ADR 26 D4): any guard after an element with a label.
+fn guard_reads_a_label(seq: &[ModelPattern]) -> bool {
+    let mut labelled = false;
+    for p in seq {
+        if labelled && matches!(p, ModelPattern::Guard { .. }) {
+            return true;
+        }
+        labelled |= get_inner_binding(p).is_some();
+    }
+    false
+}
+
+/// A sequence whose guard reads a label bound before it in the sequence, as
+/// a closure of statements: each parser runs where the one before it ended,
+/// a labelled value is bound to its label, so a guard built after it sees
+/// it, and the closure yields the same flat tuple as [`seq_of`]. The
+/// parsers are built inside the closure, so it borrows what they read (a
+/// rule's arguments) instead of moving it.
+fn seq_bound(
+    parsers: Vec<TokenStream>,
+    names: Vec<Option<syn::Ident>>,
+    input_ty: &TokenStream,
+) -> TokenStream {
+    let span = Span::mixed_site();
+    let os: Vec<TokenStream> = names
+        .iter()
+        .enumerate()
+        .map(|(n, name)| match name {
+            Some(name) => quote! { #name },
+            None => {
+                let o = syn::Ident::new(&format!("__o{n}"), span);
+                quote! { #o }
+            }
+        })
+        .collect();
+    quote_spanned! {span=>
+        (|i: &mut #input_ty| {
+            #(
+                let #os = match ::winnow::Parser::parse_next(&mut #parsers, i) {
+                    ::core::result::Result::Ok(o) => o,
+                    ::core::result::Result::Err(e) => return ::core::result::Result::Err(e),
+                };
+            )*
+            ::core::result::Result::Ok(( #(#os),* ))
+        })
+    }
+}
+
 /// The arguments of a built-in that wraps patterns (`text(p)`, `dec(p)`), or
 /// the error for one that is a value: those take a pattern, not a value.
 fn pattern_args(args: &[Argument]) -> Result<Vec<ModelPattern>, TokenStream> {
@@ -2038,6 +2087,10 @@ impl<'a> Codegen<'a> {
         let input_ty = self.input_ty();
         let span = Span::mixed_site();
         let mut parsers = Vec::new();
+        // The label each parser binds, where a guard after it reads it
+        // (ADR 26 D4): such a sequence runs as statements, see `seq_bound`.
+        let mut names: Vec<Option<syn::Ident>> = Vec::new();
+        let bound = guard_reads_a_label(seq);
         let mut in_cut = false;
 
         for (i, p) in seq.iter().enumerate() {
@@ -2074,10 +2127,17 @@ impl<'a> Codegen<'a> {
             } else {
                 parsers.push(p_expr);
             }
+            while names.len() < parsers.len() - 1 {
+                names.push(None);
+            }
+            names.push(get_inner_binding(p).cloned());
         }
+        names.resize(parsers.len(), None);
 
         let parser = if parsers.len() == 1 {
             quote_spanned! {span=> #(#parsers)* }
+        } else if bound {
+            seq_bound(parsers, names, &input_ty)
         } else {
             seq_of(parsers, &input_ty)
         };

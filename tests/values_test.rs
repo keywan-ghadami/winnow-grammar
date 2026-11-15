@@ -140,7 +140,28 @@ grammar! {
 
         // After a cut, a guard that fails is a cut like anything else.
         pub COMMITTED -> u8 = "k" => n:dec<u8>(digit) if(n < 5) -> { n } | "k9" -> { 99 }
+
+        // A guard reads a label bound before it in its own repeated group,
+        // and the rule's arguments beside it.
+        pub PLAIN -> &'a str = s:text(RUN(flow = true)) -> { s }
+        RUN(flow: bool) = (x:any if(super::plain(x, flow)))+ -> { }
+        // The same in a group of more than one element, whose value is kept.
+        pub PAIRS -> usize = ps:(k:digit "=" v:digit if(k <= v))+ -> { ps.len() }
     }
+}
+
+grammar! {
+    // The shape Nikaia writes for a scan of plain scalars (Nikaia #1561):
+    // spaced rules, a `WS` that skips nothing.
+    grammar SpacedGuards {
+        rule WS = "" -> { }
+        pub rule top -> &'a str = s:text(run(flow = false)) -> { s }
+        rule run(flow: bool) = (x:any if(super::plain(x, flow)))+ -> { }
+    }
+}
+
+pub fn plain(x: char, flow: bool) -> bool {
+    x != ':' && !(flow && x == ',')
 }
 
 #[test]
@@ -171,4 +192,26 @@ fn a_guard_lets_the_next_alternative_be_tried() {
     Guards::parse_COMMITTED()
         .parse_test("k9")
         .assert_failure_contains("`n < 5`");
+}
+
+#[test]
+fn a_guard_reads_a_label_of_its_repeated_group() {
+    Guards::parse_PLAIN()
+        .parse_test("abc")
+        .assert_success_is("abc");
+    Guards::parse_PLAIN()
+        .parse_test("ab,c")
+        .assert_failure_contains("`super :: plain(x, flow)`");
+    Guards::parse_PAIRS()
+        .parse_test("1=23=3")
+        .assert_success_is(2);
+    Guards::parse_PAIRS()
+        .parse_test("1=23=1")
+        .assert_failure_contains("`k <= v`");
+    SpacedGuards::parse_top()
+        .parse_test("abc")
+        .assert_success_is("abc");
+    SpacedGuards::parse_top()
+        .parse_test("a,b")
+        .assert_success_is("a,b");
 }
