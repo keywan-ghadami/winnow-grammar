@@ -9,10 +9,10 @@ use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use winnow_grammar_model::ParsedGrammar;
 use winnow_grammar_model::frame::Frames;
 use winnow_grammar_model::model::{GrammarDefinition, InputKind};
 use winnow_grammar_model::stream::Streams;
-use winnow_grammar_model::ParsedGrammar;
 
 /// Is the rule a template that is not generated as a function of its own but
 /// inlined at every call site?

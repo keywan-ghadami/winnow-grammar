@@ -39,7 +39,7 @@ impl<'a> Codegen<'a> {
             if let Some(t) = ty {
                 params_tokens.push(quote! { mut #name: #t });
                 inner_params_tokens.push(quote! { #name: #t });
-                arg_names.push(quote! { #name.clone() });
+                arg_names.push(quote! { ::core::clone::Clone::clone(&#name) });
             }
         }
 
@@ -549,10 +549,10 @@ fn borrows_input(ty: &TokenStream) -> bool {
     while let Some(t) = tokens.next() {
         match t {
             TokenTree::Punct(p) if p.as_char() == '\'' => {
-                if let Some(TokenTree::Ident(id)) = tokens.peek() {
-                    if id != "static" {
-                        return true;
-                    }
+                if let Some(TokenTree::Ident(id)) = tokens.peek()
+                    && id != "static"
+                {
+                    return true;
                 }
             }
             TokenTree::Group(g) if borrows_input(&g.stream()) => return true,
