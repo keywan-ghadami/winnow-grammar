@@ -1,5 +1,5 @@
 // Moved from macros/src/parser.rs
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens, TokenStreamExt};
 use syn::parse::{Parse, ParseStream};
 use syn::{token, Attribute, Generics, Ident, ItemUse, Lit, Path, Result, Token, Type};
@@ -1347,134 +1347,20 @@ impl Parse for Pattern {
 }
 
 impl ToTokens for Pattern {
-    #[expect(
-        clippy::excessive_nesting,
-        reason = "nested this deep when the lint came in; flatten it, then drop this"
-    )]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
             Pattern::Cut(_) => {
                 token::FatArrow::default().to_tokens(tokens);
             }
             Pattern::Lit { binding, lit } => {
-                if let Some(b) = binding {
-                    b.to_tokens(tokens);
-                    token::Colon::default().to_tokens(tokens);
-                }
+                binding_to_tokens(binding.as_ref(), tokens);
                 lit.to_tokens(tokens);
             }
-            Pattern::RuleCall {
-                binding,
-                rule_path,
-                generics,
-                args,
-            } => {
-                if let Some(b) = binding {
-                    b.to_tokens(tokens);
-                    token::Colon::default().to_tokens(tokens);
-                }
-                rule_path.to_tokens(tokens);
-                if !generics.is_empty() {
-                    token::Lt::default().to_tokens(tokens);
-                    for (i, t) in generics.iter().enumerate() {
-                        if i > 0 {
-                            token::Comma::default().to_tokens(tokens);
-                        }
-                        t.to_tokens(tokens);
-                    }
-                    token::Gt::default().to_tokens(tokens);
-                }
-                if !args.is_empty() {
-                    token::Paren::default().surround(tokens, |t| {
-                        for (i, a) in args.iter().enumerate() {
-                            if i > 0 {
-                                token::Comma::default().to_tokens(t);
-                            }
-                            a.to_tokens(t);
-                        }
-                    });
-                }
-            }
-            Pattern::Group { binding, alts, .. } => {
-                if let Some(b) = binding {
-                    b.to_tokens(tokens);
-                    token::Colon::default().to_tokens(tokens);
-                }
-                token::Paren::default().surround(tokens, |t| {
-                    for (i, (seq, action, label)) in alts.iter().enumerate() {
-                        if i > 0 {
-                            token::Or::default().to_tokens(t);
-                        }
-                        for p in seq {
-                            p.to_tokens(t);
-                        }
-                        if let Some(a) = action {
-                            token::RArrow::default().to_tokens(t);
-                            token::Brace::default().surround(t, |t2| a.to_tokens(t2));
-                        }
-                        if let Some(l) = label {
-                            token::Pound::default().to_tokens(t);
-                            syn::LitStr::new(l, proc_macro2::Span::call_site()).to_tokens(t);
-                        }
-                    }
-                });
-            }
-            Pattern::Bracketed {
-                binding, patterns, ..
-            } => {
-                if let Some(b) = binding {
-                    b.to_tokens(tokens);
-                    token::Colon::default().to_tokens(tokens);
-                }
-                token::Bracket::default().surround(tokens, |t| {
-                    for p in patterns {
-                        p.to_tokens(t);
-                    }
-                });
-            }
-            Pattern::Braced {
-                binding, patterns, ..
-            } => {
-                if let Some(b) = binding {
-                    b.to_tokens(tokens);
-                    token::Colon::default().to_tokens(tokens);
-                }
-                // Re-emitting `{ 2 … }` would come back as a repetition bound
-                // on the preceding pattern, so the one content that needs the
-                // keyword form goes out in it.
-                if starts_with_int_literal(patterns) {
-                    kw::brace::default().to_tokens(tokens);
-                    token::Paren::default().surround(tokens, |t| {
-                        for p in patterns {
-                            p.to_tokens(t);
-                        }
-                    });
-                } else {
-                    token::Brace::default().surround(tokens, |t| {
-                        for p in patterns {
-                            p.to_tokens(t);
-                        }
-                    });
-                }
-            }
-            Pattern::Parenthesized {
-                binding, patterns, ..
-            } => {
-                if let Some(b) = binding {
-                    b.to_tokens(tokens);
-                    token::Colon::default().to_tokens(tokens);
-                }
-                kw::paren::default().to_tokens(tokens);
-                token::Paren::default().surround(tokens, |t| {
-                    for p in patterns {
-                        p.to_tokens(t);
-                    }
-                });
-            }
+            Pattern::RuleCall { .. } => self.rule_call_to_tokens(tokens),
+            Pattern::Group { .. }
+            | Pattern::Bracketed { .. }
+            | Pattern::Braced { .. }
+            | Pattern::Parenthesized { .. } => self.delimited_to_tokens(tokens),
             Pattern::Optional(p, _) => {
                 p.to_tokens(tokens);
                 token::Question::default().to_tokens(tokens);
@@ -1487,6 +1373,106 @@ impl ToTokens for Pattern {
                 p.to_tokens(tokens);
                 token::Plus::default().to_tokens(tokens);
             }
+            Pattern::Bounded { .. } => self.bounded_to_tokens(tokens),
+            Pattern::SpanBinding(p, id, _) => {
+                p.to_tokens(tokens);
+                token::At::default().to_tokens(tokens);
+                id.to_tokens(tokens);
+            }
+            Pattern::Recover {
+                binding,
+                body,
+                sync,
+                ..
+            } => {
+                binding_to_tokens(binding.as_ref(), tokens);
+                kw::recover::default().to_tokens(tokens);
+                token::Paren::default().surround(tokens, |t| {
+                    body.to_tokens(t);
+                    token::Comma::default().to_tokens(t);
+                    sync.to_tokens(t);
+                });
+            }
+            Pattern::Peek(p, binding, _) => {
+                binding_to_tokens(binding.as_ref(), tokens);
+                keyword_call(&kw::peek::default(), p, tokens);
+            }
+            Pattern::Not(p, _) => {
+                keyword_call(&kw::not::default(), p, tokens);
+            }
+            Pattern::Until {
+                binding, pattern, ..
+            } => {
+                binding_to_tokens(binding.as_ref(), tokens);
+                keyword_call(&kw::until::default(), pattern, tokens);
+            }
+            Pattern::Count {
+                binding, pattern, ..
+            } => {
+                binding_to_tokens(binding.as_ref(), tokens);
+                keyword_call(&kw::count::default(), pattern, tokens);
+            }
+            Pattern::Fold { .. } => self.fold_to_tokens(tokens),
+            Pattern::LexicalScope(pattern, kw_token) => {
+                keyword_call(&kw_token, pattern, tokens);
+            }
+            Pattern::SpacedScope(pattern, kw_token) => {
+                keyword_call(&kw_token, pattern, tokens);
+            }
+            Pattern::Fail { message, kw_token } => {
+                kw_token.to_tokens(tokens);
+                if let Some(m) = message {
+                    token::Paren::default().surround(tokens, |t| {
+                        m.to_tokens(t);
+                    });
+                }
+            }
+            Pattern::Guard {
+                cond,
+                message,
+                kw_token,
+            } => {
+                kw_token.to_tokens(tokens);
+                token::Paren::default().surround(tokens, |t| {
+                    cond.to_tokens(t);
+                    if let Some(m) = message {
+                        token::Comma::default().to_tokens(t);
+                        m.to_tokens(t);
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// The arms of [`ToTokens for Pattern`](Pattern::to_tokens) too long to
+/// stay in its `match`.
+impl Pattern {
+    /// A delimited group, as [`parse_delimited`] reads it.
+    fn delimited_to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            Pattern::Group { .. } => self.group_to_tokens(tokens),
+            Pattern::Bracketed {
+                binding, patterns, ..
+            } => {
+                binding_to_tokens(binding.as_ref(), tokens);
+                token::Bracket::default().surround(tokens, |t| t.append_all(patterns));
+            }
+            Pattern::Braced { .. } => self.braced_to_tokens(tokens),
+            Pattern::Parenthesized {
+                binding, patterns, ..
+            } => {
+                binding_to_tokens(binding.as_ref(), tokens);
+                kw::paren::default().to_tokens(tokens);
+                token::Paren::default().surround(tokens, |t| t.append_all(patterns));
+            }
+            _ => unreachable!("called only on a delimited group"),
+        }
+    }
+
+    /// `p{n}`, `p{n,}`, `p{n,m}`, with literal or computed bounds.
+    fn bounded_to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
             Pattern::Bounded {
                 pattern,
                 dynamic: Some(d),
@@ -1521,169 +1507,169 @@ impl ToTokens for Pattern {
                     }
                 });
             }
-            Pattern::SpanBinding(p, id, _) => {
-                p.to_tokens(tokens);
-                token::At::default().to_tokens(tokens);
-                id.to_tokens(tokens);
-            }
-            Pattern::Recover {
-                binding,
-                body,
-                sync,
-                ..
-            } => {
-                if let Some(b) = binding {
-                    b.to_tokens(tokens);
-                    token::Colon::default().to_tokens(tokens);
-                }
-                kw::recover::default().to_tokens(tokens);
-                token::Paren::default().surround(tokens, |t| {
-                    body.to_tokens(t);
-                    token::Comma::default().to_tokens(t);
-                    sync.to_tokens(t);
-                });
-            }
-            Pattern::Peek(p, binding, _) => {
-                if let Some(b) = binding {
-                    b.to_tokens(tokens);
-                    token::Colon::default().to_tokens(tokens);
-                }
-                kw::peek::default().to_tokens(tokens);
-                token::Paren::default().surround(tokens, |t| {
-                    p.to_tokens(t);
-                });
-            }
-            Pattern::Not(p, _) => {
-                kw::not::default().to_tokens(tokens);
-                token::Paren::default().surround(tokens, |t| {
-                    p.to_tokens(t);
-                });
-            }
-            Pattern::Until {
-                binding, pattern, ..
-            } => {
-                if let Some(b) = binding {
-                    b.to_tokens(tokens);
-                    token::Colon::default().to_tokens(tokens);
-                }
-                kw::until::default().to_tokens(tokens);
-                token::Paren::default().surround(tokens, |t| {
-                    pattern.to_tokens(t);
-                });
-            }
-            Pattern::Count {
-                binding, pattern, ..
-            } => {
-                if let Some(b) = binding {
-                    b.to_tokens(tokens);
-                    token::Colon::default().to_tokens(tokens);
-                }
-                kw::count::default().to_tokens(tokens);
-                token::Paren::default().surround(tokens, |t| {
-                    pattern.to_tokens(t);
-                });
-            }
-            Pattern::Fold {
-                binding,
-                pattern,
-                init,
-                step,
-                merge,
-                sep,
-                min,
-                max,
-                computed,
-                ..
-            } => {
-                if let Some(b) = binding {
-                    b.to_tokens(tokens);
-                    token::Colon::default().to_tokens(tokens);
-                }
-                if merge.is_some() {
-                    kw::par_fold::default().to_tokens(tokens);
-                } else {
-                    kw::fold::default().to_tokens(tokens);
-                }
-                token::Paren::default().surround(tokens, |t| {
-                    pattern.to_tokens(t);
-                    token::Comma::default().to_tokens(t);
-                    init.to_tokens(t);
-                    token::Comma::default().to_tokens(t);
-                    step.to_tokens(t);
-                    if let Some(m) = merge {
-                        token::Comma::default().to_tokens(t);
-                        m.to_tokens(t);
-                    }
-                    if let Some(sep) = sep {
-                        token::Comma::default().to_tokens(t);
-                        Ident::new("sep", proc_macro2::Span::call_site()).to_tokens(t);
-                        token::Eq::default().to_tokens(t);
-                        sep.to_tokens(t);
-                    }
-                    if *min > 0 {
-                        token::Comma::default().to_tokens(t);
-                        Ident::new("min", proc_macro2::Span::call_site()).to_tokens(t);
-                        token::Eq::default().to_tokens(t);
-                        syn::LitInt::new(&min.to_string(), proc_macro2::Span::call_site())
-                            .to_tokens(t);
-                    }
-                    if let Some(m) = max {
-                        token::Comma::default().to_tokens(t);
-                        Ident::new("max", proc_macro2::Span::call_site()).to_tokens(t);
-                        token::Eq::default().to_tokens(t);
-                        syn::LitInt::new(&m.to_string(), proc_macro2::Span::call_site())
-                            .to_tokens(t);
-                    }
-                    let computed = computed.as_deref();
-                    for (name, e) in [
-                        ("min", computed.and_then(|c| c.min.as_ref())),
-                        ("max", computed.and_then(|c| c.max.as_ref())),
-                    ] {
-                        if let Some(e) = e {
-                            token::Comma::default().to_tokens(t);
-                            Ident::new(name, proc_macro2::Span::call_site()).to_tokens(t);
-                            token::Eq::default().to_tokens(t);
-                            e.to_tokens(t);
-                        }
-                    }
-                });
-            }
-            Pattern::LexicalScope(pattern, kw_token) => {
-                kw_token.to_tokens(tokens);
-                token::Paren::default().surround(tokens, |t| {
-                    pattern.to_tokens(t);
-                });
-            }
-            Pattern::SpacedScope(pattern, kw_token) => {
-                kw_token.to_tokens(tokens);
-                token::Paren::default().surround(tokens, |t| {
-                    pattern.to_tokens(t);
-                });
-            }
-            Pattern::Fail { message, kw_token } => {
-                kw_token.to_tokens(tokens);
-                if let Some(m) = message {
-                    token::Paren::default().surround(tokens, |t| {
-                        m.to_tokens(t);
-                    });
-                }
-            }
-            Pattern::Guard {
-                cond,
-                message,
-                kw_token,
-            } => {
-                kw_token.to_tokens(tokens);
-                token::Paren::default().surround(tokens, |t| {
-                    cond.to_tokens(t);
-                    if let Some(m) = message {
-                        token::Comma::default().to_tokens(t);
-                        m.to_tokens(t);
-                    }
-                });
-            }
+            _ => unreachable!("called only on `Pattern::Bounded`"),
         }
     }
+
+    fn fold_to_tokens(&self, tokens: &mut TokenStream) {
+        let Pattern::Fold {
+            binding,
+            pattern,
+            init,
+            step,
+            merge,
+            sep,
+            min,
+            max,
+            computed,
+            ..
+        } = self
+        else {
+            unreachable!("called only on `Pattern::Fold`")
+        };
+        binding_to_tokens(binding.as_ref(), tokens);
+        if merge.is_some() {
+            kw::par_fold::default().to_tokens(tokens);
+        } else {
+            kw::fold::default().to_tokens(tokens);
+        }
+        token::Paren::default().surround(tokens, |t| {
+            pattern.to_tokens(t);
+            token::Comma::default().to_tokens(t);
+            init.to_tokens(t);
+            token::Comma::default().to_tokens(t);
+            step.to_tokens(t);
+            if let Some(m) = merge {
+                token::Comma::default().to_tokens(t);
+                m.to_tokens(t);
+            }
+            let int = |n: usize| syn::LitInt::new(&n.to_string(), Span::call_site());
+            if let Some(sep) = sep {
+                named_arg("sep", sep, t);
+            }
+            if *min > 0 {
+                named_arg("min", &int(*min), t);
+            }
+            if let Some(m) = max {
+                named_arg("max", &int(*m), t);
+            }
+            let computed = computed.as_deref();
+            for (name, e) in [
+                ("min", computed.and_then(|c| c.min.as_ref())),
+                ("max", computed.and_then(|c| c.max.as_ref())),
+            ] {
+                if let Some(e) = e {
+                    named_arg(name, e, t);
+                }
+            }
+        });
+    }
+
+    fn group_to_tokens(&self, tokens: &mut TokenStream) {
+        let Pattern::Group { binding, alts, .. } = self else {
+            unreachable!("called only on `Pattern::Group`")
+        };
+        binding_to_tokens(binding.as_ref(), tokens);
+        token::Paren::default().surround(tokens, |t| {
+            for (i, (seq, action, label)) in alts.iter().enumerate() {
+                if i > 0 {
+                    token::Or::default().to_tokens(t);
+                }
+                for p in seq {
+                    p.to_tokens(t);
+                }
+                if let Some(a) = action {
+                    token::RArrow::default().to_tokens(t);
+                    token::Brace::default().surround(t, |t2| a.to_tokens(t2));
+                }
+                if let Some(l) = label {
+                    token::Pound::default().to_tokens(t);
+                    syn::LitStr::new(l, proc_macro2::Span::call_site()).to_tokens(t);
+                }
+            }
+        });
+    }
+
+    fn braced_to_tokens(&self, tokens: &mut TokenStream) {
+        let Pattern::Braced {
+            binding, patterns, ..
+        } = self
+        else {
+            unreachable!("called only on `Pattern::Braced`")
+        };
+        binding_to_tokens(binding.as_ref(), tokens);
+        // Re-emitting `{ 2 … }` would come back as a repetition bound
+        // on the preceding pattern, so the one content that needs the
+        // keyword form goes out in it.
+        if starts_with_int_literal(patterns) {
+            kw::brace::default().to_tokens(tokens);
+            token::Paren::default().surround(tokens, |t| {
+                for p in patterns {
+                    p.to_tokens(t);
+                }
+            });
+        } else {
+            token::Brace::default().surround(tokens, |t| {
+                for p in patterns {
+                    p.to_tokens(t);
+                }
+            });
+        }
+    }
+
+    fn rule_call_to_tokens(&self, tokens: &mut TokenStream) {
+        let Pattern::RuleCall {
+            binding,
+            rule_path,
+            generics,
+            args,
+        } = self
+        else {
+            unreachable!("called only on `Pattern::RuleCall`")
+        };
+        binding_to_tokens(binding.as_ref(), tokens);
+        rule_path.to_tokens(tokens);
+        if !generics.is_empty() {
+            token::Lt::default().to_tokens(tokens);
+            comma_separated(generics, tokens);
+            token::Gt::default().to_tokens(tokens);
+        }
+        if !args.is_empty() {
+            token::Paren::default().surround(tokens, |t| comma_separated(args, t));
+        }
+    }
+}
+
+/// `name:` before a bound pattern, nothing before an unbound one.
+fn binding_to_tokens(binding: Option<&Ident>, tokens: &mut TokenStream) {
+    if let Some(b) = binding {
+        b.to_tokens(tokens);
+        token::Colon::default().to_tokens(tokens);
+    }
+}
+
+/// `a, b, c`, without a trailing comma.
+fn comma_separated<T: ToTokens>(items: &[T], tokens: &mut TokenStream) {
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            token::Comma::default().to_tokens(tokens);
+        }
+        item.to_tokens(tokens);
+    }
+}
+
+/// `keyword(inner)`.
+fn keyword_call(keyword: &impl ToTokens, inner: &impl ToTokens, tokens: &mut TokenStream) {
+    keyword.to_tokens(tokens);
+    token::Paren::default().surround(tokens, |t| inner.to_tokens(t));
+}
+
+/// `, name = value`: a named argument after the positional ones of a fold.
+fn named_arg(name: &str, value: &impl ToTokens, tokens: &mut TokenStream) {
+    token::Comma::default().to_tokens(tokens);
+    Ident::new(name, Span::call_site()).to_tokens(tokens);
+    token::Eq::default().to_tokens(tokens);
+    value.to_tokens(tokens);
 }
 
 /// A binding inside `peek(…)` or `not(…)` would name a value the generated
