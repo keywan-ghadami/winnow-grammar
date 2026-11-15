@@ -2,7 +2,7 @@ use super::Codegen;
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use std::collections::HashMap;
-use winnow_grammar_model::model::{Argument, ModelPattern};
+use winnow_grammar_model::model::{Argument, ModelPattern, Rule};
 use winnow_grammar_model::parser::DynMax;
 
 /// The widest tuple winnow implements `Alt` for.
@@ -192,6 +192,26 @@ fn builtin_expectation(name: &str) -> Option<&'static str> {
         | "isize" => "integer literal",
         "f32" | "f64" => "float literal",
         "bool" => "`true` or `false`",
+        _ => return None,
+    })
+}
+
+/// The built-ins that are a run of one ASCII class: the class, an associated
+/// constant of `ascii::AsciiClass`, and the least length of the run.
+fn ascii_class(name: &str) -> Option<(&'static str, usize)> {
+    Some(match name {
+        "alpha1" => ("ALPHA", 1),
+        "digit1" => ("DIGIT", 1),
+        "hex_digit0" => ("HEX_DIGIT", 0),
+        "hex_digit1" => ("HEX_DIGIT", 1),
+        "oct_digit0" => ("OCT_DIGIT", 0),
+        "oct_digit1" => ("OCT_DIGIT", 1),
+        "binary_digit0" => ("BINARY_DIGIT", 0),
+        "binary_digit1" => ("BINARY_DIGIT", 1),
+        "space0" => ("SPACE", 0),
+        "space1" => ("SPACE", 1),
+        "multispace0" => ("MULTISPACE", 0),
+        "multispace1" => ("MULTISPACE", 1),
         _ => return None,
     })
 }
@@ -892,10 +912,6 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "over the limit when the lint came in; split it, then drop this"
-    )]
     pub fn generate_rule_call_parser(
         &self,
         rule_path: &syn::Path,
@@ -903,8 +919,6 @@ impl<'a> Codegen<'a> {
         args: &[Argument],
         is_lexical: bool,
     ) -> TokenStream {
-        let input_ty = self.input_ty();
-        let rts = self.rts();
         let span = Span::mixed_site();
         let rule_name = &rule_path.segments.last().unwrap().ident;
         let name_str = rule_name.to_string();
@@ -919,101 +933,10 @@ impl<'a> Codegen<'a> {
                 .unwrap();
 
             if super::is_template(target_rule) {
-                // 3b. Parser parameters -> argument patterns
-                let arg_patterns: Vec<Option<ModelPattern>> =
-                    args.iter().map(|arg| arg.pattern().cloned()).collect();
-                let mut subst = HashMap::new();
-                // A value given to a typed parameter of a template is bound
-                // under the parameter's name, before the inlined body that
-                // uses it (ADR 26 D2).
-                let mut values = TokenStream::new();
-                for (param, arg) in target_rule.params.iter().zip(args) {
-                    match arg {
-                        Argument::Value(_, e) => {
-                            let name = &param.name;
-                            let ty = param.ty.as_ref().map(|t| quote! { : #t });
-                            values.extend(quote_spanned! {span=>
-                                let #name #ty = ::core::clone::Clone::clone(&(#e));
-                            });
-                        }
-                        Argument::Positional(p) | Argument::Named(_, p) => {
-                            subst.insert(param.name.to_string(), p.clone());
-                        }
-                    }
-                }
-
-                // 3a. Type parameters -> type. Explicitly given ones
-                // (`list<u32>(…)`) win; missing ones are inferred from the
-                // argument at the same position (`list(item=u32)` -> T = u32).
-                // The same convention as syn-grammar's monomorphizer: the i-th
-                // type parameter belongs to the i-th parser parameter.
-                let mut type_subst = HashMap::new();
-                let type_params = target_rule.generics.params.iter().filter_map(|g| match g {
-                    syn::GenericParam::Type(t) => Some(t.ident.to_string()),
-                    _ => None,
-                });
-                for (idx, name) in type_params.enumerate() {
-                    if let Some(call_ty) = call_generics.get(idx) {
-                        type_subst.insert(name, call_ty.clone());
-                    } else if let Some(ty) = arg_patterns
-                        .get(idx)
-                        .and_then(|p| p.as_ref())
-                        .and_then(|p| self.infer_type(p))
-                    {
-                        type_subst.insert(name, ty);
-                    }
-                }
-
-                // 4. Clone the rule's AST, substitute parameters and types -
-                //    in patterns AND in the action blocks (`Vec::<T>::new()`).
-                let mut inlined_variants = target_rule.variants.clone();
-                for variant in &mut inlined_variants {
-                    for step in &mut variant.pattern {
-                        substitute_pattern(step, &subst, &type_subst);
-                    }
-                    // The action block comes without its braces; for the type
-                    // substitution it is parsed as a block and written back
-                    // with braces - a block in expression position is valid
-                    // everywhere the tokens were before.
-                    let action = &variant.action;
-                    if let Ok(mut block) = syn::parse2::<syn::Block>(quote::quote!({ #action })) {
-                        syn::visit_mut::VisitMut::visit_block_mut(
-                            &mut TypeSubst(&type_subst),
-                            &mut block,
-                        );
-                        variant.action = quote::quote!(#block);
-                    }
-                }
-
-                // 5. Compile the inlined parser body directly (incl. type generics in the return type)
-                let mut ret_type = target_rule.return_type.clone();
-                replace_type(&mut ret_type, &type_subst);
-
-                let combined_lexical =
-                    is_lexical || target_rule.is_lexical || target_rule.name == "WS";
-                // The inlined rule keeps its own label: what it is called is a
-                // property of the rule, not of where it was written out.
-                let body = self.generate_variants_body(
-                    &inlined_variants,
-                    &ret_type,
-                    combined_lexical,
-                    true,
-                    target_rule.label.as_deref(),
-                );
-                let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<__WgEr> };
-                let input_var = &self.input_ident; // <-- NEW: use the defined identifier
-
-                return quote_spanned! {span=>
-                    (|#input_var: &mut #input_ty| -> ::winnow::Result<#ret_type, #inner_err_type> {
-                        #values
-                        let mut parser = (|#input_var: &mut #input_ty| -> ::winnow::Result<#ret_type, #inner_err_type> {
-                            #body
-                        });
-                        ::winnow::Parser::parse_next(&mut parser, #input_var)
-                    })
-                };
+                return self.inline_template_call(target_rule, call_generics, args, is_lexical);
             }
 
+            let input_ty = self.input_ty();
             // --- Normal function call for NON-template rules ---
             let fn_name = quote::format_ident!("parse_{}_inner", rule_name, span = span);
             if args.is_empty() {
@@ -1026,6 +949,124 @@ impl<'a> Codegen<'a> {
             }
         }
 
+        self.builtin_call_parser(rule_path, &name_str, call_generics, args, is_lexical)
+    }
+
+    /// A call of a template rule: its body inlined, with the parser
+    /// parameters and the type parameters substituted (ADR 26).
+    fn inline_template_call(
+        &self,
+        target_rule: &Rule,
+        call_generics: &[syn::Type],
+        args: &[Argument],
+        is_lexical: bool,
+    ) -> TokenStream {
+        let input_ty = self.input_ty();
+        let span = Span::mixed_site();
+        // 3b. Parser parameters -> argument patterns
+        let arg_patterns: Vec<Option<ModelPattern>> =
+            args.iter().map(|arg| arg.pattern().cloned()).collect();
+        let mut subst = HashMap::new();
+        // A value given to a typed parameter of a template is bound
+        // under the parameter's name, before the inlined body that
+        // uses it (ADR 26 D2).
+        let mut values = TokenStream::new();
+        for (param, arg) in target_rule.params.iter().zip(args) {
+            match arg {
+                Argument::Value(_, e) => {
+                    let name = &param.name;
+                    let ty = param.ty.as_ref().map(|t| quote! { : #t });
+                    values.extend(quote_spanned! {span=>
+                        let #name #ty = ::core::clone::Clone::clone(&(#e));
+                    });
+                }
+                Argument::Positional(p) | Argument::Named(_, p) => {
+                    subst.insert(param.name.to_string(), p.clone());
+                }
+            }
+        }
+
+        // 3a. Type parameters -> type. Explicitly given ones
+        // (`list<u32>(…)`) win; missing ones are inferred from the
+        // argument at the same position (`list(item=u32)` -> T = u32).
+        // The same convention as syn-grammar's monomorphizer: the i-th
+        // type parameter belongs to the i-th parser parameter.
+        let mut type_subst = HashMap::new();
+        let type_params = target_rule.generics.params.iter().filter_map(|g| match g {
+            syn::GenericParam::Type(t) => Some(t.ident.to_string()),
+            _ => None,
+        });
+        for (idx, name) in type_params.enumerate() {
+            if let Some(call_ty) = call_generics.get(idx) {
+                type_subst.insert(name, call_ty.clone());
+            } else if let Some(ty) = arg_patterns
+                .get(idx)
+                .and_then(|p| p.as_ref())
+                .and_then(|p| self.infer_type(p))
+            {
+                type_subst.insert(name, ty);
+            }
+        }
+
+        // 4. Clone the rule's AST, substitute parameters and types -
+        //    in patterns AND in the action blocks (`Vec::<T>::new()`).
+        let mut inlined_variants = target_rule.variants.clone();
+        for variant in &mut inlined_variants {
+            for step in &mut variant.pattern {
+                substitute_pattern(step, &subst, &type_subst);
+            }
+            // The action block comes without its braces; for the type
+            // substitution it is parsed as a block and written back
+            // with braces - a block in expression position is valid
+            // everywhere the tokens were before.
+            let action = &variant.action;
+            if let Ok(mut block) = syn::parse2::<syn::Block>(quote::quote!({ #action })) {
+                syn::visit_mut::VisitMut::visit_block_mut(&mut TypeSubst(&type_subst), &mut block);
+                variant.action = quote::quote!(#block);
+            }
+        }
+
+        // 5. Compile the inlined parser body directly (incl. type generics in the return type)
+        let mut ret_type = target_rule.return_type.clone();
+        replace_type(&mut ret_type, &type_subst);
+
+        let combined_lexical = is_lexical || target_rule.is_lexical || target_rule.name == "WS";
+        // The inlined rule keeps its own label: what it is called is a
+        // property of the rule, not of where it was written out.
+        let body = self.generate_variants_body(
+            &inlined_variants,
+            &ret_type,
+            combined_lexical,
+            true,
+            target_rule.label.as_deref(),
+        );
+        let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<__WgEr> };
+        let input_var = &self.input_ident; // <-- NEW: use the defined identifier
+
+        quote_spanned! {span=>
+            (|#input_var: &mut #input_ty| -> ::winnow::Result<#ret_type, #inner_err_type> {
+                #values
+                let mut parser = (|#input_var: &mut #input_ty| -> ::winnow::Result<#ret_type, #inner_err_type> {
+                    #body
+                });
+                ::winnow::Parser::parse_next(&mut parser, #input_var)
+            })
+        }
+    }
+
+    /// A call of a built-in, or of a hand-written parser the grammar does not
+    /// define.
+    fn builtin_call_parser(
+        &self,
+        rule_path: &syn::Path,
+        name_str: &str,
+        call_generics: &[syn::Type],
+        args: &[Argument],
+        is_lexical: bool,
+    ) -> TokenStream {
+        let input_ty = self.input_ty();
+        let rts = self.rts();
+        let span = Span::mixed_site();
         let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<__WgEr> };
         let input_type = quote_spanned! {span=> #input_ty };
 
@@ -1051,7 +1092,7 @@ impl<'a> Codegen<'a> {
             None => quote_spanned! {span=> #rts::intern(#inner) },
         };
 
-        let p = match name_str.as_str() {
+        let p = match name_str {
             "raw_ident" => raw_ident,
             "ident" => intern_with(&raw_ident),
             // `intern(p)`: the one builtin that takes an argument. The
@@ -1065,64 +1106,11 @@ impl<'a> Codegen<'a> {
             // `text(digit{2} raw_ident)` captures both, and through the
             // ordinary sequence generator, so the whitespace between them is
             // whatever it would be outside the `text`.
-            "text" => {
-                if args.is_empty() {
-                    let msg = "`text` takes the pattern whose input to capture, and got none";
-                    return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg)
-                        .to_compile_error();
-                }
-                let seq = match pattern_args(args) {
-                    Ok(seq) => seq,
-                    Err(e) => return e,
-                };
-                // A run of a character class already *is* its text, so
-                // `text(digit{1,2})` is that run and not a wrapper around it.
-                // Taking it twice measured ~3 ns more on the 1BRC temperature.
-                if let [only] = &seq[..] {
-                    if self.is_text_run(only) {
-                        return self.generate_parser_expr(only, is_lexical, false);
-                    }
-                    // So is a character loop, once it is a scan - of bytes,
-                    // in a byte grammar, which are checked as they become
-                    // text.
-                    if let Some(run) = self.char_loop_run(only, is_lexical) {
-                        if self.is_bytes() {
-                            return quote_spanned! {span=> #rts::text(#run) };
-                        }
-                        return run;
-                    }
-                }
-                let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
-                if self.is_bytes() {
-                    // ADR 25 D3: checked where it becomes text.
-                    quote_spanned! {span=> #rts::text(::winnow::Parser::take(#inner)) }
-                } else {
-                    quote_spanned! {span=> ::winnow::Parser::take(#inner) }
-                }
-            }
+            "text" => return self.capture_text(rule_path, args, is_lexical),
             // `bytes(p)`: what `p` consumed, as bytes and unchecked - the
             // byte grammar's `text(p)` without the check (ADR 25 D3). The
             // validator rejects it in a text grammar.
-            "bytes" if self.is_bytes() => {
-                if args.is_empty() {
-                    let msg = "`bytes` takes the pattern whose input to capture, and got none";
-                    return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg)
-                        .to_compile_error();
-                }
-                let seq = match pattern_args(args) {
-                    Ok(seq) => seq,
-                    Err(e) => return e,
-                };
-                if let [only] = &seq[..] {
-                    if !self.loop_needs_check(only) {
-                        if let Some(run) = self.char_loop_run(only, is_lexical) {
-                            return run;
-                        }
-                    }
-                }
-                let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
-                quote_spanned! {span=> ::winnow::Parser::take(#inner) }
-            }
+            "bytes" if self.is_bytes() => return self.capture_bytes(rule_path, args, is_lexical),
             // `dec<T>(p)`: the text `p` matched, read as a number.
             //
             // `try_map` rather than winnow's `parse_to`: the latter throws the
@@ -1131,40 +1119,7 @@ impl<'a> Codegen<'a> {
             // most of the point. `ParseError` turns an external error into its
             // message (`FromExternalError`), so "number too large to fit in
             // target type" arrives intact.
-            "dec" => {
-                if args.is_empty() {
-                    let msg = "`dec` takes the pattern whose text to read, and got none";
-                    return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg)
-                        .to_compile_error();
-                }
-                let seq = match pattern_args(args) {
-                    Ok(seq) => seq,
-                    Err(e) => return e,
-                };
-                // As in `text`: a run is its own text, so it is read as it
-                // stands rather than taken a second time.
-                let run = match &seq[..] {
-                    [only] if self.is_text_run(only) => {
-                        Some(self.generate_parser_expr(only, is_lexical, false))
-                    }
-                    [only] => self.char_loop_run(only, is_lexical),
-                    _ => None,
-                };
-                let taken = run.unwrap_or_else(|| {
-                    let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
-                    quote_spanned! {span=> ::winnow::Parser::take(#inner) }
-                });
-                match call_generics.first() {
-                    // The byte driver's `dec` also names what `p` yields.
-                    Some(ty) if self.is_bytes() => quote_spanned! {span=>
-                        #rts::dec::<_, #ty, _, _, _>(#taken)
-                    },
-                    Some(ty) => quote_spanned! {span=>
-                        #rts::dec::<_, #ty, _, _>(#taken)
-                    },
-                    None => quote_spanned! {span=> #rts::dec(#taken) },
-                }
-            }
+            "dec" => return self.capture_dec(rule_path, call_generics, args, is_lexical),
             "intern" => match args {
                 [arg] => {
                     let inner = self.generate_argument_expr(arg, is_lexical);
@@ -1179,6 +1134,198 @@ impl<'a> Codegen<'a> {
                         .to_compile_error();
                 }
             },
+            "string" | "char" => self.quoted_literal(name_str),
+            // ADR 25 D3: in a byte grammar `any` decodes one character with
+            // validation, so an action written for text reads a `char` over
+            // bytes too; `byte` is the raw one.
+            "any" if self.is_bytes() => quote_spanned! {span=> #rts::char_except(b"") },
+            "byte" if self.is_bytes() => {
+                quote_spanned! {span=> ::winnow::token::any::<#input_type, #inner_err_type> }
+            }
+            "any" => quote_spanned! {span=> ::winnow::token::any::<#input_type, #inner_err_type> },
+            // A single digit, as opposed to `digit1`'s greedy run of them.
+            // Fixed-width numeric formats are written with it and a bounded
+            // repetition (`digit{1,2}`), which a greedy terminal cannot express.
+            // Tested as a byte rather than decoded as a `char` (`rt::digit`).
+            "digit" => quote_spanned! {span=>
+                #rts::digit::<__WgS, __WgEr>()
+            },
+            // One hex digit, for fixed-width hex fields (`hex_digit{2}`), as
+            // `digit` is for decimal ones.
+            "hex_digit" => quote_spanned! {span=>
+                #rts::hex_digit::<__WgS, __WgEr>()
+            },
+            // The runs of one ASCII class, scanned a word at a time.
+            name if ascii_class(name).is_some() => {
+                let (class, min) = ascii_class(name).unwrap();
+                let class = quote::format_ident!("{}", class, span = span);
+                let mut min = proc_macro2::Literal::usize_unsuffixed(min);
+                min.set_span(span);
+                quote_spanned! {span=>
+                    #rts::class::<__WgS, __WgEr>(
+                        ::winnow_grammar::ascii::AsciiClass::#class,
+                        #min,
+                    )
+                }
+            }
+            "line_ending" => {
+                quote_spanned! {span=> ::winnow::ascii::line_ending::<#input_type, #inner_err_type> }
+            }
+            "empty" => quote_spanned! {span=> ::winnow::combinator::empty },
+            "eof" => quote_spanned! {span=> ::winnow::combinator::eof },
+            // The boundary of the frame this rule is reached from, resolved
+            // by the frame check; the check rejects a `frame_end` no frame
+            // reaches, so the fallback only keeps the generator total.
+            winnow_grammar_model::frame::FRAME_END => return self.frame_end_parser(),
+            "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => {
+                let ty = quote::format_ident!("{}", name_str, span = span);
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, #ty, __WgEr> }
+            }
+            "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => {
+                let ty = quote::format_ident!("{}", name_str, span = span);
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, #ty, __WgEr> }
+            }
+            "f32" | "f64" => {
+                let ty = quote::format_ident!("{}", name_str, span = span);
+                quote_spanned! {span=> ::winnow::ascii::float::<#input_type, #ty, #inner_err_type> }
+            }
+            "bool" => quote_spanned! {span=>
+                ::winnow::combinator::alt((
+                    ::winnow::token::literal("true").map(|_| true),
+                    ::winnow::token::literal("false").map(|_| false),
+                ))
+            },
+            _ => self.external_parser_call(rule_path, args, is_lexical),
+        };
+
+        // winnow's primitives only report the position. The expectation comes
+        // from here - otherwise an `ident` branch would contribute nothing at
+        // all to `expected one of: …`.
+        match builtin_expectation(name_str) {
+            Some(what) => quote_spanned! {span=> ::winnow_grammar::rt::expected(#what, #p) },
+            None => p,
+        }
+    }
+
+    /// `text(p)`: what `p` consumed, as text.
+    fn capture_text(
+        &self,
+        rule_path: &syn::Path,
+        args: &[Argument],
+        is_lexical: bool,
+    ) -> TokenStream {
+        let rts = self.rts();
+        let span = Span::mixed_site();
+        if args.is_empty() {
+            let msg = "`text` takes the pattern whose input to capture, and got none";
+            return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg).to_compile_error();
+        }
+        let seq = match pattern_args(args) {
+            Ok(seq) => seq,
+            Err(e) => return e,
+        };
+        // A run of a character class already *is* its text, so
+        // `text(digit{1,2})` is that run and not a wrapper around it.
+        // Taking it twice measured ~3 ns more on the 1BRC temperature.
+        if let [only] = &seq[..] {
+            if self.is_text_run(only) {
+                return self.generate_parser_expr(only, is_lexical, false);
+            }
+            // So is a character loop, once it is a scan - of bytes,
+            // in a byte grammar, which are checked as they become
+            // text.
+            if let Some(run) = self.char_loop_run(only, is_lexical) {
+                if self.is_bytes() {
+                    return quote_spanned! {span=> #rts::text(#run) };
+                }
+                return run;
+            }
+        }
+        let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
+        if self.is_bytes() {
+            // ADR 25 D3: checked where it becomes text.
+            quote_spanned! {span=> #rts::text(::winnow::Parser::take(#inner)) }
+        } else {
+            quote_spanned! {span=> ::winnow::Parser::take(#inner) }
+        }
+    }
+
+    /// `bytes(p)`: what `p` consumed, as bytes and unchecked.
+    fn capture_bytes(
+        &self,
+        rule_path: &syn::Path,
+        args: &[Argument],
+        is_lexical: bool,
+    ) -> TokenStream {
+        let span = Span::mixed_site();
+        if args.is_empty() {
+            let msg = "`bytes` takes the pattern whose input to capture, and got none";
+            return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg).to_compile_error();
+        }
+        let seq = match pattern_args(args) {
+            Ok(seq) => seq,
+            Err(e) => return e,
+        };
+        if let [only] = &seq[..] {
+            if !self.loop_needs_check(only) {
+                if let Some(run) = self.char_loop_run(only, is_lexical) {
+                    return run;
+                }
+            }
+        }
+        let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
+        quote_spanned! {span=> ::winnow::Parser::take(#inner) }
+    }
+
+    /// `dec<T>(p)`: the text `p` matched, read as a number.
+    fn capture_dec(
+        &self,
+        rule_path: &syn::Path,
+        call_generics: &[syn::Type],
+        args: &[Argument],
+        is_lexical: bool,
+    ) -> TokenStream {
+        let rts = self.rts();
+        let span = Span::mixed_site();
+        if args.is_empty() {
+            let msg = "`dec` takes the pattern whose text to read, and got none";
+            return syn::Error::new(syn::spanned::Spanned::span(rule_path), msg).to_compile_error();
+        }
+        let seq = match pattern_args(args) {
+            Ok(seq) => seq,
+            Err(e) => return e,
+        };
+        // As in `text`: a run is its own text, so it is read as it
+        // stands rather than taken a second time.
+        let run = match &seq[..] {
+            [only] if self.is_text_run(only) => {
+                Some(self.generate_parser_expr(only, is_lexical, false))
+            }
+            [only] => self.char_loop_run(only, is_lexical),
+            _ => None,
+        };
+        let taken = run.unwrap_or_else(|| {
+            let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
+            quote_spanned! {span=> ::winnow::Parser::take(#inner) }
+        });
+        match call_generics.first() {
+            // The byte driver's `dec` also names what `p` yields.
+            Some(ty) if self.is_bytes() => quote_spanned! {span=>
+                #rts::dec::<_, #ty, _, _, _>(#taken)
+            },
+            Some(ty) => quote_spanned! {span=>
+                #rts::dec::<_, #ty, _, _>(#taken)
+            },
+            None => quote_spanned! {span=> #rts::dec(#taken) },
+        }
+    }
+
+    /// `string` and `char`: a quoted literal and its escapes; in a byte
+    /// grammar decoded from the bytes with validation (ADR 25 D3).
+    fn quoted_literal(&self, name: &str) -> TokenStream {
+        let rts = self.rts();
+        let span = Span::mixed_site();
+        match name {
             "string" if self.is_bytes() => quote_spanned! {span=>
                  delimited(
                     '"',
@@ -1245,199 +1392,66 @@ impl<'a> Codegen<'a> {
                     '\''.context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::CharLiteral('\'')))
                 )
             },
-            // ADR 25 D3: in a byte grammar `any` decodes one character with
-            // validation, so an action written for text reads a `char` over
-            // bytes too; `byte` is the raw one.
-            "any" if self.is_bytes() => quote_spanned! {span=> #rts::char_except(b"") },
-            "byte" if self.is_bytes() => {
-                quote_spanned! {span=> ::winnow::token::any::<#input_type, #inner_err_type> }
-            }
-            "any" => quote_spanned! {span=> ::winnow::token::any::<#input_type, #inner_err_type> },
-            "alpha1" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::ALPHA,
-                    1,
-                )
-            },
-            // A single digit, as opposed to `digit1`'s greedy run of them.
-            // Fixed-width numeric formats are written with it and a bounded
-            // repetition (`digit{1,2}`), which a greedy terminal cannot express.
-            // Tested as a byte rather than decoded as a `char` (`rt::digit`).
-            "digit" => quote_spanned! {span=>
-                #rts::digit::<__WgS, __WgEr>()
-            },
-            "digit1" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::DIGIT,
-                    1,
-                )
-            },
-            // One hex digit, for fixed-width hex fields (`hex_digit{2}`), as
-            // `digit` is for decimal ones.
-            "hex_digit" => quote_spanned! {span=>
-                #rts::hex_digit::<__WgS, __WgEr>()
-            },
-            "hex_digit0" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::HEX_DIGIT,
-                    0,
-                )
-            },
-            "hex_digit1" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::HEX_DIGIT,
-                    1,
-                )
-            },
-            "oct_digit0" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::OCT_DIGIT,
-                    0,
-                )
-            },
-            "oct_digit1" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::OCT_DIGIT,
-                    1,
-                )
-            },
-            "binary_digit0" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::BINARY_DIGIT,
-                    0,
-                )
-            },
-            "binary_digit1" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::BINARY_DIGIT,
-                    1,
-                )
-            },
-            "space0" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::SPACE,
-                    0,
-                )
-            },
-            "space1" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::SPACE,
-                    1,
-                )
-            },
-            "multispace0" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::MULTISPACE,
-                    0,
-                )
-            },
-            "multispace1" => quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(
-                    ::winnow_grammar::ascii::AsciiClass::MULTISPACE,
-                    1,
-                )
-            },
-            "line_ending" => {
-                quote_spanned! {span=> ::winnow::ascii::line_ending::<#input_type, #inner_err_type> }
-            }
-            "empty" => quote_spanned! {span=> ::winnow::combinator::empty },
-            "eof" => quote_spanned! {span=> ::winnow::combinator::eof },
-            // The boundary of the frame this rule is reached from, resolved
-            // by the frame check; the check rejects a `frame_end` no frame
-            // reaches, so the fallback only keeps the generator total.
-            winnow_grammar_model::frame::FRAME_END => {
-                let b = self.current_boundary.borrow().clone().unwrap_or_default();
-                if let [byte] = b.as_bytes() {
-                    if byte.is_ascii() {
-                        return quote_spanned! {span=> #rts::lit_byte(#byte, #b, ::core::option::Option::None) };
-                    }
-                }
-                quote_spanned! {span=>
-                    literal(#b)
-                        .context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::StringLiteral(#b)))
-                }
-            }
+            _ => unreachable!("only `string` and `char` are quoted literals"),
+        }
+    }
 
-            "u8" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, u8, __WgEr> }
+    /// The boundary of the frame this rule is reached from, resolved
+    /// by the frame check; the check rejects a `frame_end` no frame
+    /// reaches, so the fallback only keeps the generator total.
+    ///
+    /// The single-byte literal is not wrapped in the expectation; the
+    /// fallback is.
+    fn frame_end_parser(&self) -> TokenStream {
+        let rts = self.rts();
+        let span = Span::mixed_site();
+        let b = self.current_boundary.borrow().clone().unwrap_or_default();
+        if let [byte] = b.as_bytes() {
+            if byte.is_ascii() {
+                return quote_spanned! {span=> #rts::lit_byte(#byte, #b, ::core::option::Option::None) };
             }
-            "u16" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, u16, __WgEr> }
-            }
-            "u32" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, u32, __WgEr> }
-            }
-            "u64" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, u64, __WgEr> }
-            }
-            "u128" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, u128, __WgEr> }
-            }
-            "usize" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, usize, __WgEr> }
-            }
-            "i8" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, i8, __WgEr> }
-            }
-            "i16" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, i16, __WgEr> }
-            }
-            "i32" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, i32, __WgEr> }
-            }
-            "i64" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, i64, __WgEr> }
-            }
-            "i128" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, i128, __WgEr> }
-            }
-            "isize" => {
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, isize, __WgEr> }
-            }
-            "f32" => {
-                quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f32, #inner_err_type> }
-            }
-            "f64" => {
-                quote_spanned! {span=> ::winnow::ascii::float::<#input_type, f64, #inner_err_type> }
-            }
-            "bool" => quote_spanned! {span=>
-                ::winnow::combinator::alt((
-                    ::winnow::token::literal("true").map(|_| true),
-                    ::winnow::token::literal("false").map(|_| false),
-                ))
-            },
-            _ => {
-                if args.is_empty() {
-                    // A hand-written parser returns `ParseError` whatever the
-                    // grammar's error type is; the fast pass drops it, and
-                    // says so first, so that the parser need not build one
-                    // (`ParseError::from_input`).
-                    quote_spanned! {span=> (|i: &mut #input_ty| {
-                        let outer = ::core::mem::replace(&mut i.state.diagnosing, <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING);
-                        let r = ::winnow::Parser::parse_next(&mut #rule_path, i);
-                        i.state.diagnosing = outer;
-                        r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
-                    }) }
-                } else {
-                    let arg_exprs = args
-                        .iter()
-                        .map(|arg| self.generate_argument_expr(arg, is_lexical));
-                    quote_spanned! {span=> (|i: &mut #input_ty| {
-                        let outer = ::core::mem::replace(&mut i.state.diagnosing, <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING);
-                        let r = #rule_path(i, #(#arg_exprs),*);
-                        i.state.diagnosing = outer;
-                        r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
-                    }) }
-                }
-            }
+        }
+        let p = quote_spanned! {span=>
+            literal(#b)
+                .context(::winnow::error::StrContext::Expected(::winnow::error::StrContextValue::StringLiteral(#b)))
         };
-
-        // winnow's primitives only report the position. The expectation comes
-        // from here - otherwise an `ident` branch would contribute nothing at
-        // all to `expected one of: …`.
-        match builtin_expectation(&name_str) {
+        match builtin_expectation(winnow_grammar_model::frame::FRAME_END) {
             Some(what) => quote_spanned! {span=> ::winnow_grammar::rt::expected(#what, #p) },
             None => p,
+        }
+    }
+
+    /// A parser the grammar names but does not define: a hand-written one,
+    /// called as it stands.
+    fn external_parser_call(
+        &self,
+        rule_path: &syn::Path,
+        args: &[Argument],
+        is_lexical: bool,
+    ) -> TokenStream {
+        let input_ty = self.input_ty();
+        let span = Span::mixed_site();
+        if args.is_empty() {
+            // A hand-written parser returns `ParseError` whatever the
+            // grammar's error type is; the fast pass drops it, and
+            // says so first, so that the parser need not build one
+            // (`ParseError::from_input`).
+            quote_spanned! {span=> (|i: &mut #input_ty| {
+                let outer = ::core::mem::replace(&mut i.state.diagnosing, <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING);
+                let r = ::winnow::Parser::parse_next(&mut #rule_path, i);
+                i.state.diagnosing = outer;
+                r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
+            }) }
+        } else {
+            let arg_exprs = args
+                .iter()
+                .map(|arg| self.generate_argument_expr(arg, is_lexical));
+            quote_spanned! {span=> (|i: &mut #input_ty| {
+                let outer = ::core::mem::replace(&mut i.state.diagnosing, <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING);
+                let r = #rule_path(i, #(#arg_exprs),*);
+                i.state.diagnosing = outer;
+                r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
+            }) }
         }
     }
 

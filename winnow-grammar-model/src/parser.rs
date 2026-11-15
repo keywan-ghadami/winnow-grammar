@@ -1701,14 +1701,6 @@ fn reject_inner_binding(inner: &Pattern, message: &str) -> Result<()> {
     }
 }
 
-#[expect(
-    clippy::excessive_nesting,
-    reason = "nested this deep when the lint came in; flatten it, then drop this"
-)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "over the limit when the lint came in; split it, then drop this"
-)]
 fn parse_atom(input: ParseStream) -> Result<Pattern> {
     // 1. Check for binding
     let binding = rt::attempt(input, |input| {
@@ -1736,7 +1728,63 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
         let lit: Lit = input.parse()?;
         // Char literals are preserved as is.
         Ok(Pattern::Lit { binding, lit })
-    } else if input.peek(token::Bracket) {
+    } else if input.peek(token::Bracket)
+        || input.peek(token::Brace)
+        || input.peek(kw::paren)
+        || input.peek(kw::brace)
+        || input.peek(token::Paren)
+    {
+        parse_delimited(input, binding)
+    } else if input.peek(kw::recover) {
+        parse_recover(input, binding)
+    } else if input.peek(Token![if]) {
+        parse_guard(input, binding)
+    } else if input.peek(kw::peek) {
+        parse_peek(input, binding)
+    } else if input.peek(kw::not) {
+        parse_not(input, binding)
+    } else if input.peek(kw::until) {
+        parse_until(input, binding)
+    } else if input.peek(kw::fold) || input.peek(kw::par_fold) {
+        parse_fold(input, binding)
+    } else if input.peek(kw::count) {
+        let kw_token = input.parse::<kw::count>()?;
+        let content;
+        syn::parenthesized!(content in input);
+        let inner = content.parse()?;
+        Ok(Pattern::Count {
+            binding,
+            pattern: Box::new(inner),
+            kw_token,
+        })
+    } else if input.peek(kw::lex) {
+        let kw_token = input.parse::<kw::lex>()?;
+        let content;
+        syn::parenthesized!(content in input);
+        let patterns = parse_pattern_list(&content)?;
+        Ok(Pattern::LexicalScope(
+            Box::new(Pattern::wrap_sequence(patterns)),
+            kw_token,
+        ))
+    } else if input.peek(kw::spaced) {
+        let kw_token = input.parse::<kw::spaced>()?;
+        let content;
+        syn::parenthesized!(content in input);
+        let patterns = parse_pattern_list(&content)?;
+        Ok(Pattern::SpacedScope(
+            Box::new(Pattern::wrap_sequence(patterns)),
+            kw_token,
+        ))
+    } else if input.peek(kw::fail) {
+        parse_fail(input, binding)
+    } else {
+        parse_rule_call(input, binding)
+    }
+}
+
+/// A delimited group: `[…]`, `{…}`, `paren(…)`, `brace(…)` or `(…)`.
+fn parse_delimited(input: ParseStream, binding: Option<Ident>) -> Result<Pattern> {
+    if input.peek(token::Bracket) {
         let content;
         let token = syn::bracketed!(content in input);
         Ok(Pattern::Bracketed {
@@ -1783,328 +1831,348 @@ fn parse_atom(input: ParseStream) -> Result<Pattern> {
             alts: parse_group_content(&content)?,
             token,
         })
-    } else if input.peek(kw::recover) {
-        let kw_token = input.parse::<kw::recover>()?;
-        let content;
-        syn::parenthesized!(content in input);
-        let body = content.parse()?;
+    } else {
+        unreachable!("parse_atom calls this only at a delimiter")
+    }
+}
+
+/// `recover(body, sync)`.
+fn parse_recover(input: ParseStream, binding: Option<Ident>) -> Result<Pattern> {
+    let kw_token = input.parse::<kw::recover>()?;
+    let content;
+    syn::parenthesized!(content in input);
+    let body = content.parse()?;
+    let _ = content.parse::<Token![,]>()?;
+    let sync = content.parse()?;
+    Ok(Pattern::Recover {
+        binding,
+        body: Box::new(body),
+        sync: Box::new(sync),
+        kw_token,
+    })
+}
+
+/// `if(condition)` or `if(condition, "message")`: a guard.
+fn parse_guard(input: ParseStream, binding: Option<Ident>) -> Result<Pattern> {
+    if binding.is_some() {
+        return Err(input.error("A guard cannot be bound: it matches nothing."));
+    }
+    let kw_token = input.parse::<Token![if]>()?;
+    let content;
+    syn::parenthesized!(content in input);
+    let cond: syn::Expr = content.parse()?;
+    let message = if content.peek(Token![,]) {
         let _ = content.parse::<Token![,]>()?;
-        let sync = content.parse()?;
-        Ok(Pattern::Recover {
-            binding,
-            body: Box::new(body),
-            sync: Box::new(sync),
-            kw_token,
-        })
-    } else if input.peek(Token![if]) {
-        if binding.is_some() {
-            return Err(input.error("A guard cannot be bound: it matches nothing."));
+        Some(content.parse::<syn::LitStr>()?)
+    } else {
+        None
+    };
+    if !content.is_empty() {
+        return Err(content.error("expected `if(condition)` or `if(condition, \"message\")`"));
+    }
+    Ok(Pattern::Guard {
+        cond: Box::new(cond),
+        message,
+        kw_token,
+    })
+}
+
+/// `peek(p)`, the positive lookahead.
+fn parse_peek(input: ParseStream, binding: Option<Ident>) -> Result<Pattern> {
+    let kw_token = input.parse::<kw::peek>()?;
+    let content;
+    syn::parenthesized!(content in input);
+    let inner: Pattern = content.parse()?;
+    // The value of a lookahead is bound outside it, `name:peek(p)`: one
+    // spelling, and the same place as `name:recover(…)` and `name:until(…)`.
+    reject_inner_binding(
+        &inner,
+        "bind the lookahead instead: write `name:peek(…)`, not `peek(name:…)`",
+    )?;
+    Ok(Pattern::Peek(Box::new(inner), binding, kw_token))
+}
+
+/// `not(p)`, the negative lookahead.
+fn parse_not(input: ParseStream, binding: Option<Ident>) -> Result<Pattern> {
+    if binding.is_some() {
+        return Err(input.error("`not(…)` cannot be bound: it succeeds only when nothing matched"));
+    }
+    let kw_token = input.parse::<kw::not>()?;
+    let content;
+    syn::parenthesized!(content in input);
+    let inner: Pattern = content.parse()?;
+    reject_inner_binding(
+        &inner,
+        "a binding inside `not(…)` has no value: `not` succeeds only when nothing matched",
+    )?;
+    Ok(Pattern::Not(Box::new(inner), kw_token))
+}
+
+/// `until(t)`, the terminator possibly an alternation.
+fn parse_until(input: ParseStream, binding: Option<Ident>) -> Result<Pattern> {
+    let kw_token = input.parse::<kw::until>()?;
+    let content;
+    let token = syn::parenthesized!(content in input);
+    // The terminator may be an alternation - `until(";" | frame_end)` -
+    // which is a group; a single pattern stays a single pattern.
+    let mut alts = parse_group_content(&content)?;
+    let pattern = if alts.len() == 1 && alts[0].0.len() == 1 && alts[0].1.is_none() {
+        alts.remove(0).0.remove(0)
+    } else {
+        Pattern::Group {
+            binding: None,
+            alts,
+            token,
         }
-        let kw_token = input.parse::<Token![if]>()?;
-        let content;
-        syn::parenthesized!(content in input);
-        let cond: syn::Expr = content.parse()?;
-        let message = if content.peek(Token![,]) {
-            let _ = content.parse::<Token![,]>()?;
-            Some(content.parse::<syn::LitStr>()?)
-        } else {
-            None
-        };
-        if !content.is_empty() {
-            return Err(content.error("expected `if(condition)` or `if(condition, \"message\")`"));
+    };
+    Ok(Pattern::Until {
+        binding,
+        pattern: Box::new(pattern),
+        kw_token,
+    })
+}
+
+/// `fold(p, init, step, …)` and `par_fold(p, init, step, merge)`.
+fn parse_fold(input: ParseStream, binding: Option<Ident>) -> Result<Pattern> {
+    let (kw_span, parallel) = if input.peek(kw::fold) {
+        (input.parse::<kw::fold>()?.span, false)
+    } else {
+        (input.parse::<kw::par_fold>()?.span, true)
+    };
+    let content;
+    syn::parenthesized!(content in input);
+    let pattern = content.parse()?;
+    let _ = content.parse::<Token![,]>()?;
+    let init = Box::new(content.parse::<syn::Expr>()?);
+    let _ = content.parse::<Token![,]>()?;
+    let step = Box::new(content.parse::<syn::Expr>()?);
+    let merge = if parallel {
+        let _ = content.parse::<Token![,]>().map_err(|_| {
+            content.error("`par_fold` takes a fourth argument, the merge: `par_fold(rule, init, step, merge)`")
+        })?;
+        Some(Box::new(content.parse::<syn::Expr>()?))
+    } else {
+        None
+    };
+    let FoldOptions {
+        sep,
+        min,
+        max,
+        dyn_min,
+        dyn_max,
+    } = parse_fold_options(&content, parallel)?;
+    let min = min.unwrap_or(0);
+    if let Some(m) = max {
+        if min > m {
+            return Err(syn::Error::new(
+                kw_span,
+                format!("this fold's `min = {min}` is above its `max = {m}`"),
+            ));
         }
-        Ok(Pattern::Guard {
-            cond: Box::new(cond),
-            message,
-            kw_token,
-        })
-    } else if input.peek(kw::peek) {
-        let kw_token = input.parse::<kw::peek>()?;
-        let content;
-        syn::parenthesized!(content in input);
-        let inner: Pattern = content.parse()?;
-        // The value of a lookahead is bound outside it, `name:peek(p)`: one
-        // spelling, and the same place as `name:recover(…)` and `name:until(…)`.
-        reject_inner_binding(
-            &inner,
-            "bind the lookahead instead: write `name:peek(…)`, not `peek(name:…)`",
-        )?;
-        Ok(Pattern::Peek(Box::new(inner), binding, kw_token))
-    } else if input.peek(kw::not) {
-        if binding.is_some() {
-            return Err(
-                input.error("`not(…)` cannot be bound: it succeeds only when nothing matched")
-            );
-        }
-        let kw_token = input.parse::<kw::not>()?;
-        let content;
-        syn::parenthesized!(content in input);
-        let inner: Pattern = content.parse()?;
-        reject_inner_binding(
-            &inner,
-            "a binding inside `not(…)` has no value: `not` succeeds only when nothing matched",
-        )?;
-        Ok(Pattern::Not(Box::new(inner), kw_token))
-    } else if input.peek(kw::until) {
-        let kw_token = input.parse::<kw::until>()?;
-        let content;
-        let token = syn::parenthesized!(content in input);
-        // The terminator may be an alternation - `until(";" | frame_end)` -
-        // which is a group; a single pattern stays a single pattern.
-        let mut alts = parse_group_content(&content)?;
-        let pattern = if alts.len() == 1 && alts[0].0.len() == 1 && alts[0].1.is_none() {
-            alts.remove(0).0.remove(0)
-        } else {
-            Pattern::Group {
-                binding: None,
-                alts,
-                token,
-            }
-        };
-        Ok(Pattern::Until {
-            binding,
-            pattern: Box::new(pattern),
-            kw_token,
-        })
-    } else if input.peek(kw::fold) || input.peek(kw::par_fold) {
-        let (kw_span, parallel) = if input.peek(kw::fold) {
-            (input.parse::<kw::fold>()?.span, false)
-        } else {
-            (input.parse::<kw::par_fold>()?.span, true)
-        };
-        let content;
-        syn::parenthesized!(content in input);
-        let pattern = content.parse()?;
+    }
+    Ok(Pattern::Fold {
+        binding,
+        pattern: Box::new(pattern),
+        init,
+        step,
+        merge,
+        sep,
+        min,
+        max,
+        computed: (dyn_min.is_some() || dyn_max.is_some()).then(|| {
+            Box::new(FoldBounds {
+                min: dyn_min,
+                max: dyn_max,
+            })
+        }),
+        kw_span,
+    })
+}
+
+/// The named arguments of a fold after `step`, each at most once: `sep = p`,
+/// and the bounds `min = n` and `max = n` - a literal, or an expression
+/// computed when the fold runs (`dyn_min`, `dyn_max`).
+struct FoldOptions {
+    sep: Option<Box<Pattern>>,
+    min: Option<usize>,
+    max: Option<usize>,
+    dyn_min: Option<syn::Expr>,
+    dyn_max: Option<syn::Expr>,
+}
+
+/// [`FoldOptions`], read up to the end of the fold's parentheses.
+fn parse_fold_options(content: ParseStream, parallel: bool) -> Result<FoldOptions> {
+    let (mut sep, mut min, mut max) = (None, None, None);
+    let (mut dyn_min, mut dyn_max) = (None, None);
+    while content.peek(Token![,]) {
         let _ = content.parse::<Token![,]>()?;
-        let init = Box::new(content.parse::<syn::Expr>()?);
-        let _ = content.parse::<Token![,]>()?;
-        let step = Box::new(content.parse::<syn::Expr>()?);
-        let merge = if parallel {
-            let _ = content.parse::<Token![,]>().map_err(|_| {
-                content.error("`par_fold` takes a fourth argument, the merge: `par_fold(rule, init, step, merge)`")
-            })?;
-            Some(Box::new(content.parse::<syn::Expr>()?))
-        } else {
-            None
-        };
-        let (mut sep, mut min, mut max) = (None, None, None);
-        let (mut dyn_min, mut dyn_max) = (None, None);
-        while content.peek(Token![,]) {
-            let _ = content.parse::<Token![,]>()?;
-            let name: Ident = content.parse().map_err(|e| {
-                syn::Error::new(
-                    e.span(),
-                    "after `step`, a fold takes only the named arguments `sep = pattern`, \
-                     `min = n` and `max = n`",
-                )
-            })?;
-            if parallel {
+        let name: Ident = content.parse().map_err(|e| {
+            syn::Error::new(
+                e.span(),
+                "after `step`, a fold takes only the named arguments `sep = pattern`, \
+                 `min = n` and `max = n`",
+            )
+        })?;
+        if parallel {
+            return Err(syn::Error::new(
+                name.span(),
+                "`par_fold` takes no `sep`, `min` or `max`: a frame is cut between items, \
+                 which a separator or a count would have to cross",
+            ));
+        }
+        let _ = content.parse::<Token![=]>()?;
+        match name.to_string().as_str() {
+            "sep" if sep.is_none() => sep = Some(Box::new(content.parse::<Pattern>()?)),
+            "min" if min.is_none() && dyn_min.is_none() => match content.parse::<syn::Expr>()? {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: Lit::Int(lit), ..
+                }) => min = Some(lit.base10_parse::<usize>()?),
+                e => dyn_min = Some(e),
+            },
+            "max" if max.is_none() && dyn_max.is_none() => match content.parse::<syn::Expr>()? {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: Lit::Int(lit), ..
+                }) => {
+                    let n: usize = lit.base10_parse()?;
+                    if n == 0 {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "`max = 0` matches nothing; a fold takes at least one item",
+                        ));
+                    }
+                    max = Some(n);
+                }
+                e => dyn_max = Some(e),
+            },
+            "sep" | "min" | "max" => {
                 return Err(syn::Error::new(
                     name.span(),
-                    "`par_fold` takes no `sep`, `min` or `max`: a frame is cut between items, \
-                     which a separator or a count would have to cross",
+                    format!("`{name}` is given twice"),
                 ));
             }
-            let _ = content.parse::<Token![=]>()?;
-            match name.to_string().as_str() {
-                "sep" if sep.is_none() => sep = Some(Box::new(content.parse::<Pattern>()?)),
-                "min" if min.is_none() && dyn_min.is_none() => {
-                    match content.parse::<syn::Expr>()? {
-                        syn::Expr::Lit(syn::ExprLit {
-                            lit: Lit::Int(lit), ..
-                        }) => min = Some(lit.base10_parse::<usize>()?),
-                        e => dyn_min = Some(e),
-                    }
-                }
-                "max" if max.is_none() && dyn_max.is_none() => {
-                    match content.parse::<syn::Expr>()? {
-                        syn::Expr::Lit(syn::ExprLit {
-                            lit: Lit::Int(lit), ..
-                        }) => {
-                            let n: usize = lit.base10_parse()?;
-                            if n == 0 {
-                                return Err(syn::Error::new(
-                                    lit.span(),
-                                    "`max = 0` matches nothing; a fold takes at least one item",
-                                ));
-                            }
-                            max = Some(n);
-                        }
-                        e => dyn_max = Some(e),
-                    }
-                }
-                "sep" | "min" | "max" => {
-                    return Err(syn::Error::new(
-                        name.span(),
-                        format!("`{name}` is given twice"),
-                    ));
-                }
-                _ => {
-                    return Err(syn::Error::new(
-                        name.span(),
-                        format!(
-                            "unknown fold argument `{name}`: a fold takes `sep = pattern`, \
-                             `min = n` and `max = n`"
-                        ),
-                    ));
-                }
-            }
-        }
-        let min = min.unwrap_or(0);
-        if let Some(m) = max {
-            if min > m {
+            _ => {
                 return Err(syn::Error::new(
-                    kw_span,
-                    format!("this fold's `min = {min}` is above its `max = {m}`"),
+                    name.span(),
+                    format!(
+                        "unknown fold argument `{name}`: a fold takes `sep = pattern`, \
+                         `min = n` and `max = n`"
+                    ),
                 ));
             }
         }
-        Ok(Pattern::Fold {
-            binding,
-            pattern: Box::new(pattern),
-            init,
-            step,
-            merge,
-            sep,
-            min,
-            max,
-            computed: (dyn_min.is_some() || dyn_max.is_some()).then(|| {
-                Box::new(FoldBounds {
-                    min: dyn_min,
-                    max: dyn_max,
-                })
-            }),
-            kw_span,
-        })
-    } else if input.peek(kw::count) {
-        let kw_token = input.parse::<kw::count>()?;
-        let content;
-        syn::parenthesized!(content in input);
-        let inner = content.parse()?;
-        Ok(Pattern::Count {
-            binding,
-            pattern: Box::new(inner),
-            kw_token,
-        })
-    } else if input.peek(kw::lex) {
-        let kw_token = input.parse::<kw::lex>()?;
-        let content;
-        syn::parenthesized!(content in input);
-        let patterns = parse_pattern_list(&content)?;
-        Ok(Pattern::LexicalScope(
-            Box::new(Pattern::wrap_sequence(patterns)),
-            kw_token,
-        ))
-    } else if input.peek(kw::spaced) {
-        let kw_token = input.parse::<kw::spaced>()?;
-        let content;
-        syn::parenthesized!(content in input);
-        let patterns = parse_pattern_list(&content)?;
-        Ok(Pattern::SpacedScope(
-            Box::new(Pattern::wrap_sequence(patterns)),
-            kw_token,
-        ))
-    } else if input.peek(kw::fail) {
-        if binding.is_some() {
-            return Err(input.error("Fail cannot be bound."));
-        }
-        let kw_token = input.parse::<kw::fail>()?;
-        let message = if input.peek(token::Paren) {
-            let content;
-            syn::parenthesized!(content in input);
-            if content.is_empty() {
-                None
-            } else {
-                Some(content.parse()?)
-            }
-        } else {
-            None
-        };
-        Ok(Pattern::Fail { message, kw_token })
-    } else {
-        let rule_path = parse_path_no_args(input)?;
+    }
+    Ok(FoldOptions {
+        sep,
+        min,
+        max,
+        dyn_min,
+        dyn_max,
+    })
+}
 
-        let generics = if input.peek(Token![<]) {
-            let _ = input.parse::<Token![<]>()?;
-            let mut types = Vec::new();
-            if !input.peek(Token![>]) {
-                loop {
-                    types.push(input.parse::<Type>()?);
-                    if input.peek(Token![,]) {
-                        let _ = input.parse::<Token![,]>()?;
-                        if input.peek(Token![>]) {
-                            break;
-                        }
-                    } else {
+/// `fail` or `fail("message")`.
+fn parse_fail(input: ParseStream, binding: Option<Ident>) -> Result<Pattern> {
+    if binding.is_some() {
+        return Err(input.error("Fail cannot be bound."));
+    }
+    let kw_token = input.parse::<kw::fail>()?;
+    let message = if input.peek(token::Paren) {
+        let content;
+        syn::parenthesized!(content in input);
+        if content.is_empty() {
+            None
+        } else {
+            Some(content.parse()?)
+        }
+    } else {
+        None
+    };
+    Ok(Pattern::Fail { message, kw_token })
+}
+
+/// A call of a rule or built-in, with its type arguments and arguments: `name<T>(…)`.
+fn parse_rule_call(input: ParseStream, binding: Option<Ident>) -> Result<Pattern> {
+    let rule_path = parse_path_no_args(input)?;
+
+    let generics = if input.peek(Token![<]) {
+        let _ = input.parse::<Token![<]>()?;
+        let mut types = Vec::new();
+        if !input.peek(Token![>]) {
+            loop {
+                types.push(input.parse::<Type>()?);
+                if input.peek(Token![,]) {
+                    let _ = input.parse::<Token![,]>()?;
+                    if input.peek(Token![>]) {
                         break;
                     }
+                } else {
+                    break;
                 }
             }
-            let _gt_token = input.parse::<Token![>]>()?;
-            types
+        }
+        let _gt_token = input.parse::<Token![>]>()?;
+        types
+    } else {
+        Vec::new()
+    };
+
+    let args = if !generics.is_empty() {
+        if input.peek(token::Paren) {
+            parse_args(input)?
         } else {
             Vec::new()
+        }
+    } else if input.peek(token::Paren) {
+        // Simplified Disambiguation logic:
+        // 1. `name = value` -> Always allowed (Arguments).
+        // 2. Built-in rules -> Always allowed (Arguments).
+        // 3. Positional args for user rules -> DISALLOWED (defaults to empty args -> Group).
+
+        let fork = input.fork();
+        let content;
+        syn::parenthesized!(content in fork);
+        let has_named_arg = content.peek(Ident) && content.peek2(Token![=]);
+
+        let is_simple_ident = rule_path.segments.len() == 1 && rule_path.leading_colon.is_none();
+        let ident_str = if is_simple_ident {
+            rule_path.segments[0].ident.to_string()
+        } else {
+            String::new()
         };
+        // Which builtins may take positional arguments is a hard-coded
+        // list, because parsing happens before the backend is known
+        // (`parse_grammar` is generic over `B`, `syn::parse2` is not).
+        // The general fix is an arity on `BuiltIn` and disambiguation
+        // from the backend's own list - see `feature-requests.md` §1.
+        // Until then a builtin with an argument is added here.
+        let is_builtin = is_simple_ident
+            && (ident_str == "separated"
+                || ident_str == "repeated"
+                || ident_str == "intern"
+                || ident_str == "text"
+                || ident_str == "bytes"
+                || ident_str == "dec");
 
-        let args = if !generics.is_empty() {
-            if input.peek(token::Paren) {
-                parse_args(input)?
-            } else {
-                Vec::new()
-            }
-        } else if input.peek(token::Paren) {
-            // Simplified Disambiguation logic:
-            // 1. `name = value` -> Always allowed (Arguments).
-            // 2. Built-in rules -> Always allowed (Arguments).
-            // 3. Positional args for user rules -> DISALLOWED (defaults to empty args -> Group).
+        // Note: `is_scoped` (e.g. `foo::bar(...)`) is NO LONGER a heuristic for args.
+        // Explicitly: only built-ins or named args or templates allowed.
 
-            let fork = input.fork();
-            let content;
-            syn::parenthesized!(content in fork);
-            let has_named_arg = content.peek(Ident) && content.peek2(Token![=]);
-
-            let is_simple_ident =
-                rule_path.segments.len() == 1 && rule_path.leading_colon.is_none();
-            let ident_str = if is_simple_ident {
-                rule_path.segments[0].ident.to_string()
-            } else {
-                String::new()
-            };
-            // Which builtins may take positional arguments is a hard-coded
-            // list, because parsing happens before the backend is known
-            // (`parse_grammar` is generic over `B`, `syn::parse2` is not).
-            // The general fix is an arity on `BuiltIn` and disambiguation
-            // from the backend's own list - see `feature-requests.md` §1.
-            // Until then a builtin with an argument is added here.
-            let is_builtin = is_simple_ident
-                && (ident_str == "separated"
-                    || ident_str == "repeated"
-                    || ident_str == "intern"
-                    || ident_str == "text"
-                    || ident_str == "bytes"
-                    || ident_str == "dec");
-
-            // Note: `is_scoped` (e.g. `foo::bar(...)`) is NO LONGER a heuristic for args.
-            // Explicitly: only built-ins or named args or templates allowed.
-
-            // 4. A value in scope as an operand: `inner(m)`, `sum(n, k + 1)`
-            //    - an argument list, whatever else it could be (ADR 26 D2).
-            if has_named_arg || is_builtin || mentions_value(&content) {
-                parse_args(input)?
-            } else {
-                Vec::new()
-            }
+        // 4. A value in scope as an operand: `inner(m)`, `sum(n, k + 1)`
+        //    - an argument list, whatever else it could be (ADR 26 D2).
+        if has_named_arg || is_builtin || mentions_value(&content) {
+            parse_args(input)?
         } else {
             Vec::new()
-        };
+        }
+    } else {
+        Vec::new()
+    };
 
-        Ok(Pattern::RuleCall {
-            binding,
-            rule_path,
-            generics,
-            args,
-        })
-    }
+    Ok(Pattern::RuleCall {
+        binding,
+        rule_path,
+        generics,
+        args,
+    })
 }
 
 fn parse_args(input: ParseStream) -> Result<Vec<Argument>> {
