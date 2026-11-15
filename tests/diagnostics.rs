@@ -203,3 +203,23 @@ fn custom_ident_rule_without_leading_digit() {
         "{e}"
     );
 }
+
+grammar! {
+    grammar Agg {
+        pub atom -> String = n:u32 -> { n.to_string() } | s:raw_ident -> { s.to_string() } | paren(a:atom) -> { a }
+    }
+}
+
+/// Point 1 again, for three alternatives: an aggregate of two takes a third
+/// plain expectation in instead of outranking it - and `paren(…)` names its
+/// `(`, like any other one-byte literal.
+#[test]
+fn p01_three_alternatives_and_a_delimiter() {
+    let e = Agg::parse_atom().parse_test("?").inner.unwrap_err();
+    assert!(
+        e.starts_with(
+            "expected one of: `(`, identifier, integer literal; found unexpected token `?`"
+        ),
+        "{e}"
+    );
+}

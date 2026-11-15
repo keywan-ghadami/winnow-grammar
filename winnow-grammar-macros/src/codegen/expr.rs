@@ -530,6 +530,15 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// One delimiter of `paren(…)`, `[…]` or `brace(…)`: a one-byte literal
+    /// like any other, so a missing `(` is an expectation in the message - a
+    /// bare `literal` only reports the position.
+    fn delimiter(&self, d: &str) -> TokenStream {
+        let rts = self.rts();
+        let byte = d.as_bytes()[0];
+        quote! { #rts::lit_byte(#byte, #d, ::core::option::Option::None) }
+    }
+
     pub fn generate_delimited_step(
         &self,
         inner: &[ModelPattern],
@@ -543,7 +552,7 @@ impl<'a> Codegen<'a> {
 
         // Sequence: Open, (ws), Inner, (ws), Close
 
-        let open_parser = self.edge(quote_spanned! {span=> literal(#open) }, None);
+        let open_parser = self.edge(self.delimiter(open), None);
         let open_stmt = if in_cut {
             quote_spanned! {span=> let _ = ::winnow::combinator::cut_err(#open_parser).parse_next(#input)?; }
         } else {
@@ -575,7 +584,7 @@ impl<'a> Codegen<'a> {
             quote! {}
         };
 
-        let close_parser = self.edge(quote_spanned! {span=> literal(#close) }, None);
+        let close_parser = self.edge(self.delimiter(close), None);
         let close_stmt = if final_cut {
             quote_spanned! {span=> let _ = ::winnow::combinator::cut_err(#close_parser).parse_next(#input)?; }
         } else {
@@ -2038,8 +2047,8 @@ impl<'a> Codegen<'a> {
         let span = Span::mixed_site();
         let inner_parser = self.generate_sequence_parser(inner, is_lexical);
 
-        let open_p = self.edge(quote_spanned! {span=> literal(#open) }, None);
-        let close_p = self.edge(quote_spanned! {span=> literal(#close) }, None);
+        let open_p = self.edge(self.delimiter(open), None);
+        let close_p = self.edge(self.delimiter(close), None);
 
         // A cut inside holds up to the closing delimiter, as in
         // `generate_delimited_step`.

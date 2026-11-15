@@ -357,6 +357,7 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 {
                     let checkpoint = ::winnow::stream::Stream::checkpoint(#input);
+                    let lr_start = ::winnow::stream::Location::current_token_start(&*#input);
                     #start_capture
                     let attempt = (|| {
                         #steps_code
@@ -370,13 +371,15 @@ impl<'a> Codegen<'a> {
                             #lhs_ident = val;
                             continue;
                         },
-                        ::core::result::Result::Err(e) => {
-                            if matches!(e, ::winnow::error::ErrMode::Cut(_)) {
-                                return ::core::result::Result::Err(e);
-                            } else {
-                                ::winnow::stream::Stream::reset(#input, &checkpoint);
-                            }
+                        // A suffix that got past its operator and then failed
+                        // is the error the input actually has (`2 +`): record
+                        // it like a discarded alternative, or the loop's quiet
+                        // backtrack leaves only "input left over" behind.
+                        ::core::result::Result::Err(::winnow::error::ErrMode::Backtrack(e)) => {
+                            <__WgEr as ::winnow_grammar::Diagnostics>::record_if_begun(&e, &mut #input.state, lr_start);
+                            ::winnow::stream::Stream::reset(#input, &checkpoint);
                         }
+                        ::core::result::Result::Err(e) => return ::core::result::Result::Err(e),
                     }
                 }
             }

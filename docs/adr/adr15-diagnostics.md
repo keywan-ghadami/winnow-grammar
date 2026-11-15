@@ -38,8 +38,15 @@ selection:
 1. **Progress**: the error with the larger offset wins — even against a
    `fail(..)` that stood earlier.
 2. **Priority** at the same position: `fail` (50) > aggregation (20) >
-   label (10) > default (0).
+   label (10) > default (0). Exception: a plain expectation (default, no
+   message) *joins* an aggregate instead of losing to it — an aggregate is
+   just plain expectations merged here, so the result must not depend on
+   which two alternatives `alt` merged first.
 3. **Aggregation** on a tie: the expectations are merged.
+
+The suffix loop of a left-recursive rule backtracks out of a suffix it could
+not finish (`2 +`). Like a discarded alternative, that error is recorded when
+the suffix had begun, otherwise only "expected end of input" would be left.
 
 What `alt` never sees — errors that `x?` and `x*` discard on a *successful*
 backtrack — is remembered in `ParseContext::furthest`; `rt::finish` weighs

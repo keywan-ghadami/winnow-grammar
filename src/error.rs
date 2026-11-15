@@ -297,10 +297,23 @@ impl ParseError {
             (Some(a), Some(b)) if b < a => return other.absorbing_also(self.into_core()),
             _ => {}
         }
-        match self.priority.cmp(&other.priority) {
-            Greater => return self.absorbing_also(other.into_core()),
-            Less => return other.absorbing_also(self.into_core()),
-            Equal => {}
+        // An aggregate is nothing but plain expectations merged at this
+        // position, so a further plain expectation joins it rather than losing
+        // to it - otherwise which of three alternatives ends up in a note
+        // depends on which two `alt` happened to merge first
+        // (`i64 | ident | paren(..)` lost its `(`).
+        let joins = |a: &Self, b: &Self| {
+            a.priority == PRIO_AGGREGATED
+                && b.priority == PRIO_NORMAL
+                && b.message.is_none()
+                && !b.expected.is_empty()
+        };
+        if !joins(&self, &other) && !joins(&other, &self) {
+            match self.priority.cmp(&other.priority) {
+                Greater => return self.absorbing_also(other.into_core()),
+                Less => return other.absorbing_also(self.into_core()),
+                Equal => {}
+            }
         }
         let other = other.into_core();
         for e in other.also {
