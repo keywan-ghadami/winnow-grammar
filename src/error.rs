@@ -159,21 +159,13 @@ pub struct Excerpt {
 impl ParseError {
     /// Error at the current position of the stream.
     pub fn from_stream<I: Stream + Location + AsBStr>(input: &I) -> Self {
+        // `NOTHING` with a position and what is there; cloning it allocates
+        // nothing, every field of it being empty.
         ParseError(Some(Box::new(ErrorCore {
             offset: input.current_token_start(),
-            expected: Vec::new(),
-            message: None,
             found: next_word(input.as_bstr()),
-            rule_stack: Vec::new(),
-            priority: PRIO_NORMAL,
             undiagnosed: false,
-            also: Vec::new(),
-            optional: false,
-            trivia: false,
-            lookahead: false,
-            begun_at: None,
-            invalid_utf8: None,
-            excerpt: None,
+            ..NOTHING.clone()
         })))
     }
 
@@ -207,20 +199,8 @@ impl ParseError {
     /// message alone.
     pub fn undiagnosed() -> Self {
         ParseError(Some(Box::new(ErrorCore {
-            offset: 0,
-            expected: Vec::new(),
             message: Some("parse failed; diagnostics are off".to_string()),
-            found: None,
-            rule_stack: Vec::new(),
-            priority: PRIO_NORMAL,
-            undiagnosed: true,
-            also: Vec::new(),
-            optional: false,
-            trivia: false,
-            lookahead: false,
-            begun_at: None,
-            invalid_utf8: None,
-            excerpt: None,
+            ..NOTHING.clone()
         })))
     }
 

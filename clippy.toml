@@ -1,0 +1,12 @@
+# Limits on the size of a function, as a ratchet.
+#
+# `too_many_lines` (at clippy's default of 100) and `excessive_nesting` are
+# switched on for the whole workspace in `Cargo.toml` and are errors in CI
+# (`-D warnings`). The functions that were over a limit when it came in carry
+# `#[expect(clippy::…, reason = "…")]` instead of `#[allow]`: an `expect` that
+# no longer fires is itself an error, so splitting such a function forces its
+# `expect` to go and it cannot grow back. New code is held to the limit.
+#
+# A long codegen function is often one `quote!` template; split it where the
+# template has parts that mean something on their own, not to meet a count.
+excessive-nesting-threshold = 6

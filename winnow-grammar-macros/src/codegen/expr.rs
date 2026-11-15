@@ -892,6 +892,10 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     pub fn generate_rule_call_parser(
         &self,
         rule_path: &syn::Path,
@@ -1648,6 +1652,10 @@ impl<'a> Codegen<'a> {
         self.edge(p, Some(pattern))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     fn parser_expr_node(
         &self,
         pattern: &ModelPattern,

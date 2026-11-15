@@ -437,6 +437,10 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         self.finished(r)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     fn items_once<F>(
         &mut self,
         rules: &[&'static str],

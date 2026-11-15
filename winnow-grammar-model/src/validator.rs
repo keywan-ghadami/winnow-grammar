@@ -221,6 +221,10 @@ fn validate_pattern_sequence(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "over the limit when the lint came in; split it, then drop this"
+)]
 fn validate_pattern(
     pattern: &ModelPattern,
     all_defs: &HashSet<String>,
@@ -452,6 +456,10 @@ fn validate_argument_counts(grammar: &GrammarDefinition) -> syn::Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::excessive_nesting,
+    reason = "nested this deep when the lint came in; flatten it, then drop this"
+)]
 fn validate_args_recursive(
     patterns: &[ModelPattern],
     rule_map: &HashMap<String, &Rule>,

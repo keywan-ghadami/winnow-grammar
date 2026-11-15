@@ -16,6 +16,10 @@ use winnow_grammar_model::model::{ModelPattern, Rule};
 use winnow_grammar_model::stream::{Level, StreamPath};
 
 impl Codegen<'_> {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     pub fn generate_stream_fns(&self, rule: &Rule) -> TokenStream {
         let name = rule.name.to_string();
         let Some(path) = self.streams.paths.get(&name) else {
@@ -138,6 +142,10 @@ impl Codegen<'_> {
 
     /// The code of level `j` of the path, as a block whose value is the
     /// value of the rule; its step functions go to `helpers`.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     fn stream_level(
         &self,
         path: &StreamPath,
@@ -357,6 +365,10 @@ impl Codegen<'_> {
     }
 
     /// The fold of the last rule of the path: `__path` is its value.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     fn stream_fold(
         &self,
         path: &StreamPath,

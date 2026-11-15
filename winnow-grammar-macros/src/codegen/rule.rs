@@ -7,6 +7,10 @@ use winnow_grammar_model::{
 };
 
 impl<'a> Codegen<'a> {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
         let rt_error = self.rt_error();
         let input_ty = self.input_ty();

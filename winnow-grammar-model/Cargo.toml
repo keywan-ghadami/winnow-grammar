@@ -6,6 +6,9 @@ description = "Parser, model and validator of the grammar DSL for winnow-grammar
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/keywan-ghadami/winnow-grammar"
 
+[lints]
+workspace = true
+
 [lib]
 path = "src/winnow_grammar_model.rs"
 

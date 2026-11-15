@@ -1010,6 +1010,14 @@ impl Pattern {
         }
     }
 
+    #[expect(
+        clippy::excessive_nesting,
+        reason = "nested this deep when the lint came in; flatten it, then drop this"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     pub fn collect_bindings(&self, acc: &mut Vec<Ident>) {
         match self {
             Pattern::Lit { binding, .. } => {
@@ -1339,6 +1347,14 @@ impl Parse for Pattern {
 }
 
 impl ToTokens for Pattern {
+    #[expect(
+        clippy::excessive_nesting,
+        reason = "nested this deep when the lint came in; flatten it, then drop this"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
             Pattern::Cut(_) => {
@@ -1685,6 +1701,14 @@ fn reject_inner_binding(inner: &Pattern, message: &str) -> Result<()> {
     }
 }
 
+#[expect(
+    clippy::excessive_nesting,
+    reason = "nested this deep when the lint came in; flatten it, then drop this"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "over the limit when the lint came in; split it, then drop this"
+)]
 fn parse_atom(input: ParseStream) -> Result<Pattern> {
     // 1. Check for binding
     let binding = rt::attempt(input, |input| {

@@ -570,6 +570,10 @@ fn check_sequence(seq: &[ModelPattern], lexical: bool, rule: &Rule, cx: &Cx) -> 
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "over the limit when the lint came in; split it, then drop this"
+)]
 fn check_pattern(p: &ModelPattern, lexical: bool, rule: &Rule, cx: &Cx) -> syn::Result<()> {
     match p {
         ModelPattern::Cut(_) | ModelPattern::Fail { .. } | ModelPattern::Guard { .. } => Ok(()),

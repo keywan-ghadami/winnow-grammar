@@ -16,27 +16,15 @@ use std::io::Cursor;
 use winnow::stream::LocatingSlice;
 use winnow::Parser;
 use winnow_grammar::rt::{Parallelism, Reading};
-use winnow_grammar::{grammar, ParseContext, ParseInput};
+use winnow_grammar::{ParseContext, ParseInput};
 
 pub const ROWS: usize = 200_000;
 
-grammar! {
-    grammar Plain {
-        #[frame(boundary = "\n")]
-        pub ROW -> u64 = until(";" | frame_end) ";" v:u64 frame_end -> { v }
-        pub FILE -> u64 = s:par_fold(ROW, || 0u64, |a: u64, v: u64| a + v, |a: u64, b: u64| a + b) -> { s }
-        pub ROWS -> u64 = s:fold(LINE, || 0u64, |a: u64, v: u64| a + v) -> { s }
-        LINE -> u64 = until(";" | "\n") ";" v:u64 "\n" -> { v }
-    }
-}
-
-grammar! {
-    grammar Tracked {
-        #[stream]
-        pub ROWS -> u64 = s:fold(LINE, || 0u64, |a: u64, v: u64| a + v) -> { s }
-        LINE -> u64 = until(";" | "\n") ";" v:u64 "\n" -> { v }
-    }
-}
+// The benchmark's grammars, which also hold `list`; this profile reads only
+// the rows.
+#[path = "../benches/shared/stream.rs"]
+mod shared;
+use shared::{Plain, Tracked};
 
 fn main() {
     let rows = "station12;345\n".repeat(ROWS);

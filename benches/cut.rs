@@ -13,54 +13,17 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use std::hint::black_box;
 use std::io::Cursor;
-use winnow::stream::LocatingSlice;
-use winnow::Parser;
 use winnow_grammar::rt::Reading;
-use winnow_grammar::{grammar, ParseContext, ParseInput};
+use winnow_grammar::ParseContext;
 
-grammar! {
-    grammar Cuts {
-        pub stmts -> usize = n:fold(stmt, || 0usize, |n: usize, _s: ()| n + 1) -> { n }
-        stmt -> () = "let" => _n:raw_ident "=" _v:u32 ";" -> { () }
-
-        pub grouped -> usize = s:("let" => raw_ident "=" u32 ";")* -> { s.len() }
-
-        #[stream]
-        pub doc -> usize = "[" => n:fold(stmt, || 0usize, |n: usize, _s: ()| n + 1) "]" -> { n }
-    }
-}
-
-grammar! {
-    grammar NoCuts {
-        pub stmts -> usize = n:fold(stmt, || 0usize, |n: usize, _s: ()| n + 1) -> { n }
-        stmt -> () = "let" _n:raw_ident "=" _v:u32 ";" -> { () }
-
-        pub grouped -> usize = s:("let" raw_ident "=" u32 ";")* -> { s.len() }
-
-        #[stream]
-        pub doc -> usize = "[" n:fold(stmt, || 0usize, |n: usize, _s: ()| n + 1) "]" -> { n }
-    }
-}
+#[path = "shared/cut.rs"]
+mod shared;
+use shared::{memory, stmts, Cuts, NoCuts};
 
 const N: usize = 50_000;
 
-fn stmts() -> String {
-    (0..N).map(|i| format!("let v{i} = {i};\n")).collect()
-}
-
-fn memory<'a, O>(
-    mut p: impl Parser<ParseInput<'a, ()>, O, winnow_grammar::ParseError>,
-    text: &'a str,
-) -> O {
-    p.parse_next(&mut ParseInput {
-        input: LocatingSlice::new(text),
-        state: ParseContext::default(),
-    })
-    .unwrap()
-}
-
 fn cut(c: &mut Criterion) {
-    let text = stmts();
+    let text = stmts(N);
     let doc = format!("[{text}]");
     let reading = Reading::default();
     let mut g = c.benchmark_group("cut");

@@ -12,46 +12,17 @@
 //! | `stream_cut` / `stream_none` | a `#[stream]` reader, `[` … `]` around the items, with and without a cut after `[` (`Diagnose::Replay`) |
 
 use std::io::Cursor;
-use winnow::stream::LocatingSlice;
-use winnow::Parser;
 use winnow_grammar::rt::Reading;
-use winnow_grammar::{grammar, ParseContext, ParseInput};
+use winnow_grammar::ParseContext;
+
+#[path = "../benches/shared/cut.rs"]
+mod shared;
+use shared::{memory, stmts, Cuts, NoCuts};
 
 pub const N: usize = 200_000;
 
-grammar! {
-    grammar Cuts {
-        pub stmts -> usize = n:fold(stmt, || 0usize, |n: usize, _s: ()| n + 1) -> { n }
-        stmt -> () = "let" => _n:raw_ident "=" _v:u32 ";" -> { () }
-        pub grouped -> usize = s:("let" => raw_ident "=" u32 ";")* -> { s.len() }
-        #[stream]
-        pub doc -> usize = "[" => n:fold(stmt, || 0usize, |n: usize, _s: ()| n + 1) "]" -> { n }
-    }
-}
-
-grammar! {
-    grammar NoCuts {
-        pub stmts -> usize = n:fold(stmt, || 0usize, |n: usize, _s: ()| n + 1) -> { n }
-        stmt -> () = "let" _n:raw_ident "=" _v:u32 ";" -> { () }
-        pub grouped -> usize = s:("let" raw_ident "=" u32 ";")* -> { s.len() }
-        #[stream]
-        pub doc -> usize = "[" n:fold(stmt, || 0usize, |n: usize, _s: ()| n + 1) "]" -> { n }
-    }
-}
-
-fn memory<'a, O>(
-    mut p: impl Parser<ParseInput<'a, ()>, O, winnow_grammar::ParseError>,
-    text: &'a str,
-) -> O {
-    p.parse_next(&mut ParseInput {
-        input: LocatingSlice::new(text),
-        state: ParseContext::default(),
-    })
-    .unwrap()
-}
-
 fn main() {
-    let text: String = (0..N).map(|i| format!("let v{i} = {i};\n")).collect();
+    let text = stmts(N);
     let doc = format!("[{text}]");
     let case = std::env::args().nth(1).unwrap_or_default();
     let reader = |cut: bool| {

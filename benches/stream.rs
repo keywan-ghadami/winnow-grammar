@@ -21,33 +21,11 @@ use std::io::{Cursor, Read};
 use winnow::stream::{LocatingSlice, Partial, StreamIsPartial};
 use winnow::Parser;
 use winnow_grammar::rt::{Parallelism, Reading};
-use winnow_grammar::{grammar, ParseContext, ParseInput};
+use winnow_grammar::{ParseContext, ParseInput};
 
-grammar! {
-    grammar Plain {
-        #[frame(boundary = "\n")]
-        pub ROW -> u64 = until(";" | frame_end) ";" v:u64 frame_end -> { v }
-        pub FILE -> u64 = s:par_fold(ROW, || 0u64, |a: u64, v: u64| a + v, |a: u64, b: u64| a + b) -> { s }
-
-        pub ROWS -> u64 = s:fold(LINE, || 0u64, |a: u64, v: u64| a + v) -> { s }
-        LINE -> u64 = until(";" | "\n") ";" v:u64 "\n" -> { v }
-
-        pub list -> i64 = "[" s:fold(num, || 0i64, |a: i64, n: i64| a + n) "]" -> { s }
-        num -> i64 = n:i64 ","? -> { n }
-    }
-}
-
-grammar! {
-    grammar Tracked {
-        #[stream]
-        pub ROWS -> u64 = s:fold(LINE, || 0u64, |a: u64, v: u64| a + v) -> { s }
-        LINE -> u64 = until(";" | "\n") ";" v:u64 "\n" -> { v }
-
-        #[stream]
-        pub list -> i64 = "[" s:fold(num, || 0i64, |a: i64, n: i64| a + n) "]" -> { s }
-        num -> i64 = n:i64 ","? -> { n }
-    }
-}
+#[path = "shared/stream.rs"]
+mod shared;
+use shared::{Plain, Tracked};
 
 fn rows(n: usize) -> String {
     (0..n)

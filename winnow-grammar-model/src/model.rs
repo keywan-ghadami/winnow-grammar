@@ -322,6 +322,10 @@ impl From<parser::RuleVariant> for RuleVariant {
 }
 
 impl From<parser::Pattern> for ModelPattern {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     fn from(p: parser::Pattern) -> Self {
         match p {
             parser::Pattern::Cut(token) => ModelPattern::Cut(token.span()), // FatArrow has .span()

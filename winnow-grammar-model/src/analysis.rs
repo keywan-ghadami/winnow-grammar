@@ -95,6 +95,10 @@ pub fn split_left_recursive<'a>(
     (recursive, base)
 }
 
+#[expect(
+    clippy::excessive_nesting,
+    reason = "nested this deep when the lint came in; flatten it, then drop this"
+)]
 fn collect_from_patterns(patterns: &[ModelPattern], kws: &mut HashSet<String>) {
     for p in patterns {
         match p {
@@ -944,6 +948,10 @@ fn compute_first_sets_and_errors(
     (first_sets, errors)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "over the limit when the lint came in; split it, then drop this"
+)]
 fn collect_first_from_sequence(
     patterns: &[ModelPattern],
     first_sets: &HashMap<String, HashSet<String>>,

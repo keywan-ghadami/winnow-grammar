@@ -392,6 +392,10 @@ impl<'a> Codegen<'a> {
     /// The indexed match of one element `f`, its value in `v`. What the
     /// match yields is pushed to `yields`; what has to run once the whole
     /// run matched - a called rule's action (§8d) - goes to `after`.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     fn fixed_match(
         &self,
         f: &Fixed,
@@ -599,6 +603,10 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     fn fixed_run(&self, run: &[&Fixed], patterns: &[ModelPattern], in_cut: bool) -> TokenStream {
         let rts = self.rts();
         let span = Span::mixed_site();

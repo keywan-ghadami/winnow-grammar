@@ -4,6 +4,10 @@ use quote::{quote, quote_spanned};
 use winnow_grammar_model::model::{ModelPattern, RuleVariant};
 
 impl<'a> Codegen<'a> {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "over the limit when the lint came in; split it, then drop this"
+    )]
     pub fn generate_variants_body(
         &self,
         variants: &[RuleVariant],

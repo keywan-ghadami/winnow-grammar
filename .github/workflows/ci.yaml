@@ -36,7 +36,22 @@ jobs:
         # `--workspace --all-targets` also covers the macro crates, tests and
         # examples. Without it, Clippy only ran over lib and bins of the root
         # crate - exactly where the warnings were NOT.
+        # Function length and nesting are limited too (`clippy.toml`,
+        # `[workspace.lints]` in `Cargo.toml`).
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Files compiled by no target
+        # Rust ignores a `.rs` file no `mod` reaches - silently. Reads the
+        # dep-info the Clippy step just wrote.
+        run: scripts/check-orphans.sh
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+
+      - name: Unused dependencies
+        run: cargo machete
 
       - name: Build
         run: cargo build --workspace --verbose

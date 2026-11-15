@@ -12,6 +12,10 @@ mod codegen;
 struct WinnowBackend;
 
 impl Backend for WinnowBackend {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one table entry per built-in: long, not complex, and nothing to split"
+    )]
     fn get_builtins() -> &'static [BuiltIn] {
         &[
             BuiltIn {
