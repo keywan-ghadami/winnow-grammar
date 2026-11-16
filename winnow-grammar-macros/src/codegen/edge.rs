@@ -263,10 +263,10 @@ fn swallows_far(
         ModelPattern::RuleCall {
             rule_path, args, ..
         } => {
-            if let Some(s) = rule_path.segments.last() {
-                if rules.contains_key(&s.ident.to_string()) {
-                    todo.push(s.ident.to_string());
-                }
+            if let Some(s) = rule_path.segments.last()
+                && rules.contains_key(&s.ident.to_string())
+            {
+                todo.push(s.ident.to_string());
             }
             args.iter().any(|a| match a {
                 Argument::Positional(q) | Argument::Named(_, q) => swallows_far(q, rules, todo),

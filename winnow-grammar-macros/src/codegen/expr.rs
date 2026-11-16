@@ -230,16 +230,16 @@ pub(crate) fn substitute_pattern(
             generics,
             args,
         } => {
-            if let Some(ident) = rule_path.segments.last().map(|s| s.ident.to_string()) {
-                if let Some(new_pat) = subst.get(&ident) {
-                    let mut cloned = new_pat.clone();
-                    // Carry the binding ("elements:") over to the argument when substituting.
-                    if binding.is_some() {
-                        set_binding(&mut cloned, binding.clone());
-                    }
-                    *pattern = cloned;
-                    return;
+            if let Some(ident) = rule_path.segments.last().map(|s| s.ident.to_string())
+                && let Some(new_pat) = subst.get(&ident)
+            {
+                let mut cloned = new_pat.clone();
+                // Carry the binding ("elements:") over to the argument when substituting.
+                if binding.is_some() {
+                    set_binding(&mut cloned, binding.clone());
                 }
+                *pattern = cloned;
+                return;
             }
             // Not a parameter: then an ordinary call whose own generics and
             // arguments may contain the template parameters
@@ -393,10 +393,11 @@ impl<'a> Codegen<'a> {
         // fixed-shape ones can be matched by index (ADR 24 §8).
         // Not where edges are tracked: a run reads by index, past every
         // parser that would note the end (ADR 27 §3).
-        if is_lexical && !self.streaming {
-            if let Some(steps) = self.fixed_sequence_steps(patterns, in_cut) {
-                return steps;
-            }
+        if is_lexical
+            && !self.streaming
+            && let Some(steps) = self.fixed_sequence_steps(patterns, in_cut)
+        {
+            return steps;
         }
         let mut steps = Vec::new();
         let input = &self.input_ident;
@@ -437,21 +438,21 @@ impl<'a> Codegen<'a> {
         let span = Span::mixed_site();
         let input = &self.input_ident;
 
-        if let ModelPattern::Group { alts, .. } = pattern {
-            if alts.len() == 1 {
-                return self.generate_sequence_steps(&alts[0].0, in_cut, is_lexical);
-            }
+        if let ModelPattern::Group { alts, .. } = pattern
+            && alts.len() == 1
+        {
+            return self.generate_sequence_steps(&alts[0].0, in_cut, is_lexical);
         }
 
         match pattern {
             ModelPattern::Parenthesized(inner, _) => {
-                return self.generate_delimited_step(inner, "(", ")", in_cut, is_lexical)
+                return self.generate_delimited_step(inner, "(", ")", in_cut, is_lexical);
             }
             ModelPattern::Bracketed(inner, _) => {
-                return self.generate_delimited_step(inner, "[", "]", in_cut, is_lexical)
+                return self.generate_delimited_step(inner, "[", "]", in_cut, is_lexical);
             }
             ModelPattern::Braced(inner, _) => {
-                return self.generate_delimited_step(inner, "{", "}", in_cut, is_lexical)
+                return self.generate_delimited_step(inner, "{", "}", in_cut, is_lexical);
             }
             _ => {}
         }
@@ -612,7 +613,7 @@ impl<'a> Codegen<'a> {
             // - an element of `*` - and a value that is not `Copy` cannot be
             // moved out of it; for a number the clone is the copy.
             Argument::Value(_, e) => {
-                return quote_spanned! {span=> ::core::clone::Clone::clone(&(#e)) }
+                return quote_spanned! {span=> ::core::clone::Clone::clone(&(#e)) };
             }
         };
 
@@ -1275,12 +1276,11 @@ impl<'a> Codegen<'a> {
             Ok(seq) => seq,
             Err(e) => return e,
         };
-        if let [only] = &seq[..] {
-            if !self.loop_needs_check(only) {
-                if let Some(run) = self.char_loop_run(only, is_lexical) {
-                    return run;
-                }
-            }
+        if let [only] = &seq[..]
+            && !self.loop_needs_check(only)
+            && let Some(run) = self.char_loop_run(only, is_lexical)
+        {
+            return run;
         }
         let inner = self.generate_sequence_parser_with(&seq, is_lexical, true);
         quote_spanned! {span=> ::winnow::Parser::take(#inner) }
@@ -1415,10 +1415,10 @@ impl<'a> Codegen<'a> {
         let rts = self.rts();
         let span = Span::mixed_site();
         let b = self.current_boundary.borrow().clone().unwrap_or_default();
-        if let [byte] = b.as_bytes() {
-            if byte.is_ascii() {
-                return quote_spanned! {span=> #rts::lit_byte(#byte, #b, ::core::option::Option::None) };
-            }
+        if let [byte] = b.as_bytes()
+            && byte.is_ascii()
+        {
+            return quote_spanned! {span=> #rts::lit_byte(#byte, #b, ::core::option::Option::None) };
         }
         let p = quote_spanned! {span=>
             literal(#b)
@@ -1620,13 +1620,13 @@ impl<'a> Codegen<'a> {
         // A character loop nobody looks at is a scan. One that is bound still
         // collects its elements, which is what its type says it does; under
         // `text(…)` it is taken as a scan there.
-        if let (true, Some((fmin, fmax))) = (is_discarded, fixed) {
-            if let Some(run) = self.char_loop_text(inner, fmin, fmax, is_lexical) {
-                if self.is_bytes() && Self::loop_element_ends_in_any(inner) {
-                    return quote_spanned! {span=> ::winnow::Parser::void(::winnow_grammar::rt::bytes::text(#run)) };
-                }
-                return quote_spanned! {span=> ::winnow::Parser::void(#run) };
+        if let (true, Some((fmin, fmax))) = (is_discarded, fixed)
+            && let Some(run) = self.char_loop_text(inner, fmin, fmax, is_lexical)
+        {
+            if self.is_bytes() && Self::loop_element_ends_in_any(inner) {
+                return quote_spanned! {span=> ::winnow::Parser::void(::winnow_grammar::rt::bytes::text(#run)) };
             }
+            return quote_spanned! {span=> ::winnow::Parser::void(#run) };
         }
         let p = self.generate_parser_expr(inner, is_lexical, false);
         let elem = if is_lexical {

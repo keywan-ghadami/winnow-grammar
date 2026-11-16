@@ -357,16 +357,15 @@ impl<'a> Codegen<'a> {
         let mut runs = runs.into_iter().peekable();
         let mut i = 0;
         while i < patterns.len() {
-            if let Some(&(a, z)) = runs.peek() {
-                if a == i {
-                    runs.next();
-                    let run: Vec<&Fixed> =
-                        shapes[a..z].iter().map(|s| s.as_ref().unwrap()).collect();
-                    steps.extend(self.fixed_run(&run, &patterns[a..z], in_cut));
-                    in_cut |= run.iter().any(|f| matches!(f, Fixed::Cut));
-                    i = z;
-                    continue;
-                }
+            if let Some(&(a, z)) = runs.peek()
+                && a == i
+            {
+                runs.next();
+                let run: Vec<&Fixed> = shapes[a..z].iter().map(|s| s.as_ref().unwrap()).collect();
+                steps.extend(self.fixed_run(&run, &patterns[a..z], in_cut));
+                in_cut |= run.iter().any(|f| matches!(f, Fixed::Cut));
+                i = z;
+                continue;
             }
             if let ModelPattern::Cut(_) = &patterns[i] {
                 in_cut = true;

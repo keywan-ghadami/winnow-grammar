@@ -39,7 +39,10 @@ impl<'a> Codegen<'a> {
             if let Some(t) = ty {
                 params_tokens.push(quote! { mut #name: #t });
                 inner_params_tokens.push(quote! { #name: #t });
-                arg_names.push(quote! { #name.clone() });
+                // Not spanned at the parameter: with the user's span, clippy
+                // takes the call for the user's code and reports
+                // `clone_on_copy` on every `isize` parameter.
+                arg_names.push(quote! { ::core::clone::Clone::clone(&#name) });
             }
         }
 
@@ -64,10 +67,10 @@ impl<'a> Codegen<'a> {
 
         let inner_fn = self.inner_fn(rule, &inner_params_tokens, &body, &where_preds);
 
-        let mut outer_generics = quote! {'a, __WgS: ::std::fmt::Debug + Clone #state_bound };
-        if !gen_params.is_empty() {
-            outer_generics.extend(quote! {, #gen_params});
-        }
+        let (rule_lifetimes, rule_others) = split_generics(gen_params);
+        let outer_generics = quote! {
+            'a, #(#rule_lifetimes,)* __WgS: ::std::fmt::Debug + Clone #state_bound #(, #rule_others)*
+        };
 
         let outer_fn_body = self.entry_body(rule, &arg_names);
 
@@ -80,6 +83,15 @@ impl<'a> Codegen<'a> {
             .filter(|a| a.path().is_ident("doc"))
             .collect::<Vec<_>>();
 
+        // **The `impl Parser` here must keep the `mixed_site` span.** The
+        // parser it stands for holds the rule's parameters, and a parameter
+        // of reference type (`names: &Names`) has a lifetime the opaque type
+        // must capture. Edition 2024 captures every lifetime in scope, also
+        // the elided ones; 2021 captures none it is not told to, and fails
+        // with E0700. Which edition applies is the span's: `mixed_site` is
+        // this crate's (2024), `call_site` would be the user's. A
+        // `+ use<..>` cannot do it instead: it cannot name two elided
+        // lifetimes (`a: &A, b: &B`). `tests/ref_param_test.rs` checks it.
         let outer_fn = quote_spanned! {span=>
             #(#docs)*
             #vis fn #fn_name<#outer_generics> (#(#params_tokens),*) -> impl ::winnow::Parser<
@@ -178,11 +190,11 @@ impl<'a> Codegen<'a> {
         let inner_err_type = quote_spanned! { span=> ::winnow::error::ErrMode<__WgEr> };
 
         let gen_params = &rule.generics.params;
-        let mut all_generics =
-            quote! { 'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error };
-        if !gen_params.is_empty() {
-            all_generics.extend(quote! {, #gen_params});
-        }
+        let (rule_lifetimes, rule_others) = split_generics(gen_params);
+        let all_generics = quote! {
+            'a, #(#rule_lifetimes,)* __WgS: ::std::fmt::Debug + Clone #state_bound,
+            __WgEr: #rt_error #(, #rule_others)*
+        };
 
         let ws_shadow = if rule_name_str == "WS" {
             quote_spanned! {span=>
@@ -541,6 +553,19 @@ impl<'a> Codegen<'a> {
     }
 }
 
+/// A rule's generic parameters split into its lifetimes and the rest (types
+/// and consts). The generated functions put their own type parameters
+/// (`__WgS`, `__WgEr`) in front of the rule's, and Rust wants every lifetime
+/// before the first type parameter, so the rule's lifetimes go right after
+/// `'a` and its other parameters after the generated ones.
+fn split_generics(
+    params: &syn::punctuated::Punctuated<syn::GenericParam, syn::Token![,]>,
+) -> (Vec<&syn::GenericParam>, Vec<&syn::GenericParam>) {
+    params
+        .iter()
+        .partition(|g| matches!(g, syn::GenericParam::Lifetime(_)))
+}
+
 /// Does the type name a lifetime other than `'static` - in a rule's return
 /// type, the input's `'a`?
 fn borrows_input(ty: &TokenStream) -> bool {
@@ -549,10 +574,10 @@ fn borrows_input(ty: &TokenStream) -> bool {
     while let Some(t) = tokens.next() {
         match t {
             TokenTree::Punct(p) if p.as_char() == '\'' => {
-                if let Some(TokenTree::Ident(id)) = tokens.peek() {
-                    if id != "static" {
-                        return true;
-                    }
+                if let Some(TokenTree::Ident(id)) = tokens.peek()
+                    && id != "static"
+                {
+                    return true;
                 }
             }
             TokenTree::Group(g) if borrows_input(&g.stream()) => return true,

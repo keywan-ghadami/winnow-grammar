@@ -53,7 +53,22 @@
   `Pattern::Fold` and `ModelPattern::Fold` gain `computed:
   Option<Box<FoldBounds>>`. `tests/fold_computed_bounds_test.rs`.
 
+- **Rule parameters of reference type.** A rule takes a lent value -
+  `names: &Names`, `a: &A, b: &B`, `n: &'x T` - and passes it on to the
+  rules it calls; the value need not be `Clone`. The generated parser
+  captures the reference's lifetime, elided or named. SYNTAX.md, *Values:
+  arguments, bounds and guards*; `tests/ref_param_test.rs`.
+
+- **Minimum Rust version 1.88**, declared as `rust-version` in all three
+  crates. `winnow-grammar-macros` is on edition 2024: the generated parser
+  captures the lifetimes of a rule's reference parameters by the 2024 rules,
+  whatever the user's edition. The other two crates stay on 2021.
+
 ### Fixed
+
+- **A rule's own lifetime parameters.** `r<'x, T>(…)` put `'x` after the
+  generated type parameters (`__WgS`, `__WgEr`), which Rust rejects; the
+  rule's lifetimes now come right after `'a`. `tests/ref_param_test.rs`.
 
 - **Generated code names the standard library by full path.** The annotation
   on a bound repetition (`let xs: Vec<_>`), the `Ok(…)` that wraps an action,

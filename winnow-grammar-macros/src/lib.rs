@@ -3,9 +3,9 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use winnow_grammar_model::parse_grammar;
 use winnow_grammar_model::Backend;
 use winnow_grammar_model::BuiltIn;
+use winnow_grammar_model::parse_grammar;
 
 mod codegen;
 
@@ -242,7 +242,7 @@ fn grammar_impl(input: TokenStream) -> TokenStream {
 
 use quote::quote;
 use syn::parse::Parser as _;
-use syn::{parse_macro_input, Fields, ItemStruct};
+use syn::{Fields, ItemStruct, parse_macro_input};
 
 #[proc_macro_attribute]
 pub fn with_span(_attr: TokenStream, item: TokenStream) -> TokenStream {
