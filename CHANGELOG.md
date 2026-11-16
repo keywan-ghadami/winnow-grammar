@@ -70,6 +70,15 @@
   generated type parameters (`__WgS`, `__WgEr`), which Rust rejects; the
   rule's lifetimes now come right after `'a`. `tests/ref_param_test.rs`.
 
+- **A guard reads a label of its own repeated group** (ADR 26 D4). In
+  `(k:digit "=" v:digit if(k <= v))+` or `(x:any if(p(x, flow)))+` the guard
+  saw no label bound before it in the group - the group was a tuple of
+  parsers, all built before any ran, and rustc said "cannot find value".
+  Such a group now runs as statements that bind each label and yield the
+  same tuple. Only a group with a guard after a label takes this path; every
+  other group generates the code it did, and the binaries of all profile
+  examples are identical before and after. `tests/values_test.rs`.
+
 - **Generated code names the standard library by full path.** The annotation
   on a bound repetition (`let xs: Vec<_>`), the `Ok(…)` that wraps an action,
   the `Ok`/`Err` of left recursion and the `std::fmt::Debug` bound on the
