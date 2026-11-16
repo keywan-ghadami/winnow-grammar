@@ -1708,6 +1708,11 @@ grammar! {
   `min <= k <= max`, and a bound below zero is below every `k`, so
   `{0, n - 1}` with `n = 0` fails rather than wrapping. Greedy and possessive,
   as a literal bound.
+- **References.** A parameter may be a reference, `names: &Names`, with its
+  lifetime elided or named (`r<'x>(names: &'x Names)`), and the type need
+  not be `Clone`: the reference is what is passed on. A rule's parser holds
+  its arguments, so the parser borrows what they borrow. `&mut` is not
+  supported: an argument is copied into each call of the rule.
 - **Guards.** `if(m > n)` matches nothing and succeeds where the condition
   holds; otherwise it fails where it stands, as a backtrack, so the next
   alternative is tried. The message of the failure is the condition as
