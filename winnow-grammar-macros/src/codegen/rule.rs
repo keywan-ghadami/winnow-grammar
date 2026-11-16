@@ -39,9 +39,10 @@ impl<'a> Codegen<'a> {
             if let Some(t) = ty {
                 params_tokens.push(quote! { mut #name: #t });
                 inner_params_tokens.push(quote! { #name: #t });
-                // Spanned at the parameter, so that a type that is not
-                // `Clone` (`&mut T`) is reported there, not at the grammar.
-                arg_names.push(quote_spanned! {name.span()=> ::core::clone::Clone::clone(&#name) });
+                // Not spanned at the parameter: with the user's span, clippy
+                // takes the call for the user's code and reports
+                // `clone_on_copy` on every `isize` parameter.
+                arg_names.push(quote! { ::core::clone::Clone::clone(&#name) });
             }
         }
 
