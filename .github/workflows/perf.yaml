@@ -1,0 +1,46 @@
+name: Performance
+
+# Compares the instructions the pull request's code executes with those of its
+# base, in every case of the profile examples (docs/performance.md). A
+# separate workflow so that a change of labels re-runs this job only.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  compare:
+    name: Instructions vs. base
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          # The base commit has to be there for its worktree.
+          fetch-depth: 0
+
+      # The pinned toolchain of `ci.yaml`: both revisions are built with it.
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+
+      # HEAD is the merge of the pull request into its base: what the base
+      # becomes if it is merged.
+      - name: Compare with the base
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          ACCEPTED: ${{ contains(github.event.pull_request.labels.*.name, 'perf-accepted') }}
+        run: |
+          if scripts/compare-perf.sh "$BASE" HEAD; then
+            exit 0
+          fi
+          if [ "$ACCEPTED" = true ]; then
+            echo "::warning::More instructions than on base - accepted by the label perf-accepted."
+            exit 0
+          fi
+          echo "::error::More instructions than on base. If the cost is deliberate - only a new feature's users pay it - say so in the pull request and add the label perf-accepted."
+          exit 1
