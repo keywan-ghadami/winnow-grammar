@@ -1351,6 +1351,52 @@ std::thread::scope(|s| {
 The items cross threads, so they are owned and `Send`, and so is the user
 state. `tests/stream_each_test.rs` does exactly this.
 
+### Values from any action: `emit`
+
+`each` sees the items of the fold at the top. A value that is found deeper -
+an event inside a document, a warning about one entry - can be handed to
+`each` from the action where it is found, whatever rule that is:
+
+```rust,ignore
+grammar! {
+    grammar Events {
+        #[stream(each)]
+        pub log -> usize = n:fold(record, || 0usize, |n: usize, _e: Event| n + 1) eof -> { n }
+        record -> Event = h:header b:body -> { Event::Record(h, b) }
+        field -> Field = k:key "=" v:value -> {
+            if v.is_deprecated() {
+                _state.emit(Event::Warning(format!("{k} is deprecated")));
+            }
+            Field(k, v)
+        }
+        // …
+    }
+}
+```
+
+`_state.emit(value)` takes a value of the item type, the type `each` takes.
+It reaches `each` once the step whose parse emitted it is taken: a value
+emitted inside an item comes before that item, one from before the fold
+(the prefix) before the first item, one from the rule's own action after the
+last. A step the stream runs again - after a refill, to diagnose an error -
+emits again, and only what the step that is taken emitted is handed on, so
+`each` sees every value once. `Break` on an emitted value ends the parse
+there, as `Break` on an item does.
+
+* The item type with `'static` for its lifetimes is what is emitted: an item
+  that borrows the input (`&'a str`) can be emitted only as one that borrows
+  nothing (`&'static str`). A value of another type panics.
+* Outside `parse_<rule>_reader_each` - in memory, from `parse_<rule>_reader`,
+  in a rule no stream calls - `emit` does nothing and returns `false`. A
+  grammar without `#[stream(each)]` generates the code it generated before.
+* Inside an item an emit is what a write to the state is (*What
+  backtracking does to it*): a branch that emits and then loses has still
+  emitted, once its item is taken. Where a lost branch must not count,
+  return the value and emit it from the action of the rule that chose.
+
+`tests/stream_emit_test.rs` checks this; `docs/adr/adr28-emit-sink.md` is the
+record.
+
 ### A broken record: `recover` in the item
 
 A stream of many records should usually go on past a broken one. That is
