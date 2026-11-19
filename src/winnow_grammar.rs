@@ -219,8 +219,17 @@ pub struct ParseContext<S = ()> {
 /// reaches it.
 #[doc(hidden)]
 pub struct EmitSink {
-    /// The item type and its name, while open.
-    item: Option<(TypeId, &'static str)>,
+    /// `None` while closed - in every parse but a `_reader_each`. Boxed so
+    /// that the field is one pointer: `ParseContext` is moved in and out of
+    /// the stream's window on every step, and its size shows in the item
+    /// loop of every stream, with `each` or without.
+    open: Option<Box<OpenSink>>,
+}
+
+/// An open [`EmitSink`]: the item type, its name and what is held.
+struct OpenSink {
+    item: TypeId,
+    name: &'static str,
     pending: Vec<Box<dyn Any + Send>>,
 }
 
@@ -235,81 +244,82 @@ unsafe impl Sync for EmitSink {}
 impl EmitSink {
     /// A sink that takes nothing: `emit` drops its value.
     pub const fn closed() -> Self {
-        Self {
-            item: None,
-            pending: Vec::new(),
-        }
+        Self { open: None }
     }
 
     /// Opens the sink for items of type `T`, empty.
     pub fn open<T: Any>(&mut self) {
-        self.item = Some((TypeId::of::<T>(), std::any::type_name::<T>()));
-        self.pending.clear();
+        self.open = Some(Box::new(OpenSink {
+            item: TypeId::of::<T>(),
+            name: std::any::type_name::<T>(),
+            pending: Vec::new(),
+        }));
     }
 
     /// Closes the sink and drops what it holds.
     pub fn close(&mut self) {
-        *self = Self::closed();
+        self.open = None;
     }
 
     /// Whether a `parse_<rule>_reader_each` is running.
+    #[inline]
     pub fn is_open(&self) -> bool {
-        self.item.is_some()
+        self.open.is_some()
     }
 
     /// Holds `value` if the sink is open; see [`ParseContext::emit`].
     pub fn push<T: Any + Send>(&mut self, value: T) -> bool {
-        let Some((item, name)) = self.item else {
+        let Some(open) = &mut self.open else {
             return false;
         };
         assert!(
-            TypeId::of::<T>() == item,
-            "emit({}) in a parse whose `each` takes {name}",
+            TypeId::of::<T>() == open.item,
+            "emit({}) in a parse whose `each` takes {}",
             std::any::type_name::<T>(),
+            open.name,
         );
-        self.pending.push(Box::new(value));
+        open.pending.push(Box::new(value));
         true
     }
 
     /// Whether nothing is held.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.pending.is_empty()
+        self.open.as_ref().is_none_or(|o| o.pending.is_empty())
     }
 
     /// Hands out what is held, oldest first, for `each`.
-    pub fn drain(&mut self) -> std::vec::Drain<'_, Box<dyn Any + Send>> {
-        self.pending.drain(..)
+    pub fn drain(&mut self) -> impl Iterator<Item = Box<dyn Any + Send>> + '_ {
+        self.open.iter_mut().flat_map(|o| o.pending.drain(..))
     }
 
     /// Drops what is held: its attempt was thrown away.
     ///
     /// The stream driver calls it around every attempt of every stream, with
-    /// `each` or without, so the common case - nothing held - is an inlined
-    /// length check; the drop loop of `clear` stays out of the hot path.
+    /// `each` or without, so the common case - closed - is an inlined check
+    /// of one pointer.
     #[inline]
     pub fn discard(&mut self) {
-        if !self.pending.is_empty() {
-            self.discard_slow();
+        if let Some(open) = &mut self.open {
+            open.pending.clear();
         }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn discard_slow(&mut self) {
-        self.pending.clear();
     }
 
     /// Takes what is held, leaving the sink open and empty: around a parse
     /// whose emits are thrown away, with [`restore`](Self::restore).
     pub fn set_aside(&mut self) -> Vec<Box<dyn Any + Send>> {
-        std::mem::take(&mut self.pending)
+        match &mut self.open {
+            Some(open) => std::mem::take(&mut open.pending),
+            None => Vec::new(),
+        }
     }
 
     /// Puts back what [`set_aside`](Self::set_aside) took, dropping what was
     /// emitted since.
     pub fn restore(&mut self, kept: Vec<Box<dyn Any + Send>>) {
-        self.pending = kept;
+        if let Some(open) = &mut self.open {
+            open.pending = kept;
+        }
     }
 }
 
@@ -328,8 +338,11 @@ impl Default for EmitSink {
 impl std::fmt::Debug for EmitSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EmitSink")
-            .field("item", &self.item.map(|(_, name)| name))
-            .field("pending", &self.pending.len())
+            .field("item", &self.open.as_ref().map(|o| o.name))
+            .field(
+                "pending",
+                &self.open.as_ref().map_or(0, |o| o.pending.len()),
+            )
             .finish()
     }
 }

@@ -47,10 +47,18 @@ value: `false` in every parse but a `parse_<rule>_reader_each`.
 
 ```rust
 pub struct EmitSink {
-    item: Option<(TypeId, &'static str)>,   // open: the item type, its name
+    open: Option<Box<OpenSink>>,   // None while closed
+}
+struct OpenSink {
+    item: TypeId,                  // the item type
+    name: &'static str,            // and its name, for the panic
     pending: Vec<Box<dyn Any + Send>>,
 }
 ```
+
+Boxed so that the field is one pointer: the context is moved into and out
+of the stream's window on every step, and a closed sink - every parse but a
+`_reader_each` - costs one null check where the driver discards.
 
 Closed by default and in every clone; `parse_<rule>_reader_each` opens it on
 the stream's copy of the context with the item type (lifetimes made
@@ -92,11 +100,15 @@ takes what it parsed:
 * **the rule's action at each level of the path**: after it returned.
 
 The driver drops `pending` wherever it throws an attempt away: before each
-attempt (`run`, `scan_window`, `attempt`), when an item attempt ends the fold,
+attempt (`run`, `attempt`), when an item attempt ends the fold,
 before the fallback diagnosing attempt, and after the item loop. The
 diagnosing replays set the pending values aside and put them back
 (`EmitSink::set_aside`/`restore`), since they parse again what was already
-handed on. These points overlap - most are guarded twice - and the tests fail
+handed on. Not in the item loop of `scan_window`, the hot path of every
+stream: there nothing is held - a taken item handed its values over inside
+`f`, and an attempt that is not taken ends the loop, after which `items`
+discards (a `debug_assert` checks it). A discard per item cost every
+`#[stream]` reader, `each` or not, ~39 instructions per item. These points overlap - most are guarded twice - and the tests fail
 when they are removed together, and when the first-pass discard in `run` or
 the set-aside of the replays is removed alone.
 
