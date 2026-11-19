@@ -153,8 +153,8 @@ memory.
   field `emits` and the hidden type `EmitSink`. A struct literal of
   `ParseContext` without `..Default::default()` stops compiling, as with the
   hidden fields before it; nothing else changes for a caller.
-* Cost for those who do not emit (callgrind, `scripts/compare-perf.sh`,
-  Rust 1.98.0): `cut_profile` `stream_none` / `stream_cut` -0.09 %,
+* Cost for those who do not emit (callgrind, `scripts/compare-perf.sh`;
+  rustc 1.98.0, LLVM 22.1.8, valgrind 3.26, codegen-units 16): `cut_profile` `stream_none` / `stream_cut` -0.09 %,
   `stream_profile` `stream` (a `#[stream]` reader without `each`) +0.39 %,
   one instruction per row, the other cases unchanged. The first version
   discarded in the item loop and cost +14.9 % there. The remaining

@@ -74,9 +74,35 @@ accounts for. Before calling a difference that, check it: remove the new
 code from the hot path (or all of it) and count again. If the count does not
 fall back to the base - ADR 28 found it *rising* to 53.13 M from 52.73 M,
 base 52.53 M - the difference is layout, not cost; the pull request shows
-that check and gets `perf-accepted`. The counts depend on the toolchain:
-compare with the one `perf.yaml` pins (`RUSTUP_TOOLCHAIN=1.98.0
-scripts/compare-perf.sh`), not the local default.
+that check and gets `perf-accepted`.
+
+## What a count depends on - and is written with
+
+A count is deterministic for one binary, but the binary depends on more than
+the source:
+
+* **The compiler.** Another rustc, with another LLVM, inlines and allocates
+  registers differently. ADR 28's remaining difference was +0.01 % with
+  Rust 1.97.0 and +0.38 % with 1.98.0, for the same source.
+* **The split into codegen units.** A release build cuts each crate into
+  codegen units (16 by default) and, without LTO, inlines little across
+  them. Which function lands in which unit is a heuristic over the whole
+  crate, so a change anywhere - even one that adds no code to the hot path -
+  can move a function to another unit and change what is inlined into the
+  loop. A commit that changed only Markdown moved `cut_profile none` by
+  +200 000 instructions (ADR 28).
+* **valgrind** and the C library: the count includes what libc's `memcpy`
+  and the dynamic loader run, which can differ between versions and
+  machines; recorded so that a difference there can be ruled out.
+
+So every number of instructions that is written down - in a pull request,
+an ADR, the CHANGELOG - says what it was measured with: the rustc version
+(and LLVM), valgrind, and the release profile if it is not Cargo's default.
+`scripts/perf-env.sh` prints that line, and `compare-perf.sh`,
+`profile-cut.sh` and `profile-stream.sh` put it above their tables; copy it
+along with the numbers. Compare with the toolchain `perf.yaml` pins
+(`RUSTUP_TOOLCHAIN=1.98.0 scripts/compare-perf.sh`), not the local default:
+only those counts are the ones CI checks.
 
 ## The profiles
 

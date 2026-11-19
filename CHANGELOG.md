@@ -78,8 +78,15 @@
   without `each` does no emit work per item: `cut_profile` `stream_*` -0.09 %,
   `stream_profile` `stream` +0.39 % (one instruction per row, a code-layout
   shift in the item loop that removing the emit code entirely makes larger,
-  not smaller; `docs/performance.md`). SYNTAX.md, *Values from any action:
+  not smaller; measured with rustc 1.98.0, LLVM 22.1.8, valgrind 3.26,
+  codegen-units 16; `docs/performance.md`). SYNTAX.md, *Values from any action:
   `emit`*; `tests/stream_emit_test.rs`.
+
+- **Measurements say what they were measured with.** `scripts/perf-env.sh`
+  prints the rustc and LLVM version, valgrind and the release profile;
+  `compare-perf.sh`, `profile-cut.sh` and `profile-stream.sh` print it above
+  their tables. `docs/performance.md`, *What a count depends on*: numbers in
+  pull requests, ADRs and this file carry that line.
 
 ### Fixed
 

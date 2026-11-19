@@ -69,6 +69,7 @@ report=$(mktemp)
 regressions=0
 {
     echo "Instructions executed, counted by callgrind: base ${base_sha:0:7}, head ${head_sha:0:7}."
+    scripts/perf-env.sh
     echo
     echo "| example | case | base | head | difference |"
     echo "|---|---|---:|---:|---:|"
