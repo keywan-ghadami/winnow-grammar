@@ -116,6 +116,7 @@ impl Codegen<'_> {
         let each_fn = format_ident!("parse_{}_reader_each", rule.name, span = span);
         let body = self.stream_level(path, 0, view, &mut TokenStream::new(), true);
         let item = self.stream_item_type(path);
+        let emitted = emitted_type(&item);
         quote_spanned! {span=>
             /// [`#reader_fn`], showing `each` every item of the fold as
             /// it is taken, before the fold's step takes it. `each`
@@ -136,6 +137,9 @@ impl Codegen<'_> {
                 let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::new(
                     reader, context, reading, #k,
                 );
+                // `emit` in an action reaches `each` from here on; dropping
+                // `__stream` closes the sink again (ADR 28).
+                __stream.context().emits.open::<#emitted>();
                 let __value = #body;
                 __stream.finish(#finish)?;
                 ::core::result::Result::Ok(::core::ops::ControlFlow::Continue(__value))
@@ -159,6 +163,14 @@ impl Codegen<'_> {
         let v = &rule.variants[0];
         let at = level.at;
         let (prefix, prefix_cut) = self.stream_prefix(path, j, view, helpers);
+        // `_reader_each`: what a step emitted goes to `each` once it matched.
+        let deliver = if each {
+            let item = self.stream_item_type(path);
+            deliver_emits(&emitted_type(&item))
+        } else {
+            TokenStream::new()
+        };
+        let after_prefix = deliver.clone();
 
         // --- The element at `at`: the next rule's level, or the fold.
         let (middle, middle_value) = match path.levels.get(j + 1) {
@@ -181,6 +193,11 @@ impl Codegen<'_> {
             None => quote! {},
         };
         let suffix = self.stream_suffix(path, j, view, helpers, binding.as_ref(), path_param);
+        let after_suffix = if suffix.is_empty() {
+            TokenStream::new()
+        } else {
+            deliver.clone()
+        };
 
         // --- The action, between steps, with the context.
         let ret = &rule.return_type;
@@ -202,23 +219,30 @@ impl Codegen<'_> {
         } else {
             (TokenStream::new(), TokenStream::new())
         };
+        // The action names `_state` as an action in memory does: the binding
+        // is the user's, not the macro's.
+        let state = proc_macro2::Ident::new("_state", Span::call_site());
         quote_spanned! {span=>
             {
                 #scope_begin
                 #prefix
+                #after_prefix
                 #middle
                 #bind_path
                 #suffix
+                #after_suffix
                 #scope_end
-                let _state = __stream.context();
+                let #state = __stream.context();
                 let __r: ::winnow::Result<#ret, ::winnow::error::ErrMode<::winnow_grammar::ParseError>> =
                     (|| ::core::result::Result::Ok(#action))();
-                match __r {
+                let __level = match __r {
                     ::core::result::Result::Ok(v) => v,
                     ::core::result::Result::Err(e) => {
                         return ::core::result::Result::Err(::winnow_grammar::rt::stream::action_error(e))
                     }
-                }
+                };
+                #deliver
+                __level
             }
         }
     }
@@ -529,7 +553,8 @@ impl Codegen<'_> {
                 __acc = ::core::option::Option::Some(__step(__a, __v));
             }
         };
-        let (tap, stopped) = each_tap(each);
+        let emitted = each.then(|| emitted_type(&self.stream_item_type(path)));
+        let (tap, stopped) = each_tap(emitted.as_ref());
         let (bounds, at_max, short) = fold_bounds(computed.as_deref(), *min, *max);
         quote_spanned! {span=>
             #bounds
@@ -711,13 +736,23 @@ fn fold_bounds(
 /// For `_reader_each`: the check that hands each item to the caller before
 /// the step takes it (and stops the parse on `Break`), and the check after
 /// the loop that returns that `Break`. Empty otherwise.
-fn each_tap(each: bool) -> (TokenStream, TokenStream) {
+fn each_tap(emitted: Option<&syn::Type>) -> (TokenStream, TokenStream) {
     let span = Span::mixed_site();
     // `_reader_each`: the caller sees the item before the step takes it,
-    // and may stop the parse there.
-    if each {
+    // and may stop the parse there - and before the item, what its parse
+    // emitted (ADR 28).
+    if let Some(emitted) = emitted {
         (
             quote_spanned! {span=>
+                for __e in input.state.emits.drain() {
+                    let __e = *__e
+                        .downcast::<#emitted>()
+                        .expect("`emit` checked the type");
+                    if let ::core::ops::ControlFlow::Break(__b) = each(&__e) {
+                        __broken = ::core::option::Option::Some(__b);
+                        return ::core::result::Result::Err(::winnow_grammar::rt::stream::Fail::Stop);
+                    }
+                }
                 if let ::core::ops::ControlFlow::Break(__b) = each(&__v) {
                     __broken = ::core::option::Option::Some(__b);
                     return ::core::result::Result::Err(::winnow_grammar::rt::stream::Fail::Stop);
@@ -732,4 +767,46 @@ fn each_tap(each: bool) -> (TokenStream, TokenStream) {
     } else {
         (quote! {}, quote! {})
     }
+}
+
+/// For `_reader_each`: hands what the step just taken emitted to `each`,
+/// oldest first, and returns `Break` from the parse where `each` asks for
+/// it - as a `Break` on an item does (ADR 28).
+fn deliver_emits(emitted: &syn::Type) -> TokenStream {
+    let span = Span::mixed_site();
+    quote_spanned! {span=>
+        for __e in __stream.context().emits.drain() {
+            let __e = *__e
+                .downcast::<#emitted>()
+                .expect("`emit` checked the type");
+            if let ::core::ops::ControlFlow::Break(__b) = each(&__e) {
+                return ::core::result::Result::Ok(::core::ops::ControlFlow::Break(__b));
+            }
+        }
+    }
+}
+
+/// The type an action emits for items of type `item`: the same with
+/// `'static` for every lifetime, named or elided, since an emitted value is
+/// held past the input it was parsed from and is told apart by its
+/// `TypeId`. `each` takes `&Item`, which such a value is where `Item` is
+/// covariant in its lifetimes, as a type built of references, owned data
+/// and other such types is.
+fn emitted_type(item: &syn::Type) -> syn::Type {
+    use syn::visit_mut::VisitMut;
+    struct Static;
+    impl VisitMut for Static {
+        fn visit_lifetime_mut(&mut self, l: &mut syn::Lifetime) {
+            *l = syn::Lifetime::new("'static", l.span());
+        }
+        fn visit_type_reference_mut(&mut self, r: &mut syn::TypeReference) {
+            if r.lifetime.is_none() {
+                r.lifetime = Some(syn::Lifetime::new("'static", Span::call_site()));
+            }
+            syn::visit_mut::visit_type_reference_mut(self, r);
+        }
+    }
+    let mut ty = item.clone();
+    Static.visit_type_mut(&mut ty);
+    ty
 }

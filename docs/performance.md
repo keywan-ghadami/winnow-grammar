@@ -65,6 +65,19 @@ its users pay for, but which the profiles exercise - the pull request says
 so, with the numbers, and gets the label `perf-accepted`. The job then
 passes with a warning; the table stays in the job summary.
 
+## A shift in the code layout
+
+The `none` cases show the code layout outside the parser. Inside it a change
+can move the hot loop's code as well: other inlining, another register
+allocation, an instruction more or less per item that no line of the change
+accounts for. Before calling a difference that, check it: remove the new
+code from the hot path (or all of it) and count again. If the count does not
+fall back to the base - ADR 28 found it *rising* to 53.13 M from 52.73 M,
+base 52.53 M - the difference is layout, not cost; the pull request shows
+that check and gets `perf-accepted`. The counts depend on the toolchain:
+compare with the one `perf.yaml` pins (`RUSTUP_TOOLCHAIN=1.98.0
+scripts/compare-perf.sh`), not the local default.
+
 ## The profiles
 
 | example | what it exercises |

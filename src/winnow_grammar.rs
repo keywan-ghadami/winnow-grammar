@@ -34,6 +34,8 @@ pub use interner::{InternerContext, Symbol};
 pub use interner_trait::{Interner, InternerOf};
 pub use state::StateOf;
 
+use std::any::{Any, TypeId};
+
 /// When and how a failing parse produces its diagnostics.
 ///
 /// Every generated entry point - `parse_<rule>()` and, per piece,
@@ -195,6 +197,154 @@ pub struct ParseContext<S = ()> {
     /// on has to be diagnosed with (ADR 27 §3).
     #[doc(hidden)]
     pub reach: usize,
+    /// Where [`emit`](Self::emit) puts its values: open while a
+    /// `parse_<rule>_reader_each` runs, closed otherwise (ADR 28). Set and
+    /// emptied by the generated code and the stream driver only.
+    #[doc(hidden)]
+    pub emits: EmitSink,
+}
+
+/// The values [`ParseContext::emit`] holds for the `each` of a
+/// `parse_<rule>_reader_each` until the attempt that emitted them is taken
+/// (ADR 28).
+///
+/// Type-erased, because a typed slot would need a type parameter of
+/// `ParseContext` for the item type, which every user of the context would
+/// have to name. The item type is checked on [`push`](Self::push) instead,
+/// against the one the generated code opened the sink with, so the
+/// downcast that hands a value to `each` cannot fail.
+///
+/// A clone is closed and empty: a copy of a context is not the parse that
+/// runs `each`. An implementation detail, public because the generated code
+/// reaches it.
+#[doc(hidden)]
+pub struct EmitSink {
+    /// `None` while closed - in every parse but a `_reader_each`. Boxed so
+    /// that the field is one pointer: `ParseContext` is moved in and out of
+    /// the stream's window on every step, and its size shows in the item
+    /// loop of every stream, with `each` or without.
+    open: Option<Box<OpenSink>>,
+}
+
+/// An open [`EmitSink`]: the item type, its name and what is held.
+struct OpenSink {
+    item: TypeId,
+    name: &'static str,
+    pending: Vec<Box<dyn Any + Send>>,
+}
+
+// SAFETY: `pending` holds `Send` values that are not `Sync`. Nothing reads
+// them through a shared reference: every method that touches them takes
+// `&mut self`, `Clone` builds an empty sink and `Debug` prints the count.
+// A `&EmitSink` on another thread therefore reaches no value, which is
+// what `Sync` asks for - the reasoning of `std::sync::Exclusive`. It keeps
+// `ParseContext<S>` `Sync` where `S` is, as it was before the field.
+unsafe impl Sync for EmitSink {}
+
+impl EmitSink {
+    /// A sink that takes nothing: `emit` drops its value.
+    pub const fn closed() -> Self {
+        Self { open: None }
+    }
+
+    /// Opens the sink for items of type `T`, empty.
+    pub fn open<T: Any>(&mut self) {
+        self.open = Some(Box::new(OpenSink {
+            item: TypeId::of::<T>(),
+            name: std::any::type_name::<T>(),
+            pending: Vec::new(),
+        }));
+    }
+
+    /// Closes the sink and drops what it holds.
+    pub fn close(&mut self) {
+        self.open = None;
+    }
+
+    /// Whether a `parse_<rule>_reader_each` is running.
+    #[inline]
+    pub fn is_open(&self) -> bool {
+        self.open.is_some()
+    }
+
+    /// Holds `value` if the sink is open; see [`ParseContext::emit`].
+    pub fn push<T: Any + Send>(&mut self, value: T) -> bool {
+        let Some(open) = &mut self.open else {
+            return false;
+        };
+        assert!(
+            TypeId::of::<T>() == open.item,
+            "emit({}) in a parse whose `each` takes {}",
+            std::any::type_name::<T>(),
+            open.name,
+        );
+        open.pending.push(Box::new(value));
+        true
+    }
+
+    /// Whether nothing is held.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.open.as_ref().is_none_or(|o| o.pending.is_empty())
+    }
+
+    /// Hands out what is held, oldest first, for `each`.
+    pub fn drain(&mut self) -> impl Iterator<Item = Box<dyn Any + Send>> + '_ {
+        self.open.iter_mut().flat_map(|o| o.pending.drain(..))
+    }
+
+    /// Drops what is held: its attempt was thrown away.
+    ///
+    /// The stream driver calls it around every attempt of every stream, with
+    /// `each` or without, so the common case - closed - is an inlined check
+    /// of one pointer.
+    #[inline]
+    pub fn discard(&mut self) {
+        if let Some(open) = &mut self.open {
+            open.pending.clear();
+        }
+    }
+
+    /// Takes what is held, leaving the sink open and empty: around a parse
+    /// whose emits are thrown away, with [`restore`](Self::restore).
+    pub fn set_aside(&mut self) -> Vec<Box<dyn Any + Send>> {
+        match &mut self.open {
+            Some(open) => std::mem::take(&mut open.pending),
+            None => Vec::new(),
+        }
+    }
+
+    /// Puts back what [`set_aside`](Self::set_aside) took, dropping what was
+    /// emitted since.
+    pub fn restore(&mut self, kept: Vec<Box<dyn Any + Send>>) {
+        if let Some(open) = &mut self.open {
+            open.pending = kept;
+        }
+    }
+}
+
+impl Clone for EmitSink {
+    fn clone(&self) -> Self {
+        Self::closed()
+    }
+}
+
+impl Default for EmitSink {
+    fn default() -> Self {
+        Self::closed()
+    }
+}
+
+impl std::fmt::Debug for EmitSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmitSink")
+            .field("item", &self.open.as_ref().map(|o| o.name))
+            .field(
+                "pending",
+                &self.open.as_ref().map_or(0, |o| o.pending.len()),
+            )
+            .finish()
+    }
 }
 
 impl<S: Default> Default for ParseContext<S> {
@@ -218,6 +368,7 @@ impl<S: Default> Default for ParseContext<S> {
             touched: false,
             origin: 0,
             reach: usize::MAX,
+            emits: EmitSink::closed(),
         }
     }
 }
@@ -249,6 +400,7 @@ impl<S> ParseContext<S> {
             touched: false,
             origin: 0,
             reach: usize::MAX,
+            emits: EmitSink::closed(),
         }
     }
 
@@ -289,6 +441,32 @@ impl<S> ParseContext<S> {
         self.intern_cache.rebind(&self.interner);
         // Offsets of another input mean nothing in this one.
         self.trivia_memo = rt::TRIVIA_UNSEEN;
+    }
+
+    /// Hands `value` to the `each` of the `#[stream(each)]` entry point that
+    /// is running, beside the items of its fold (ADR 28). Any action may
+    /// call it - the stream rule's, a rule of its path, the item's or a rule
+    /// the item calls - as `_state.emit(value)`.
+    ///
+    /// `T` is the type of the fold's items, with `'static` for its
+    /// lifetimes: `each` takes `&Item`, and an emitted value is shown to it
+    /// as one. A value emitted while an attempt runs is held until that
+    /// attempt is taken - an item when the fold takes it, before the item
+    /// itself; a step before or after the fold when it matched; an action
+    /// when it returned - and dropped with an attempt the stream driver
+    /// throws away (parsed again with more input, or by the diagnosing
+    /// pass), so `each` sees it once. Like a write to the user state, an
+    /// emit in a branch that loses *inside* an item has still happened.
+    ///
+    /// Returns whether an `each` will see the value: `false`, and the value
+    /// is dropped, in every parse but a `parse_<rule>_reader_each`, so a
+    /// grammar that emits parses as before through its other entry points.
+    ///
+    /// # Panics
+    ///
+    /// When `T` is not the type of the fold's items.
+    pub fn emit<T: Any + Send>(&mut self, value: T) -> bool {
+        self.emits.push(value)
     }
 
     /// Records what a `recover(…)` swallowed: always the count, and the error

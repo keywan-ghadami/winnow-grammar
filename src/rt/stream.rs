@@ -448,6 +448,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<bool, Fail>,
     {
         let r = self.items_once(rules, n, &mut f);
+        // An item hands its emits to `each` when it is taken, inside `f`:
+        // what is left is an attempt's that was not (ADR 28).
+        self.context().emits.discard();
         self.finished(r)
     }
 
@@ -564,6 +567,11 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 input.state.reach = usize::MAX;
             }
             let cp = input.checkpoint();
+            // Nothing is held here (ADR 28): an item that was taken handed
+            // its emits to `each` inside `f`, and an attempt that was not
+            // ends the loop, after which `items` discards what it emitted.
+            // Not discarded here: this is the hot loop of every stream.
+            debug_assert!(input.state.emits.is_empty());
             let r = f(&mut input, pass, *n + 1);
             if input.state.touched && !last {
                 input.reset(&cp);
@@ -852,6 +860,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 replay: false,
             };
             let depth = self.cut_depth();
+            // A step's emits are handed to `each` after `chunk` returns: what
+            // is held then is the taken attempt's, and only that (ADR 28).
+            self.context().emits.discard();
             let (r, touched) = self.attempt(self.pos, rules, f, first, item);
             if touched && !last {
                 if full {
@@ -891,6 +902,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                         self.context().user_state = keep;
                         self.roll_back(None, saved);
                     }
+                    self.context().emits.discard();
                     Ok(None)
                 }
                 Err(fail) if first.diagnose => {
@@ -906,6 +918,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                         self.replay_prev(rules, f, item, last);
                         self.context().user_state = keep;
                     }
+                    self.context().emits.discard();
                     match self.attempt(self.pos, rules, f, diagnose, item).0 {
                         Ok((v, consumed)) => {
                             self.pos += consumed;
@@ -939,11 +952,13 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     ) where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail>,
     {
-        // What the fast pass recovered stays; the replay's goes.
+        // What the fast pass recovered stays; the replay's goes - and so
+        // does what it emitted.
         let saved = {
             let c = self.context();
             (c.recoveries, c.recovered.len())
         };
+        let emitted = self.context().emits.set_aside();
         let keep = self.context().user_state.clone();
         if let Some(s) = snapshot {
             self.context().user_state = s;
@@ -961,6 +976,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         }
         self.context().user_state = keep;
         self.roll_back(None, saved);
+        self.context().emits.restore(emitted);
     }
 
     /// Forgets the items whose failures lie behind the next step: an error
@@ -990,6 +1006,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             let c = self.context();
             (c.recoveries, c.recovered.len())
         };
+        let emitted = self.context().emits.set_aside();
         let pass = Pass {
             diagnose: true,
             last,
@@ -1007,6 +1024,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         }
         let _ = self.attempt(prev, rules, f, pass, Some(n.saturating_sub(1)));
         self.roll_back(None, saved);
+        self.context().emits.restore(emitted);
     }
 
     /// Runs `f` once over the window: the context goes in with its positions
@@ -1042,6 +1060,10 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         ctx.rules.clear();
         if pass.diagnose {
             ctx.rules.extend_from_slice(rules);
+        }
+        if item.is_some() {
+            // An item hands its emits over inside `f`, when it is taken.
+            ctx.emits.discard();
         }
         let mut input = Input {
             input: winnow::stream::LocatingSlice::new(K::view(
@@ -1183,7 +1205,9 @@ impl<K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool> Drop
     for Stream<'_, K, R, S, TRACK>
 {
     fn drop(&mut self) {
-        if let Some(ctx) = self.ctx.take() {
+        if let Some(mut ctx) = self.ctx.take() {
+            // The caller's context takes no emits after the parse.
+            ctx.emits.close();
             *self.out = ctx;
         }
     }
