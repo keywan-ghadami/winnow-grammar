@@ -10,11 +10,14 @@
 # differs. A case whose example does not build on BASE (it uses something
 # new) is reported as skipped.
 #
-# Exits 1 if a case executes more instructions on HEAD than on BASE by more
-# than PERF_TOLERANCE_PCT percent (default 0.01). Counts are deterministic -
-# the same binary on the same input counts the same, run after run - so the
-# tolerance only absorbs what differs between two builds outside the parser.
-# The table goes to stdout and, in GitHub Actions, to the job summary.
+# Each revision is built twice: with the release profile as it is, and with
+# codegen-units 1. Exits 1 if a case executes more instructions on HEAD than
+# on BASE by more than PERF_TOLERANCE_PCT percent (default 0.01) in BOTH
+# builds; a case slower in one build only is a shift in the code layout and
+# a warning. Counts are deterministic - the same binary on the same input
+# counts the same, run after run - so the tolerance only absorbs what differs
+# between two builds outside the parser. The table goes to stdout and, in
+# GitHub Actions, to the job summary.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -54,72 +57,126 @@ for spec in "${profiles[@]}"; do
     cp "$tmp/b/examples/$ex.rs" "$tmp/a/examples/$ex.rs"
 done
 
-build() { # tree example
-    (cd "$tmp/$1" && CARGO_TARGET_DIR="$tmp/$1/target" \
-        cargo build -q --release --example "$2" 2>"$tmp/$1-$2.log")
+# Each revision is built twice (docs/performance.md, "Two builds"):
+#   default - the release profile as it is, what a user of the crate builds;
+#   cgu1    - the same with one codegen unit, so that where the compiler
+#             puts a function does not move with an unrelated change.
+# A case is a regression only if it is slower in both builds; slower in one
+# alone is a shift in the code layout and reported as a warning.
+variants=(default cgu1)
+
+build() { # tree example variant
+    local cgu=()
+    if [ "$3" = cgu1 ]; then
+        cgu=(CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1)
+    fi
+    (cd "$tmp/$1" && env -u CARGO_PROFILE_RELEASE_CODEGEN_UNITS "${cgu[@]}" \
+        CARGO_TARGET_DIR="$tmp/$1/target-$3" \
+        cargo build -q --release --example "$2" 2>"$tmp/$1-$2-$3.log")
 }
 
-refs() { # tree example case
+refs() { # tree example case variant
     (cd "$tmp/$1" && valgrind --tool=callgrind --callgrind-out-file=/dev/null \
-        "target/release/examples/$2" "$3" 2>&1 >/dev/null |
+        "target-$4/release/examples/$2" "$3" 2>&1 >/dev/null |
         awk '/refs/ { gsub(",", "", $NF); print $NF }')
+}
+
+# One build's comparison of one case: "base head difference" and whether it
+# is slower than the tolerance allows.
+compare() { # example case variant identical
+    local a b diff pct
+    a=$(refs a "$1" "$2" "$3")
+    if [ "$4" = true ]; then
+        echo "$a $a 0 (identical binary)"
+        return
+    fi
+    b=$(refs b "$1" "$2" "$3")
+    diff=$((b - a))
+    pct=$(awk -v a="$a" -v d="$diff" 'BEGIN { printf "%+.4f", 100 * d / a }')
+    echo "$a $b $diff ($pct %)"
+}
+
+slower() { # "difference (pct %)"
+    local pct
+    case $1 in *" %)") ;; *) return 1 ;; esac
+    pct=$(sed -E 's/.*\(([-+0-9.]+) %\).*/\1/' <<<"$1")
+    awk -v p="$pct" -v t="$tolerance" 'BEGIN { exit !(p > t) }' 2>/dev/null
 }
 
 report=$(mktemp)
 regressions=0
+shifts=0
 {
     echo "Instructions executed, counted by callgrind: base ${base_sha:0:7}, head ${head_sha:0:7}."
     scripts/perf-env.sh
+    echo "Each revision is built twice: with that profile, and with codegen-units 1."
     echo
-    echo "| example | case | base | head | difference |"
-    echo "|---|---|---:|---:|---:|"
+    echo "| example | case | base | head | difference | base, 1 CGU | head, 1 CGU | difference, 1 CGU | |"
+    echo "|---|---|---:|---:|---:|---:|---:|---:|---|"
 } >"$report"
 
 for spec in "${profiles[@]}"; do
     read -r ex cases <<<"$spec"
-    if ! build b "$ex"; then
-        cat "$tmp/b-$ex.log" >&2
-        echo "the example $ex does not build on HEAD" >&2
-        exit 2
-    fi
-    if ! build a "$ex"; then
+    skipped=false
+    identical=()
+    for v in "${variants[@]}"; do
+        if ! build b "$ex" "$v"; then
+            cat "$tmp/b-$ex-$v.log" >&2
+            echo "the example $ex does not build on HEAD" >&2
+            exit 2
+        fi
+        if ! build a "$ex" "$v"; then
+            skipped=true
+            break
+        fi
+        if cmp -s "$tmp/a/target-$v/release/examples/$ex" "$tmp/b/target-$v/release/examples/$ex"; then
+            identical+=(true)
+        else
+            identical+=(false)
+        fi
+    done
+    if $skipped; then
         for c in $cases; do
-            echo "| $ex | $c | - | - | skipped: does not build on base |" >>"$report"
+            echo "| $ex | $c | - | - | - | - | - | - | skipped: does not build on base |" >>"$report"
         done
         continue
     fi
-    identical=false
-    if cmp -s "$tmp/a/target/release/examples/$ex" "$tmp/b/target/release/examples/$ex"; then
-        identical=true
-    fi
     for c in $cases; do
-        a=$(refs a "$ex" "$c")
-        if $identical; then
-            echo "| $ex | $c | $a | $a | 0 (identical binary) |" >>"$report"
-            continue
-        fi
-        b=$(refs b "$ex" "$c")
-        diff=$((b - a))
-        pct=$(awk -v a="$a" -v d="$diff" 'BEGIN { printf "%+.4f", 100 * d / a }')
-        mark=""
-        if awk -v p="$pct" -v t="$tolerance" 'BEGIN { exit !(p > t) }'; then
-            mark=" **slower**"
+        read -r a1 b1 d1 <<<"$(compare "$ex" "$c" default "${identical[0]}")"
+        read -r a2 b2 d2 <<<"$(compare "$ex" "$c" cgu1 "${identical[1]}")"
+        verdict=""
+        s1=false s2=false
+        slower "$d1" && s1=true
+        slower "$d2" && s2=true
+        if $s1 && $s2; then
+            verdict="**slower**"
             regressions=$((regressions + 1))
+        elif $s1 || $s2; then
+            verdict="layout: slower in one build only"
+            shifts=$((shifts + 1))
         fi
-        echo "| $ex | $c | $a | $b | $diff ($pct %)$mark |" >>"$report"
+        echo "| $ex | $c | $a1 | $b1 | $d1 | $a2 | $b2 | $d2 | $verdict |" >>"$report"
     done
 done
 
+echo >>"$report"
 if [ "$regressions" -gt 0 ]; then
-    printf '\n%s case(s) execute more instructions than on base (tolerance %s %%).\n' \
+    printf '%s case(s) execute more instructions than on base in both builds (tolerance %s %%).\n' \
         "$regressions" "$tolerance" >>"$report"
 else
-    printf '\nNo case executes more instructions than on base.\n' >>"$report"
+    printf 'No case executes more instructions than on base in both builds.\n' >>"$report"
+fi
+if [ "$shifts" -gt 0 ]; then
+    printf '%s case(s) are slower in one build only: a shift in the code layout, not a cost (docs/performance.md).\n' \
+        "$shifts" >>"$report"
 fi
 
 cat "$report"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     cat "$report" >>"$GITHUB_STEP_SUMMARY"
+fi
+if [ "$shifts" -gt 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::warning::$shifts case(s) slower in one build only - a shift in the code layout; see the job summary."
 fi
 rm -f "$report"
 [ "$regressions" -eq 0 ]

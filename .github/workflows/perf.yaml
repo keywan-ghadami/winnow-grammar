@@ -39,8 +39,8 @@ jobs:
             exit 0
           fi
           if [ "$ACCEPTED" = true ]; then
-            echo "::warning::More instructions than on base - accepted by the label perf-accepted."
+            echo "::warning::More instructions than on base, in both builds - accepted by the label perf-accepted."
             exit 0
           fi
-          echo "::error::More instructions than on base. If the cost is deliberate - only a new feature's users pay it - say so in the pull request and add the label perf-accepted."
+          echo "::error::More instructions than on base, in both builds (the release profile and codegen-units 1). If the cost is deliberate - only a new feature's users pay it - say so in the pull request and add the label perf-accepted."
           exit 1

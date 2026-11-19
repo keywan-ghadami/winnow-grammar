@@ -88,6 +88,15 @@
   their tables. `docs/performance.md`, *What a count depends on*: numbers in
   pull requests, ADRs and this file carry that line.
 
+- **`compare-perf.sh` builds each revision twice**: with the release
+  profile as it is (what users get) and with `codegen-units = 1` (what the
+  change itself does, free of where the compiler splits the crate). A case
+  fails only if it is slower in both; slower in one only is reported as a
+  shift in the code layout, a warning. On ADR 28 (rustc 1.98.0, LLVM 22.1.8):
+  the merged change passes with `stream_profile stream` at +0.39 % / +0.0006 %,
+  its first version, a discard per item, fails at +14.4 % / +6.0 %.
+  `docs/performance.md`, *Two builds*.
+
 ### Fixed
 
 - **`_state` in the actions of a `#[stream]` rule's reader functions.** The
