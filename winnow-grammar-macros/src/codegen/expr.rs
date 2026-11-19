@@ -1677,7 +1677,7 @@ impl<'a> Codegen<'a> {
             }
             return quote_spanned! {span=> ::winnow::Parser::void(#run) };
         }
-        let p = self.generate_parser_expr(inner, is_lexical, false);
+        let p = self.generate_parser_expr(inner, is_lexical, is_discarded);
         let elem = if is_lexical {
             quote_spanned! {span=> #p }
         } else {
@@ -1745,7 +1745,7 @@ impl<'a> Codegen<'a> {
                 ..
             } => self.generate_rule_call_parser(rule_path, generics, args, is_lexical),
             ModelPattern::Lit { lit, .. } => self.lit_parser(lit),
-            ModelPattern::Group { alts, .. } => self.group_parser(alts, is_lexical),
+            ModelPattern::Group { alts, .. } => self.group_parser(alts, is_lexical, is_discarded),
             ModelPattern::Optional(inner, _) => {
                 let p = self.generate_parser_expr(inner, is_lexical, false);
                 quote_spanned! {span=> ::winnow_grammar::rt::opt_recording(#p) }
@@ -1824,17 +1824,29 @@ impl<'a> Codegen<'a> {
     }
 
     /// A group: its one alternative as a sequence, or all of them as an `alt`.
+    /// A discarded group's alternatives may yield different values (`x:any |
+    /// ":"` is a `char` and a `&str`), which `alt` cannot join, so each is
+    /// voided first: nobody looks at the value.
     fn group_parser(
         &self,
         alts: &[(Vec<ModelPattern>, Option<TokenStream>, Option<String>)],
         is_lexical: bool,
+        is_discarded: bool,
     ) -> TokenStream {
+        let span = Span::mixed_site();
         if alts.len() == 1 {
             self.generate_sequence_parser(&alts[0].0, is_lexical)
         } else {
             let alts: Vec<TokenStream> = alts
                 .iter()
-                .map(|(seq, _, _)| self.generate_sequence_parser(seq, is_lexical))
+                .map(|(seq, _, _)| {
+                    let p = self.generate_sequence_parser(seq, is_lexical);
+                    if is_discarded {
+                        quote_spanned! {span=> ::winnow::Parser::void(#p) }
+                    } else {
+                        p
+                    }
+                })
                 .collect();
             alt_of(alts)
         }
