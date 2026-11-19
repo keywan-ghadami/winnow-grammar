@@ -167,6 +167,24 @@ type, the generated parsers' signatures, or a grammar without `#[stream]`
 changes; with `WINNOW_GRAMMAR_EDGES=1` the whole suite runs once more with
 every grammar wrapped, and every result stays what it was.
 
+**Per-mode copies (2026-11-19).** The wrapping is the stream's business, but
+it was generated into the one parser every entry runs: a grammar that gains a
+`#[stream]` rule paid for `rt::edge` on its plain entries too. Nikaia's YAML
+bench, the same grammar parsing the same deep document in memory, counted
+340.8M instructions with the stream rule and 186.2M without it. Wrapping only
+the rules the stream reaches does not help where, as in YAML, the stream
+reaches the whole grammar. So such a grammar is now generated twice: a tracked
+copy, as above, under `__edge_parse_<rule>_inner` (with `__edge_WS`), which
+the readers' steps call and which calls only tracked copies; and a plain copy
+under the usual names, without `rt::edge*`, without moved spans and with the
+fixed runs of ADR 24 §8 back, behind `parse_<rule>` and every other plain
+entry. The duplication is the generator's: the runtime has one `edge` and
+does not know there are two copies. A plain parse in such a grammar is now
+the parse of the same grammar without its stream rule, and leaves `touched`
+and `reach` alone (`tests/stream_plain_entry_test.rs`); the cost is compile
+time and code size, about twice the parsers. `WINNOW_GRAMMAR_EDGES` still
+generates one tracked copy of everything, which is what it is for.
+
 ### The path
 
 `#[stream]` marks a rule that reaches one `fold(ITEM, init, step)`: the rule
@@ -489,10 +507,12 @@ only when it has a `#[stream]` rule.
 | `src/rt/reader.rs` | `Reading`, `Buf` (the read buffer, line counting, excerpts), stage 0's `fold_reader` |
 | `src/error.rs` | `Excerpt`, `render_excerpt` |
 
-`codegen::Codegen::streaming` is the one switch: true in a grammar with a
-`#[stream]` rule (or under `WINNOW_GRAMMAR_EDGES`), and every difference in
-generated code hangs off it - `edge()`, `origin()`, `span_moved()`, and the
-fixed runs of ADR 24 §8 turned off.
+`codegen::Codegen::streaming` is the one switch: true while the tracked copy
+of a grammar with a `#[stream]` rule is generated (`Codegen::dual`, *Per-mode
+copies* in §3), or for the one copy under `WINNOW_GRAMMAR_EDGES`, and every
+difference in generated code hangs off it - `edge()`, `origin()`,
+`span_moved()`, the fixed runs of ADR 24 §8 turned off, and the `__edge_`
+names of the tracked copy (`Codegen::inner_name`, `Codegen::ws`).
 
 ### What a change must keep
 

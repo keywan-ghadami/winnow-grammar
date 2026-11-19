@@ -67,6 +67,17 @@ impl<'a> Codegen<'a> {
 
         let inner_fn = self.inner_fn(rule, &inner_params_tokens, &body, &where_preds);
 
+        // The tracked copy of a grammar with a `#[stream]` rule is the inner
+        // parser and what the stream readers are made of; the entry points
+        // and the frame functions belong to the plain copy (ADR 27 §3).
+        if self.edge_copy() {
+            let stream_fns = self.generate_stream_fns(rule);
+            return quote! {
+                #inner_fn
+                #stream_fns
+            };
+        }
+
         let (rule_lifetimes, rule_others) = split_generics(gen_params);
         let outer_generics = quote! {
             'a, #(#rule_lifetimes,)* __WgS: ::std::fmt::Debug + Clone #state_bound #(, #rule_others)*
@@ -107,7 +118,11 @@ impl<'a> Codegen<'a> {
         };
 
         let frame_fns = self.generate_frame_fns(rule);
-        let stream_fns = self.generate_stream_fns(rule);
+        let stream_fns = if self.dual {
+            quote! {}
+        } else {
+            self.generate_stream_fns(rule)
+        };
 
         quote! {
             #inner_fn
@@ -181,7 +196,7 @@ impl<'a> Codegen<'a> {
         let input = &self.input_ident;
         let span = Span::mixed_site();
         let rule_name_str = rule.name.to_string();
-        let inner_fn_name = format_ident!("parse_{}_inner", rule.name, span = span);
+        let inner_fn_name = self.inner_name(&rule_name_str, self.edge_copy());
         let ret_type = &rule.return_type;
         // The public parser reports `ParseError`; inside, the rule is generic
         // over its error type `__WgEr` (ADR 17): the entry point instantiates it
@@ -196,10 +211,11 @@ impl<'a> Codegen<'a> {
             __WgEr: #rt_error #(, #rule_others)*
         };
 
+        let ws = self.ws();
         let ws_shadow = if rule_name_str == "WS" {
             quote_spanned! {span=>
                 #[allow(dead_code)]
-                fn WS<'a, __WgS: ::std::fmt::Debug + Clone, __WgEr>(_: &mut #input_ty) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
+                fn #ws<'a, __WgS: ::std::fmt::Debug + Clone, __WgEr>(_: &mut #input_ty) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
                     ::core::result::Result::Ok(())
                 }
             }
