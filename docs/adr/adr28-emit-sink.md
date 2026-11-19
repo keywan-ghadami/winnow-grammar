@@ -153,15 +153,18 @@ memory.
   field `emits` and the hidden type `EmitSink`. A struct literal of
   `ParseContext` without `..Default::default()` stops compiling, as with the
   hidden fields before it; nothing else changes for a caller.
-* Cost for those who do not emit (callgrind, `scripts/compare-perf.sh`,
-  Rust 1.98.0): `cut_profile` `stream_none` / `stream_cut` -0.09 %,
-  `stream_profile` `stream` (a `#[stream]` reader without `each`) +0.39 %,
-  one instruction per row, the other cases unchanged. The first version
-  discarded in the item loop and cost +14.9 % there. The remaining
-  instruction is no work of the sink: with every discard of the driver
-  removed the case counts 53.13 M instead of 52.73 M (base 52.53 M) - a
-  code-layout shift in the inlined item loop, accepted with `perf-accepted`
-  (`docs/performance.md`, *A shift in the code layout*).
+* Cost for those who do not emit (callgrind, `scripts/compare-perf.sh`;
+  rustc 1.98.0, LLVM 22.1.8, valgrind 3.26, codegen-units 16):
+  `cut_profile` `stream_none` / `stream_cut` -0.09 %, `stream_profile`
+  `stream` (a `#[stream]` reader without `each`) +0.39 %, one instruction
+  per row, the other cases unchanged. The first version discarded in the
+  item loop and cost +14.9 % there. The remaining instruction is no work of
+  the sink: with every discard of the driver removed the case counts
+  53.13 M instead of 52.73 M (base 52.53 M), and built with codegen-units 1
+  the difference is +0.0006 % (the first version: +6.0 %) - a code-layout
+  shift in the inlined item loop. Merged with `perf-accepted`; it led to
+  `compare-perf.sh` building twice and failing only on what is slower in
+  both builds (`docs/performance.md`, *Two builds*).
 * User documentation: SYNTAX.md, *Values from any action: `emit`*, after
   `#[stream(each)]`.
 * Where it lives: `src/winnow_grammar.rs` (`emit`, `EmitSink`),

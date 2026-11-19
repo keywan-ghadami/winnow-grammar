@@ -78,8 +78,24 @@
   without `each` does no emit work per item: `cut_profile` `stream_*` -0.09 %,
   `stream_profile` `stream` +0.39 % (one instruction per row, a code-layout
   shift in the item loop that removing the emit code entirely makes larger,
-  not smaller; `docs/performance.md`). SYNTAX.md, *Values from any action:
+  not smaller; measured with rustc 1.98.0, LLVM 22.1.8, valgrind 3.26,
+  codegen-units 16; `docs/performance.md`). SYNTAX.md, *Values from any action:
   `emit`*; `tests/stream_emit_test.rs`.
+
+- **Measurements say what they were measured with.** `scripts/perf-env.sh`
+  prints the rustc and LLVM version, valgrind and the release profile;
+  `compare-perf.sh`, `profile-cut.sh` and `profile-stream.sh` print it above
+  their tables. `docs/performance.md`, *What a count depends on*: numbers in
+  pull requests, ADRs and this file carry that line.
+
+- **`compare-perf.sh` builds each revision twice**: with the release
+  profile as it is (what users get) and with `codegen-units = 1` (what the
+  change itself does, free of where the compiler splits the crate). A case
+  fails only if it is slower in both; slower in one only is reported as a
+  shift in the code layout, a warning. On ADR 28 (rustc 1.98.0, LLVM 22.1.8):
+  the merged change passes with `stream_profile stream` at +0.39 % / +0.0006 %,
+  its first version, a discard per item, fails at +14.4 % / +6.0 %.
+  `docs/performance.md`, *Two builds*.
 
 ### Fixed
 

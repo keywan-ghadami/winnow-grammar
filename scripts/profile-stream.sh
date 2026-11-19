@@ -10,6 +10,7 @@ refs() {
     valgrind --tool=callgrind --callgrind-out-file="$out" "$bin" "$1" 2>&1 >/dev/null |
         awk '/refs/ { gsub(",", "", $NF); print $NF }'
 }
+"$(dirname "$0")/perf-env.sh"
 base=$(refs none)
 for case in plain memory stream frames_memory frames_reader; do
     printf '%-14s %s instructions/row\n' "$case" \
