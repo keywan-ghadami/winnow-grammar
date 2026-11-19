@@ -567,8 +567,11 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 input.state.reach = usize::MAX;
             }
             let cp = input.checkpoint();
-            // What an attempt before this one emitted was not taken.
-            input.state.emits.discard();
+            // Nothing is held here (ADR 28): an item that was taken handed
+            // its emits to `each` inside `f`, and an attempt that was not
+            // ends the loop, after which `items` discards what it emitted.
+            // Not discarded here: this is the hot loop of every stream.
+            debug_assert!(input.state.emits.is_empty());
             let r = f(&mut input, pass, *n + 1);
             if input.state.touched && !last {
                 input.reset(&cp);

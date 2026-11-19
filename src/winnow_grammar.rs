@@ -271,13 +271,32 @@ impl EmitSink {
         true
     }
 
+    /// Whether nothing is held.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
     /// Hands out what is held, oldest first, for `each`.
     pub fn drain(&mut self) -> std::vec::Drain<'_, Box<dyn Any + Send>> {
         self.pending.drain(..)
     }
 
     /// Drops what is held: its attempt was thrown away.
+    ///
+    /// The stream driver calls it around every attempt of every stream, with
+    /// `each` or without, so the common case - nothing held - is an inlined
+    /// length check; the drop loop of `clear` stays out of the hot path.
+    #[inline]
     pub fn discard(&mut self) {
+        if !self.pending.is_empty() {
+            self.discard_slow();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn discard_slow(&mut self) {
         self.pending.clear();
     }
 
