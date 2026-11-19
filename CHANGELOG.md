@@ -64,7 +64,28 @@
   captures the lifetimes of a rule's reference parameters by the 2024 rules,
   whatever the user's edition. The other two crates stay on 2021.
 
+- **`_state.emit(value)`: values from any action reach a stream's `each`**
+  (ADR 28). An action anywhere in a `parse_<rule>_reader_each` - the stream
+  rule's, one on its path, the item's or a rule nested in the item - hands a
+  value of the item type to `each`, in order with the items, once: values of
+  attempts the stream driver throws away (refills, diagnosing passes,
+  replays) are dropped. `Break` on an emitted value ends the parse as on an
+  item. Everywhere else `emit` returns `false` and drops the value; a value
+  of another type panics with both type names. New: `ParseContext::emit`,
+  the hidden field `ParseContext::emits` and type `EmitSink` (a struct
+  literal of `ParseContext` needs `..Default::default()`). Only
+  `#[stream(each)]` rules generate different code. A `#[stream]` reader
+  without `each` does no emit work per item: `cut_profile` `stream_*` -0.09 %,
+  `stream_profile` `stream` +0.39 % (one instruction per row, a code-layout
+  shift in the item loop that removing the emit code entirely makes larger,
+  not smaller; `docs/performance.md`). SYNTAX.md, *Values from any action:
+  `emit`*; `tests/stream_emit_test.rs`.
+
 ### Fixed
+
+- **`_state` in the actions of a `#[stream]` rule's reader functions.** The
+  binding was spanned `mixed_site`, so an action's own tokens could not name
+  it; it is spanned at the call site now, as in memory (ADR 28).
 
 - **A rule's own lifetime parameters.** `r<'x, T>(…)` put `'x` after the
   generated type parameters (`__WgS`, `__WgEr`), which Rust rejects; the
