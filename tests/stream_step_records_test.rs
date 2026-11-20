@@ -48,10 +48,11 @@ const SMALL: Reading = Reading {
 
 const MODES: [Diagnose; 3] = [Diagnose::Replay, Diagnose::ReplayInPlace, Diagnose::Eager];
 
-fn agree<M, R>(input: &str, mem_parse: M, reader_parse: R) -> ParseError
+fn agree<M, R, L>(input: &str, mem_parse: M, reader_parse: R, slice_parse: L) -> ParseError
 where
     M: Fn(&mut ParseInput<'_, ()>) -> Result<usize, ParseError>,
     R: Fn(Trickle<'_>, &mut ParseContext<()>) -> Result<usize, ParseError>,
+    L: Fn(&[u8], &mut ParseContext<()>) -> Result<usize, ParseError>,
 {
     let mut last = None;
     for mode in MODES {
@@ -75,6 +76,17 @@ where
                 "{input:?} {mode:?} step {step}: stream {got:?}\nmemory {mem:?}"
             );
         }
+        // The input all in memory: `parse_<rule>_slice`.
+        let mut ctx = ParseContext::<()> {
+            diagnose: mode,
+            ..Default::default()
+        };
+        let got = slice_parse(input.as_bytes(), &mut ctx).unwrap_err();
+        assert_eq!(
+            (got.offset, got.headline()),
+            (mem.offset, mem.headline()),
+            "{input:?} {mode:?} slice: stream {got:?}\nmemory {mem:?}"
+        );
         last = Some(mem);
     }
     last.unwrap()
@@ -86,6 +98,7 @@ fn what_a_prefix_gave_up_is_there_for_an_error_further_on() {
         "%@bX",
         |i| Steps::parse_head().parse_next(i),
         |r, c| Steps::parse_head_reader(r, c, SMALL),
+        Steps::parse_head_slice,
     );
     assert_eq!(mem.offset, 3, "{mem:?}");
     assert!(mem.to_string().contains("`c`"), "{mem}");
@@ -97,6 +110,7 @@ fn what_a_suffix_gave_up_is_there_for_an_error_further_on() {
         "#y;!qX",
         |i| Steps::parse_tail().parse_next(i),
         |r, c| Steps::parse_tail_reader(r, c, SMALL),
+        Steps::parse_tail_slice,
     );
     assert_eq!(mem.offset, 5, "{mem:?}");
     assert!(mem.to_string().contains("`r`"), "{mem}");
@@ -138,5 +152,42 @@ fn a_replayed_step_runs_its_actions_for_nothing() {
                 "{mode:?} step {step}"
             );
         }
+    }
+}
+
+// --- A step at the end of the stream is parsed once ------------------------
+
+/// Counts the parses of `head` across the copies the stream takes of the
+/// state: a copy shares the count.
+#[derive(Debug, Clone, Default)]
+pub struct Parses {
+    pub heads: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+grammar! {
+    grammar Once {
+        use super::Parses;
+        state Parses;
+
+        #[stream]
+        pub doc -> usize = _h:head n:fold(word, || 0usize, |n: usize, _w: ()| n + 1) -> { n }
+        head -> () = "%" raw_ident -> { let c = &_state.user().heads; c.set(c.get() + 1); }
+        word -> () = "#" raw_ident -> { }
+    }
+}
+
+/// The prefix is the whole input and touches the end of what was read; the
+/// read after it finds the end of the stream, and the attempt over the same
+/// bytes stands instead of being parsed again.
+#[test]
+fn a_step_that_ends_the_stream_is_parsed_once() {
+    let input = "%title";
+    for mode in [Diagnose::Replay, Diagnose::ReplayInPlace, Diagnose::Off] {
+        let mut ctx = ParseContext::with_state(Parses::default());
+        ctx.diagnose = mode;
+        let n =
+            Once::parse_doc_reader(Trickle(input.as_bytes(), 1 << 20), &mut ctx, SMALL).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(ctx.user_state.heads.get(), 1, "{mode:?}");
     }
 }

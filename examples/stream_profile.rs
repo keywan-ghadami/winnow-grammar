@@ -9,8 +9,10 @@
 //! | `plain` | the fold in memory, no edge tracking |
 //! | `memory` | the same fold in memory, in a grammar with a `#[stream]` rule |
 //! | `stream` | its `#[stream]` reader over a `Cursor` |
+//! | `slice` | the same rule over the input all in memory (`parse_ROWS_slice`): the plain steps |
 //! | `frames_memory` | `par_fold` in memory, `Parallelism::Off` |
 //! | `frames_reader` | its reader, `Parallelism::Off` |
+//! | `list` | 20 000 `#[stream]` readers of `[1,2,…,10]`: a prefix step, ten items and a suffix step each, 200 000 items in all, blocks of 64 bytes |
 
 use std::io::Cursor;
 use winnow::stream::LocatingSlice;
@@ -20,8 +22,7 @@ use winnow_grammar::{ParseContext, ParseInput};
 
 pub const ROWS: usize = 200_000;
 
-// The benchmark's grammars, which also hold `list`; this profile reads only
-// the rows.
+// The benchmark's grammars.
 #[path = "../benches/shared/stream.rs"]
 mod shared;
 use shared::{Plain, Tracked};
@@ -49,6 +50,10 @@ fn main() {
             Tracked::parse_ROWS_reader(Cursor::new(rows.as_bytes()), &mut ctx, Reading::default())
                 .unwrap()
         }
+        "slice" => {
+            let mut ctx = ParseContext::<()>::default();
+            Tracked::parse_ROWS_slice(rows.as_bytes(), &mut ctx).unwrap()
+        }
         "frames_memory" => {
             Plain::parse_FILE_pieces(&rows, &ParseContext::<()>::default(), Parallelism::Off)
                 .unwrap()
@@ -60,8 +65,28 @@ fn main() {
             Reading::default(),
         )
         .unwrap(),
+        "list" => {
+            let list = "[1,2,3,4,5,6,7,8,9,10]";
+            let mut sum = 0u64;
+            for _ in 0..ROWS / 10 {
+                let mut ctx = ParseContext::<()>::default();
+                let s = Tracked::parse_list_reader(
+                    Cursor::new(list.as_bytes()),
+                    &mut ctx,
+                    Reading {
+                        block: 64,
+                        ..Reading::default()
+                    },
+                )
+                .unwrap();
+                sum += s as u64;
+            }
+            sum
+        }
         _ => {
-            eprintln!("usage: stream_profile none|plain|memory|stream|frames_memory|frames_reader");
+            eprintln!(
+                "usage: stream_profile none|plain|memory|stream|frames_memory|frames_reader|list"
+            );
             std::process::exit(2);
         }
     };

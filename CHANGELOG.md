@@ -5,6 +5,20 @@
 
 ### Added
 
+- **`parse_<rule>_slice` and `parse_<rule>_slice_each`: a `#[stream]` rule
+  over an input that is all in memory.** The stream reads it at once
+  (`Stream::whole`), so every step has the rest of the input
+  (`Pass::last`), and the generated steps then run step functions made from
+  the plain rules (`…_plain`) instead of the edge-tracked copy: noting where
+  the window ends can change nothing there. In a grammar with a `#[stream]`
+  rule the plain copy moves its spans by `ParseContext::origin` too (0 in
+  memory), so positions agree. A diagnosis replays the fold's items from
+  its first, as the parse in memory does, since the plain parsers note no
+  reach. Errors are the parse in memory's (`stream_diagnose_test`,
+  `cut_error_wins_test`, `stream_step_records_test` check the slice under
+  every mode). callgrind, `examples/stream_profile.rs`: `slice` 49.6M
+  against `stream` 51.9M and `memory` 39.4M.
+
 - **`collect L;`: the collection a grammar's repetitions collect into.** A
   grammar that declares it collects every bound repetition (`xs:x*`, `xs:x+`,
   `xs:x{n,m}`, `xs:recover(r, s)*`) into `L<T>` instead of `Vec<T>`. `L` is a
@@ -98,6 +112,36 @@
   `docs/performance.md`, *Two builds*.
 
 ### Fixed
+
+- **An emit is a push, not a box.** The sink of `parse_<rule>_reader_each` /
+  `_slice_each` held each emitted item as a `Box<dyn Any + Send>` and
+  downcast it again for `each`; it now holds a `Vec` of the item type behind
+  one box, so an emit costs no allocation. `EmitSink::drain::<T>()` hands out
+  the items themselves; `set_aside` returns a `Kept`. Found by Nikaia #2435
+  (`EmitSink::push` 14.9M for 50,412 events of a yaml stream).
+
+- **A stream step at the end of the input is parsed once.** A prefix or
+  suffix whose fast attempt touched the end of its window was rolled back and
+  parsed again after the next read, even when that read found the end of the
+  stream and the window was unchanged; with a zero-sized state that read
+  comes only then, so the last step of every stream was parsed twice (a yaml
+  stream whose prefix holds its only document: the whole document). The read
+  now comes first, and when it brings nothing the attempt stands.
+  `tests/stream_step_records_test.rs`, *a step that ends the stream is parsed
+  once*.
+
+- **A stream diagnoses only on failure again (ADR 17).** A prefix or suffix
+  step that matched was parsed again by the diagnosing pass at once
+  (`record_chunk`), and so was the item before the end of every fold: a
+  successful stream paid for a diagnosis it never read, about as much as the
+  diagnosing pass of the whole step. These replays are now kept as pending
+  (`rt::stream::Replayer`, which the generated reader hands over when the
+  stream asks) and run only when a failure comes, a cut sets aside what was
+  recorded, or never, once the stream is past where their failures reached.
+  Messages are unchanged (the stream and diagnostics tests pass as they
+  were). callgrind, `examples/stream_profile.rs list`: 499 480 809 → 178 669
+  164 instructions. `Stream::chunk`, `items` and `finish` take the replayer
+  factory as a new last argument, and `rules` as `&'static`.
 
 - **`_state` in the actions of a `#[stream]` rule's reader functions.** The
   binding was spanned `mixed_site`, so an action's own tokens could not name

@@ -186,15 +186,17 @@ const EVERY_MODE: &[Diagnose] = &[Diagnose::Replay, Diagnose::ReplayInPlace, Dia
 
 /// The stream's answer for `input` under `modes` and every read size,
 /// against the parse in memory: the same offset, the same headline.
-fn stream_agrees<F, G>(
+fn stream_agrees<F, G, H>(
     input: &str,
     modes: &[Diagnose],
     mem_parse: F,
     reader_parse: G,
+    slice_parse: H,
 ) -> Vec<winnow_grammar::ParseError>
 where
     F: Fn(&mut ParseInput<'_, ()>) -> Result<usize, winnow_grammar::ParseError>,
     G: Fn(Trickle<'_>, &mut ParseContext<()>) -> Result<usize, winnow_grammar::ParseError>,
+    H: Fn(&[u8], &mut ParseContext<()>) -> Result<usize, winnow_grammar::ParseError>,
 {
     let mut out = Vec::new();
     for &mode in modes {
@@ -218,6 +220,17 @@ where
                 "{input:?} {mode:?} step {step}: stream {got:?}\nmemory {mem:?}"
             );
         }
+        // The input all in memory: `parse_<rule>_slice`.
+        let mut ctx = ParseContext::<()> {
+            diagnose: mode,
+            ..Default::default()
+        };
+        let got = slice_parse(input.as_bytes(), &mut ctx).unwrap_err();
+        assert_eq!(
+            (got.offset, got.headline()),
+            (mem.offset, mem.headline()),
+            "{input:?} {mode:?} slice: stream {got:?}\nmemory {mem:?}"
+        );
         out.push(mem);
     }
     out
@@ -232,6 +245,7 @@ fn a_record_from_an_earlier_step_does_not_beat_a_cut_failure_in_a_stream() {
         EVERY_MODE,
         |i| CutEdges::parse_far().parse_next(i),
         |r, c| CutEdges::parse_far_reader(r, c, SMALL),
+        CutEdges::parse_far_slice,
     ) {
         assert_eq!(mem.offset, 2, "{mem:?}");
         assert!(mem.to_string().contains("`w`"), "{mem}");
@@ -249,6 +263,7 @@ fn a_cut_in_the_stream_prefix_holds_through_the_fold() {
         EVERY_MODE,
         |i| CutEdges::parse_open().parse_next(i),
         |r, c| CutEdges::parse_open_reader(r, c, SMALL),
+        CutEdges::parse_open_slice,
     ) {
         assert_eq!(mem.offset, 3, "{mem:?}");
         assert!(mem.to_string().contains("`;`"), "{mem}");
@@ -262,6 +277,7 @@ fn a_cut_in_the_stream_prefix_holds_through_the_fold() {
         EVERY_MODE,
         |i| CutEdges::parse_open().parse_next(i),
         |r, c| CutEdges::parse_open_reader(r, c, SMALL),
+        CutEdges::parse_open_slice,
     ) {
         assert_eq!(mem.offset, 3, "{mem:?}");
         assert!(mem.to_string().contains("`c`"), "{mem}");
@@ -280,6 +296,7 @@ fn a_cut_scope_spanning_steps_ends_with_its_rule() {
         EVERY_MODE,
         |i| CutEdges::parse_nest().parse_next(i),
         |r, c| CutEdges::parse_nest_reader(r, c, SMALL),
+        CutEdges::parse_nest_slice,
     ) {
         assert_eq!(mem.offset, 6, "{mem:?}");
         assert!(mem.to_string().contains("`c`"), "{mem}");
@@ -298,6 +315,7 @@ fn a_failure_under_an_open_cut_scope_is_a_cut_failure_in_a_stream() {
         EVERY_MODE,
         |i| CutEdges::parse_outer().parse_next(i),
         |r, c| CutEdges::parse_outer_reader(r, c, SMALL),
+        CutEdges::parse_outer_slice,
     ) {
         assert_eq!(mem.offset, 5, "{mem:?}");
         assert!(mem.to_string().contains("`)`"), "{mem}");
@@ -334,5 +352,6 @@ fn a_step_parsed_again_gives_back_what_its_cut_set_aside() {
         EVERY_MODE,
         |i| CutEdges::parse_retry().parse_next(i),
         |r, c| CutEdges::parse_retry_reader(r, c, TINY),
+        CutEdges::parse_retry_slice,
     );
 }

@@ -374,3 +374,35 @@ fn a_user_state_that_is_not_empty_sees_each_item_once_too() {
         }
     }
 }
+
+/// All in memory (`parse_doc_slice_each`): every item seen once, in order,
+/// the value the reader's, and `Break` stops there.
+#[test]
+fn the_slice_sees_every_item_and_stops_at_break() {
+    let input = entries(40);
+    let want = items_in_memory(&input);
+    for mode in MODES {
+        let mut seen = Vec::new();
+        let r = Docs::parse_doc_slice_each(
+            input.as_bytes(),
+            &mut ctx(mode),
+            |&(k, v): &(&str, i64)| {
+                seen.push((k.to_string(), v));
+                ControlFlow::<usize>::Continue(())
+            },
+        );
+        assert_eq!(seen, want, "{mode:?}");
+        let plain = plain_reader(&input, 1 << 20, mode).unwrap();
+        assert_eq!(r.unwrap(), ControlFlow::Continue(plain), "{mode:?}");
+        let mut seen = 0;
+        let r = Docs::parse_doc_slice_each(input.as_bytes(), &mut ctx(mode), |_: &(&str, i64)| {
+            seen += 1;
+            if seen == 3 {
+                ControlFlow::Break(3usize)
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
+        assert_eq!(r.unwrap(), ControlFlow::Break(3), "{mode:?}");
+    }
+}

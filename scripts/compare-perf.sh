@@ -28,7 +28,7 @@ tolerance=${PERF_TOLERANCE_PCT:-0.01}
 # Every profile example and its cases. A new profile example goes here.
 profiles=(
     "cut_profile none stmts_none stmts_cut grouped_none grouped_cut stream_none stream_cut"
-    "stream_profile none plain memory stream frames_memory frames_reader"
+    "stream_profile none plain memory stream frames_memory frames_reader list"
     "param_profile none yaml"
 )
 

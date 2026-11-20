@@ -110,7 +110,8 @@ fn check(
     for input in inputs {
         for mode in MODES {
             let m = mem(input, mode);
-            for step in [1, 2, 3, 1 << 20] {
+            // Step 0: `parse_<rule>_slice`, the input all in memory.
+            for step in [0, 1, 2, 3, 1 << 20] {
                 agree(
                     &format!("{input:?} {mode:?} step {step}"),
                     &m,
@@ -131,7 +132,11 @@ fn a_failure_recorded_several_items_back_is_seen() {
                 diagnose: mode,
                 ..Default::default()
             };
-            Far::parse_DOC_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            if step == 0 {
+                Far::parse_DOC_slice(s.as_bytes(), &mut ctx)
+            } else {
+                Far::parse_DOC_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            }
         },
     );
 }
@@ -146,7 +151,11 @@ fn a_lookahead_that_reaches_past_items_is_seen() {
                 diagnose: mode,
                 ..Default::default()
             };
-            Far::parse_LIST_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            if step == 0 {
+                Far::parse_LIST_slice(s.as_bytes(), &mut ctx)
+            } else {
+                Far::parse_LIST_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            }
         },
     );
 }
@@ -177,7 +186,11 @@ fn every_short_input_agrees() {
                 diagnose: mode,
                 ..Default::default()
             };
-            Far::parse_DOC_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            if step == 0 {
+                Far::parse_DOC_slice(s.as_bytes(), &mut ctx)
+            } else {
+                Far::parse_DOC_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            }
         },
     );
     let list = all(&["x", ",", "?", ";"], 6);
@@ -190,7 +203,11 @@ fn every_short_input_agrees() {
                 diagnose: mode,
                 ..Default::default()
             };
-            Far::parse_LIST_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            if step == 0 {
+                Far::parse_LIST_slice(s.as_bytes(), &mut ctx)
+            } else {
+                Far::parse_LIST_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            }
         },
     );
 }
@@ -225,7 +242,11 @@ fn built_in_tokens_fail_where_they_begin() {
                 diagnose: mode,
                 ..Default::default()
             };
-            Atoms::parse_DOC_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            if step == 0 {
+                Atoms::parse_DOC_slice(s.as_bytes(), &mut ctx)
+            } else {
+                Atoms::parse_DOC_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            }
         },
     );
 }
@@ -242,7 +263,11 @@ fn an_option_or_a_repetition_that_reads_ahead_is_seen() {
                 diagnose: mode,
                 ..Default::default()
             };
-            Tails::parse_OPT_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            if step == 0 {
+                Tails::parse_OPT_slice(s.as_bytes(), &mut ctx)
+            } else {
+                Tails::parse_OPT_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            }
         },
     );
     check(
@@ -253,7 +278,11 @@ fn an_option_or_a_repetition_that_reads_ahead_is_seen() {
                 diagnose: mode,
                 ..Default::default()
             };
-            Tails::parse_REP_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            if step == 0 {
+                Tails::parse_REP_slice(s.as_bytes(), &mut ctx)
+            } else {
+                Tails::parse_REP_reader(Trickle(s.as_bytes(), step), &mut ctx, SMALL)
+            }
         },
     );
 }
