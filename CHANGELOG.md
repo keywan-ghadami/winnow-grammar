@@ -113,6 +113,13 @@
 
 ### Fixed
 
+- **An emit is a push, not a box.** The sink of `parse_<rule>_reader_each` /
+  `_slice_each` held each emitted item as a `Box<dyn Any + Send>` and
+  downcast it again for `each`; it now holds a `Vec` of the item type behind
+  one box, so an emit costs no allocation. `EmitSink::drain::<T>()` hands out
+  the items themselves; `set_aside` returns a `Kept`. Found by Nikaia #2435
+  (`EmitSink::push` 14.9M for 50,412 events of a yaml stream).
+
 - **A stream step at the end of the input is parsed once.** A prefix or
   suffix whose fast attempt touched the end of its window was rolled back and
   parsed again after the next read, even when that read found the end of the

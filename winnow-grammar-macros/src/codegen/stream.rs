@@ -945,10 +945,7 @@ fn each_tap(emitted: Option<&syn::Type>) -> (TokenStream, TokenStream) {
     if let Some(emitted) = emitted {
         (
             quote_spanned! {span=>
-                for __e in input.state.emits.drain() {
-                    let __e = *__e
-                        .downcast::<#emitted>()
-                        .expect("`emit` checked the type");
+                for __e in input.state.emits.drain::<#emitted>() {
                     if let ::core::ops::ControlFlow::Break(__b) = each(&__e) {
                         __broken = ::core::option::Option::Some(__b);
                         return ::core::result::Result::Err(::winnow_grammar::rt::stream::Fail::Stop);
@@ -976,10 +973,7 @@ fn each_tap(emitted: Option<&syn::Type>) -> (TokenStream, TokenStream) {
 fn deliver_emits(emitted: &syn::Type) -> TokenStream {
     let span = Span::mixed_site();
     quote_spanned! {span=>
-        for __e in __stream.context().emits.drain() {
-            let __e = *__e
-                .downcast::<#emitted>()
-                .expect("`emit` checked the type");
+        for __e in __stream.context().emits.drain::<#emitted>() {
             if let ::core::ops::ControlFlow::Break(__b) = each(&__e) {
                 return ::core::result::Result::Ok(::core::ops::ControlFlow::Break(__b));
             }
