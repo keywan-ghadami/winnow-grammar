@@ -43,6 +43,9 @@ pub fn edge<B: Slice, S: Clone + std::fmt::Debug, O, P, E>(
 where
     P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
+    // Only the tracked copy calls this: inlining it costs the plain
+    // entries nothing, and leaves `p` to the rule body around it.
+    #[inline(always)]
     move |input| {
         let before = input.eof_offset();
         let r = p.parse_next(input);
@@ -68,6 +71,9 @@ pub fn edge_reach<B: Slice, S: Clone + std::fmt::Debug, O, P, E>(
 where
     P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
+    // Only the tracked copy calls this: inlining it costs the plain
+    // entries nothing, and leaves `p` to the rule body around it.
+    #[inline(always)]
     move |input| {
         let before = input.eof_offset();
         let r = p.parse_next(input);

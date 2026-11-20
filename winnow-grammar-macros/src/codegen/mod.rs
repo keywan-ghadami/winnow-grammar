@@ -89,6 +89,10 @@ pub struct Codegen<'a> {
     /// In a grammar with a `#[stream]` rule, unless `WINNOW_GRAMMAR_EDGES`
     /// asks for one tracked copy of everything.
     pub dual: bool,
+    /// The rules the tracked copy of a `dual` grammar holds: the stream
+    /// rules, what they reach, and the grammar's own `WS`. A rule no stream
+    /// reaches is only ever parsed in memory and gets no tracked copy.
+    pub tracked_rules: std::collections::HashSet<String>,
     /// How far past where it stops, or where it began when it fails, any
     /// parser of this grammar looks - `rt::edge`'s `k`.
     pub edge_k: usize,
@@ -193,11 +197,22 @@ impl<'a> Codegen<'a> {
         let user_rules = grammar.rules.iter().map(|r| r.name.to_string()).collect();
         let all_edges = std::env::var_os("WINNOW_GRAMMAR_EDGES").is_some();
         let dual = streams.any() && !all_edges;
+        let tracked_rules = if dual {
+            let roots = streams
+                .paths
+                .keys()
+                .map(String::as_str)
+                .chain(grammar.rules.iter().any(|r| r.name == "WS").then_some("WS"));
+            winnow_grammar_model::frame::reached_rules(grammar, roots)
+        } else {
+            std::collections::HashSet::new()
+        };
         let reach = edge::reaches(grammar, &streams);
         Self {
             streams,
             streaming: std::cell::Cell::new(all_edges),
             dual,
+            tracked_rules,
             edge_k: edge::lookahead(grammar),
             reach,
             grammar,
@@ -212,8 +227,8 @@ impl<'a> Codegen<'a> {
     }
 
     /// The plain copy of every rule - the only one, unless the grammar has a
-    /// `#[stream]` rule - and then the tracked one (`dual`, ADR 27 §3,
-    /// *Per-mode copies*).
+    /// `#[stream]` rule - and then the tracked one of each rule a stream
+    /// reaches (`dual`, `tracked_rules`, ADR 27 §3, *Per-mode copies*).
     fn generate_rules(&self) -> (Vec<TokenStream>, Vec<TokenStream>) {
         let rules: Vec<TokenStream> = self
             .grammar
@@ -227,6 +242,7 @@ impl<'a> Codegen<'a> {
                 .grammar
                 .rules
                 .iter()
+                .filter(|r| self.tracked_rules.contains(&r.name.to_string()))
                 .map(|r| self.generate_rule(r))
                 .collect();
             self.streaming.set(false);
@@ -376,5 +392,66 @@ impl<'a> Codegen<'a> {
                 #(#tracked)*
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Codegen;
+    use quote::quote;
+    use winnow_grammar_model::parse_grammar;
+
+    /// The rules of `rules` that get a tracked copy (ADR 27 §3, *Per-mode
+    /// copies*), sorted; `None` where the grammar is not generated twice.
+    fn tracked(rules: proc_macro2::TokenStream) -> Option<Vec<String>> {
+        let parsed = parse_grammar::<crate::WinnowBackend>(quote! {
+            grammar G { #rules }
+        })
+        .unwrap();
+        let cg = Codegen::new(&parsed.grammar, parsed.frames, parsed.streams);
+        if !cg.dual {
+            return None;
+        }
+        let mut names: Vec<String> = cg.tracked_rules.iter().cloned().collect();
+        names.sort();
+        Some(names)
+    }
+
+    #[test]
+    fn only_what_a_stream_reaches_gets_a_tracked_copy() {
+        // `WINNOW_GRAMMAR_EDGES` asks for one tracked copy of everything.
+        if std::env::var_os("WINNOW_GRAMMAR_EDGES").is_some() {
+            return;
+        }
+        let rules = quote! {
+            #[stream]
+            pub list -> i64 = "[" s:fold(num, || 0i64, |a: i64, n: i64| a + n) "]" -> { s }
+            num -> i64 = n:i64 ","? peek(digit)? -> { n }
+            pub other -> i64 = "(" n:alone ")" -> { n }
+            alone -> i64 = n:i64 -> { n }
+        };
+        assert_eq!(tracked(rules), Some(vec!["list".into(), "num".into()]));
+    }
+
+    #[test]
+    fn the_grammar_s_own_ws_always_gets_one() {
+        if std::env::var_os("WINNOW_GRAMMAR_EDGES").is_some() {
+            return;
+        }
+        let rules = quote! {
+            WS -> () = " "* -> { }
+            #[stream]
+            pub list -> i64 = s:fold(num, || 0i64, |a: i64, n: i64| a + n) -> { s }
+            num -> i64 = n:i64 ";" -> { n }
+        };
+        assert_eq!(
+            tracked(rules),
+            Some(vec!["WS".into(), "list".into(), "num".into()])
+        );
+    }
+
+    #[test]
+    fn a_grammar_without_a_stream_rule_is_generated_once() {
+        assert_eq!(tracked(quote! { pub n -> i64 = n:i64 -> { n } }), None);
     }
 }

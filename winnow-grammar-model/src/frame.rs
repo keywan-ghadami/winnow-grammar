@@ -767,6 +767,25 @@ fn builtin_may_consume(name: &str, c: char) -> bool {
 // Reachability
 // -----------------------------------------------------------------------------
 
+/// Every rule of the grammar that one of `roots` reaches through calls,
+/// the roots included, and the grammar's own `WS` where a syntactic rule
+/// among them skips with it. Lookahead counts: what `peek(X)` runs is
+/// reached as much as what is consumed.
+pub fn reached_rules<'r>(
+    grammar: &GrammarDefinition,
+    roots: impl IntoIterator<Item = &'r str>,
+) -> HashSet<String> {
+    let user_rules: HashSet<String> = grammar.rules.iter().map(|r| r.name.to_string()).collect();
+    let has_user_ws = user_rules.contains("WS");
+    let mut reached = HashSet::new();
+    for root in roots {
+        if !reached.contains(root) {
+            reached.extend(walk(grammar, root, &user_rules, has_user_ws, false));
+        }
+    }
+    reached
+}
+
 /// The rules `frame` reaches, outermost first. With `consuming_only`, calls
 /// that only lookahead reaches are not followed: `peek(X)` and `not(X)` run
 /// `X` without consuming anything, so nothing `X` contains can carry the

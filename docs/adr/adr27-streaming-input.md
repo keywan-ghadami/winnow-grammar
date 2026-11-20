@@ -182,8 +182,25 @@ entry. The duplication is the generator's: the runtime has one `edge` and
 does not know there are two copies. A plain parse in such a grammar is now
 the parse of the same grammar without its stream rule, and leaves `touched`
 and `reach` alone (`tests/stream_plain_entry_test.rs`); the cost is compile
-time and code size, about twice the parsers. `WINNOW_GRAMMAR_EDGES` still
-generates one tracked copy of everything, which is what it is for.
+time and code size, at most twice the parsers: only the rules a stream rule
+reaches, and the grammar's own `WS`, get a tracked copy
+(`Codegen::tracked_rules`, `frame::reached_rules`), so a rule only ever
+parsed in memory is generated once. `WINNOW_GRAMMAR_EDGES` still generates
+one tracked copy of everything, which is what it is for.
+
+Two copies share the runtime's closures, and that moved the compiler's
+inlining: `rt::class`'s closure, the default whitespace skip's scan, now has
+two callers where it had one and was called at every skip instead of taken
+in. Its closure is `#[inline(always)]`, and so are the closures of `rt::edge`
+and `rt::edge_reach`, which only the tracked copy calls. With both,
+`examples/cut_profile.rs` counts fewer instructions than before the split in
+every case, the stream reader included (`stream_none` 507.9M -> 446.5M at
+one codegen unit), and `stream_profile`'s `memory` is `plain`'s. Its
+`stream` stays about 5 % above: the tracked `LINE` now has one caller and is
+inlined into the reader's step, where it costs some 17 instructions a row
+more than called. Marking the tracked copy `#[inline(never)]` gave that back
+at one codegen unit and lost more elsewhere; marking `rt::expected` like
+`rt::class` made the plain parse slower. Both were measured and left out.
 
 ### The path
 
@@ -512,7 +529,8 @@ of a grammar with a `#[stream]` rule is generated (`Codegen::dual`, *Per-mode
 copies* in §3), or for the one copy under `WINNOW_GRAMMAR_EDGES`, and every
 difference in generated code hangs off it - `edge()`, `origin()`,
 `span_moved()`, the fixed runs of ADR 24 §8 turned off, and the `__edge_`
-names of the tracked copy (`Codegen::inner_name`, `Codegen::ws`).
+names of the tracked copy (`Codegen::inner_name`, `Codegen::ws`), which
+holds only `Codegen::tracked_rules`.
 
 ### What a change must keep
 
