@@ -76,11 +76,23 @@ pub struct Codegen<'a> {
     pub cut_counter: std::cell::Cell<usize>,
     /// `#[stream]` rules and their paths (ADR 27 §3).
     pub streams: Streams,
-    /// Whether every parser is wrapped in `rt::edge`: in a grammar with a
-    /// `#[stream]` rule, or where `WINNOW_GRAMMAR_EDGES` is set when the
-    /// macro expands - which is how the whole test suite is run once with
-    /// the wrapping on, to show that it changes no result.
-    pub streaming: bool,
+    /// Whether the parsers being generated now are wrapped in `rt::edge`.
+    /// In a grammar with a `#[stream]` rule it is set while the tracked
+    /// copies are generated and clear for the plain ones (`dual`); where
+    /// `WINNOW_GRAMMAR_EDGES` is set when the macro expands it is set for
+    /// the one copy there is - which is how the whole test suite is run once
+    /// with the wrapping on, to show that it changes no result.
+    pub streaming: std::cell::Cell<bool>,
+    /// Whether every rule's parser is generated twice (ADR 27 §3, *Per-mode
+    /// copies*): untracked for the plain entry points, and tracked under
+    /// `__edge_…` names for the stream readers and everything they reach.
+    /// In a grammar with a `#[stream]` rule, unless `WINNOW_GRAMMAR_EDGES`
+    /// asks for one tracked copy of everything.
+    pub dual: bool,
+    /// The rules the tracked copy of a `dual` grammar holds: the stream
+    /// rules, what they reach, and the grammar's own `WS`. A rule no stream
+    /// reaches is only ever parsed in memory and gets no tracked copy.
+    pub tracked_rules: std::collections::HashSet<String>,
     /// How far past where it stops, or where it began when it fails, any
     /// parser of this grammar looks - `rt::edge`'s `k`.
     pub edge_k: usize,
@@ -114,6 +126,32 @@ impl Codegen<'_> {
         match &self.grammar.collect {
             Some(path) => quote! { #path },
             None => quote! { ::std::vec::Vec },
+        }
+    }
+
+    /// The whitespace skip the parsers being generated call: `WS`, or its
+    /// tracked copy `__edge_WS` while the tracked copies are generated.
+    pub fn ws(&self) -> syn::Ident {
+        if self.edge_copy() {
+            format_ident!("__edge_WS", span = Span::call_site())
+        } else {
+            format_ident!("WS", span = Span::call_site())
+        }
+    }
+
+    /// Whether the tracked copy of a `dual` grammar is being generated.
+    pub fn edge_copy(&self) -> bool {
+        self.dual && self.streaming.get()
+    }
+
+    /// The name of a rule's inner parser: `parse_<rule>_inner`, or
+    /// `__edge_parse_<rule>_inner` for the tracked copy.
+    pub fn inner_name(&self, rule: &str, tracked: bool) -> syn::Ident {
+        let span = Span::mixed_site();
+        if tracked && self.dual {
+            format_ident!("__edge_parse_{}_inner", rule, span = span)
+        } else {
+            format_ident!("parse_{}_inner", rule, span = span)
         }
     }
 
@@ -157,11 +195,24 @@ impl Codegen<'_> {
 impl<'a> Codegen<'a> {
     pub fn new(grammar: &'a GrammarDefinition, frames: Frames, streams: Streams) -> Self {
         let user_rules = grammar.rules.iter().map(|r| r.name.to_string()).collect();
-        let streaming = streams.any() || std::env::var_os("WINNOW_GRAMMAR_EDGES").is_some();
+        let all_edges = std::env::var_os("WINNOW_GRAMMAR_EDGES").is_some();
+        let dual = streams.any() && !all_edges;
+        let tracked_rules = if dual {
+            let roots = streams
+                .paths
+                .keys()
+                .map(String::as_str)
+                .chain(grammar.rules.iter().any(|r| r.name == "WS").then_some("WS"));
+            winnow_grammar_model::frame::reached_rules(grammar, roots)
+        } else {
+            std::collections::HashSet::new()
+        };
         let reach = edge::reaches(grammar, &streams);
         Self {
             streams,
-            streaming,
+            streaming: std::cell::Cell::new(all_edges),
+            dual,
+            tracked_rules,
             edge_k: edge::lookahead(grammar),
             reach,
             grammar,
@@ -175,18 +226,109 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    pub fn generate(&mut self) -> syn::Result<TokenStream> {
-        let grammar_name = &self.grammar.name;
-        let span = Span::mixed_site();
-        let use_statements = &self.grammar.uses;
-        let input = &self.input_ident;
+    /// The plain copy of every rule - the only one, unless the grammar has a
+    /// `#[stream]` rule - and then the tracked one of each rule a stream
+    /// reaches (`dual`, `tracked_rules`, ADR 27 §3, *Per-mode copies*).
+    fn generate_rules(&self) -> (Vec<TokenStream>, Vec<TokenStream>) {
+        let rules: Vec<TokenStream> = self
+            .grammar
+            .rules
+            .iter()
+            .map(|r| self.generate_rule(r))
+            .collect();
+        let tracked: Vec<TokenStream> = if self.dual {
+            self.streaming.set(true);
+            let tracked = self
+                .grammar
+                .rules
+                .iter()
+                .filter(|r| self.tracked_rules.contains(&r.name.to_string()))
+                .map(|r| self.generate_rule(r))
+                .collect();
+            self.streaming.set(false);
+            tracked
+        } else {
+            Vec::new()
+        };
+        (rules, tracked)
+    }
 
+    /// The whitespace skip `WS` the generated parsers call between tokens:
+    /// the user's `WS` rule, or the default scan. In a grammar generated
+    /// twice (`dual`) also `__edge_WS`, the one the tracked copy calls.
+    fn generate_ws(&self) -> TokenStream {
+        let span = Span::mixed_site();
+        let input = &self.input_ident;
         let has_user_ws = self.user_rules.contains("WS");
         let input_ty = self.input_ty();
         let rt_error = self.rt_error();
         let rts = self.rts();
 
-        let rules = self.grammar.rules.iter().map(|r| self.generate_rule(r));
+        let class = quote_spanned! {span=>
+            #rts::class::<__WgS, __WgEr>(::winnow_grammar::ascii::AsciiClass::MULTISPACE, 0)
+        };
+        let default_ws = self.edge(class.clone(), None);
+
+        // If user defined WS, we alias WS to parse_WS_inner so that internal usage (and wrappers) call the inner parser directly.
+        let ws_parser = if has_user_ws {
+            quote_spanned! {span=>
+                #[allow(unused_imports)]
+                use parse_WS_inner as WS;
+            }
+        } else {
+            quote_spanned! {span=>
+                // Whitespace handling (similar to syn)
+                #[allow(dead_code)]
+                fn WS<'a, __WgS: ::std::fmt::Debug + Clone, __WgEr: #rt_error>(
+                    #input: &mut #input_ty,
+                ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
+                    use ::winnow::Parser;
+                    // The default whitespace skip runs between every two
+                    // tokens, so it is the hottest scan in a generated parser
+                    // - and a word at a time (`src/ascii.rs`), not a
+                    // character at a time.
+                    #default_ws
+                    .parse_next(#input)
+                    .map(|_| ())
+                }
+            }
+        };
+        if self.dual {
+            let edge_ws = format_ident!("__edge_WS", span = Span::call_site());
+            let edge_ws = if has_user_ws {
+                let inner = self.inner_name("WS", true);
+                quote_spanned! {span=>
+                    #[allow(unused_imports)]
+                    use #inner as #edge_ws;
+                }
+            } else {
+                self.streaming.set(true);
+                let tracked_ws = self.edge(class, None);
+                self.streaming.set(false);
+                quote_spanned! {span=>
+                    #[allow(dead_code, non_snake_case)]
+                    fn #edge_ws<'a, __WgS: ::std::fmt::Debug + Clone, __WgEr: #rt_error>(
+                        #input: &mut #input_ty,
+                    ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
+                        use ::winnow::Parser;
+                        #tracked_ws
+                        .parse_next(#input)
+                        .map(|_| ())
+                    }
+                }
+            };
+            quote! { #ws_parser #edge_ws }
+        } else {
+            ws_parser
+        }
+    }
+
+    pub fn generate(&mut self) -> syn::Result<TokenStream> {
+        let grammar_name = &self.grammar.name;
+        let span = Span::mixed_site();
+        let use_statements = &self.grammar.uses;
+
+        let (rules, tracked) = self.generate_rules();
 
         let use_super = quote_spanned! {Span::call_site()=> use super::*; };
 
@@ -223,37 +365,7 @@ impl<'a> Codegen<'a> {
             None => quote! {},
         };
 
-        let default_ws = self.edge(
-            quote_spanned! {span=>
-                #rts::class::<__WgS, __WgEr>(::winnow_grammar::ascii::AsciiClass::MULTISPACE, 0)
-            },
-            None,
-        );
-
-        // If user defined WS, we alias WS to parse_WS_inner so that internal usage (and wrappers) call the inner parser directly.
-        let ws_parser = if has_user_ws {
-            quote_spanned! {span=>
-                #[allow(unused_imports)]
-                use parse_WS_inner as WS;
-            }
-        } else {
-            quote_spanned! {span=>
-                // Whitespace handling (similar to syn)
-                #[allow(dead_code)]
-                fn WS<'a, __WgS: ::std::fmt::Debug + Clone, __WgEr: #rt_error>(
-                    #input: &mut #input_ty,
-                ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
-                    use ::winnow::Parser;
-                    // The default whitespace skip runs between every two
-                    // tokens, so it is the hottest scan in a generated parser
-                    // - and a word at a time (`src/ascii.rs`), not a
-                    // character at a time.
-                    #default_ws
-                    .parse_next(#input)
-                    .map(|_| ())
-                }
-            }
-        };
+        let ws_parser = self.generate_ws();
 
         Ok(quote_spanned! {span=>
             #[allow(non_snake_case)]
@@ -277,7 +389,69 @@ impl<'a> Codegen<'a> {
                 #ws_parser
 
                 #(#rules)*
+                #(#tracked)*
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Codegen;
+    use quote::quote;
+    use winnow_grammar_model::parse_grammar;
+
+    /// The rules of `rules` that get a tracked copy (ADR 27 §3, *Per-mode
+    /// copies*), sorted; `None` where the grammar is not generated twice.
+    fn tracked(rules: proc_macro2::TokenStream) -> Option<Vec<String>> {
+        let parsed = parse_grammar::<crate::WinnowBackend>(quote! {
+            grammar G { #rules }
+        })
+        .unwrap();
+        let cg = Codegen::new(&parsed.grammar, parsed.frames, parsed.streams);
+        if !cg.dual {
+            return None;
+        }
+        let mut names: Vec<String> = cg.tracked_rules.iter().cloned().collect();
+        names.sort();
+        Some(names)
+    }
+
+    #[test]
+    fn only_what_a_stream_reaches_gets_a_tracked_copy() {
+        // `WINNOW_GRAMMAR_EDGES` asks for one tracked copy of everything.
+        if std::env::var_os("WINNOW_GRAMMAR_EDGES").is_some() {
+            return;
+        }
+        let rules = quote! {
+            #[stream]
+            pub list -> i64 = "[" s:fold(num, || 0i64, |a: i64, n: i64| a + n) "]" -> { s }
+            num -> i64 = n:i64 ","? peek(digit)? -> { n }
+            pub other -> i64 = "(" n:alone ")" -> { n }
+            alone -> i64 = n:i64 -> { n }
+        };
+        assert_eq!(tracked(rules), Some(vec!["list".into(), "num".into()]));
+    }
+
+    #[test]
+    fn the_grammar_s_own_ws_always_gets_one() {
+        if std::env::var_os("WINNOW_GRAMMAR_EDGES").is_some() {
+            return;
+        }
+        let rules = quote! {
+            WS -> () = " "* -> { }
+            #[stream]
+            pub list -> i64 = s:fold(num, || 0i64, |a: i64, n: i64| a + n) -> { s }
+            num -> i64 = n:i64 ";" -> { n }
+        };
+        assert_eq!(
+            tracked(rules),
+            Some(vec!["WS".into(), "list".into(), "num".into()])
+        );
+    }
+
+    #[test]
+    fn a_grammar_without_a_stream_rule_is_generated_once() {
+        assert_eq!(tracked(quote! { pub n -> i64 = n:i64 -> { n } }), None);
     }
 }

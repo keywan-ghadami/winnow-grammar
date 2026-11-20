@@ -265,6 +265,10 @@ pub fn class<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
     class: AsciiClass,
     min: usize,
 ) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<&'a str, ErrMode<E>> {
+    // Always inlined: the whitespace skip of both copies of a stream
+    // grammar (ADR 27 §3, *Per-mode copies*) shares this closure, and with
+    // two callers the compiler would call it at every skip instead.
+    #[inline(always)]
     move |input| {
         let n = class.run(input.as_bstr());
         if n < min {

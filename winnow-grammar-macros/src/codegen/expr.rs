@@ -443,7 +443,7 @@ impl<'a> Codegen<'a> {
         // Not where edges are tracked: a run reads by index, past every
         // parser that would note the end (ADR 27 §3).
         if is_lexical
-            && !self.streaming
+            && !self.streaming.get()
             && let Some(steps) = self.fixed_sequence_steps(patterns, in_cut)
         {
             return steps;
@@ -460,7 +460,7 @@ impl<'a> Codegen<'a> {
             }
 
             if i > 0 && !is_lexical {
-                steps.push(Self::skip_stmt(input, skip_in_cut));
+                steps.push(self.skip_stmt(input, skip_in_cut));
             }
 
             steps.push(self.generate_step(p, in_cut, is_lexical));
@@ -470,11 +470,12 @@ impl<'a> Codegen<'a> {
 
     /// The trivia skip between two elements, as a statement: under a cut a
     /// failing skip is a cut failure.
-    pub fn skip_stmt(input: &syn::Ident, in_cut: bool) -> TokenStream {
+    pub fn skip_stmt(&self, input: &syn::Ident, in_cut: bool) -> TokenStream {
+        let ws = self.ws();
         if in_cut {
-            quote! { ::winnow_grammar::rt::skip_trivia_cut(WS, #input)?; }
+            quote! { ::winnow_grammar::rt::skip_trivia_cut(#ws, #input)?; }
         } else {
-            quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
+            quote! { ::winnow_grammar::rt::skip_trivia(#ws, #input)?; }
         }
     }
 
@@ -571,7 +572,7 @@ impl<'a> Codegen<'a> {
     /// In a stream's steps, a span bound with `@` is moved to the whole
     /// input's positions.
     fn span_moved(&self, span_var: &syn::Ident) -> TokenStream {
-        if !self.streaming {
+        if !self.streaming.get() {
             return TokenStream::new();
         }
         let input = &self.input_ident;
@@ -611,7 +612,7 @@ impl<'a> Codegen<'a> {
 
         // Infix WS between Open and Inner
         let ws_before_inner = if !is_lexical {
-            Self::skip_stmt(input, in_cut)
+            self.skip_stmt(input, in_cut)
         } else {
             quote! {}
         };
@@ -629,7 +630,7 @@ impl<'a> Codegen<'a> {
 
         // Infix WS between Inner and Close
         let ws_before_close = if !is_lexical {
-            Self::skip_stmt(input, final_cut)
+            self.skip_stmt(input, final_cut)
         } else {
             quote! {}
         };
@@ -997,7 +998,7 @@ impl<'a> Codegen<'a> {
 
             let input_ty = self.input_ty();
             // --- Normal function call for NON-template rules ---
-            let fn_name = quote::format_ident!("parse_{}_inner", rule_name, span = span);
+            let fn_name = self.inner_name(&name_str, self.edge_copy());
             if args.is_empty() {
                 return quote_spanned! {span=> (|i: &mut #input_ty| #fn_name(i)) };
             } else {
@@ -1664,6 +1665,7 @@ impl<'a> Codegen<'a> {
         is_lexical: bool,
         is_discarded: bool,
     ) -> TokenStream {
+        let ws = self.ws();
         let input_ty = self.input_ty();
         let span = Span::mixed_site();
         // A character loop nobody looks at is a scan. One that is bound still
@@ -1682,7 +1684,7 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=> #p }
         } else {
             // `WS` is a function and `preceded` wants a parser.
-            quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p) }
+            quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(#ws, i), #p) }
         };
         let counting = quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting_bounded(#min, #max, #elem) };
         if is_discarded {
@@ -1879,11 +1881,12 @@ impl<'a> Codegen<'a> {
     /// `count(p)`: how many times `p` matches, skipping trivia before each
     /// match outside a lexical rule.
     fn count_parser(&self, pattern: &ModelPattern, is_lexical: bool) -> TokenStream {
+        let ws = self.ws();
         let input_ty = self.input_ty();
         let span = Span::mixed_site();
         let p = self.generate_parser_expr(pattern, is_lexical, false);
         if !is_lexical {
-            quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p)) }
+            quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(#ws, i), #p)) }
         } else {
             quote_spanned! {span=> ::winnow_grammar::rt::repeat_counting(0, #p) }
         }
@@ -1982,6 +1985,7 @@ impl<'a> Codegen<'a> {
     /// computed bounds, else the recording fold - in place when the step
     /// takes its accumulator `&mut`, the `par_fold` one when it has a merge.
     fn fold_parser(&self, fold: &ModelPattern, is_lexical: bool) -> TokenStream {
+        let ws = self.ws();
         let input_ty = self.input_ty();
         let span = Span::mixed_site();
         let ModelPattern::Fold {
@@ -2002,7 +2006,7 @@ impl<'a> Codegen<'a> {
         let p = if is_lexical {
             p
         } else {
-            quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #p) }
+            quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(#ws, i), #p) }
         };
         // The fold of a `par_fold` rule leaves a trail for the replay
         // of a failed fast pass (`rt::entry_framed`).
@@ -2029,7 +2033,7 @@ impl<'a> Codegen<'a> {
                     if is_lexical {
                         q
                     } else {
-                        quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #q) }
+                        quote_spanned! {span=> ::winnow::combinator::preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(#ws, i), #q) }
                     }
                 }
                 None => quote_spanned! {span=> ::winnow_grammar::rt::no_sep },
@@ -2096,6 +2100,7 @@ impl<'a> Codegen<'a> {
         is_lexical: bool,
         discard: bool,
     ) -> TokenStream {
+        let ws = self.ws();
         let input_ty = self.input_ty();
         let span = Span::mixed_site();
         let mut parsers = Vec::new();
@@ -2109,7 +2114,7 @@ impl<'a> Codegen<'a> {
             if let ModelPattern::Cut(_) = p {
                 in_cut = true;
                 if i > 0 && !is_lexical {
-                    parsers.push(quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i)) });
+                    parsers.push(quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(#ws, i)) });
                 }
                 let p_expr = self.generate_parser_expr(p, is_lexical, discard);
                 if in_cut {
@@ -2124,11 +2129,11 @@ impl<'a> Codegen<'a> {
             if i > 0 && !is_lexical {
                 if in_cut {
                     parsers.push(
-                        quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia_cut(WS, i)) },
+                        quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia_cut(#ws, i)) },
                     );
                 } else {
                     parsers.push(
-                        quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i)) },
+                        quote_spanned! {span=> (|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(#ws, i)) },
                     );
                 }
             }
@@ -2167,6 +2172,7 @@ impl<'a> Codegen<'a> {
         close: &str,
         is_lexical: bool,
     ) -> TokenStream {
+        let ws = self.ws();
         let input_ty = self.input_ty();
         let span = Span::mixed_site();
         let inner_parser = self.generate_sequence_parser(inner, is_lexical);
@@ -2179,7 +2185,7 @@ impl<'a> Codegen<'a> {
         let close = if is_lexical {
             close_p
         } else {
-            quote_spanned! {span=> preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #close_p) }
+            quote_spanned! {span=> preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(#ws, i), #close_p) }
         };
         let close = if has_cut(inner) {
             quote_spanned! {span=> ::winnow::combinator::cut_err(#close) }
@@ -2195,7 +2201,7 @@ impl<'a> Codegen<'a> {
             // Infix logic: Open, WS, Inner, WS, Close
             // This is: delimited(open, preceded(WS, inner), preceded(WS, close))
             quote_spanned! {span=>
-                delimited(#open_p, preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(WS, i), #inner_parser), #close)
+                delimited(#open_p, preceded(|i: &mut #input_ty| ::winnow_grammar::rt::skip_trivia(#ws, i), #inner_parser), #close)
             }
         }
     }

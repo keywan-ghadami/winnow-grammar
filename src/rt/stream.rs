@@ -43,6 +43,9 @@ pub fn edge<B: Slice, S: Clone + std::fmt::Debug, O, P, E>(
 where
     P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
+    // Only the tracked copy calls this: inlining it costs the plain
+    // entries nothing, and leaves `p` to the rule body around it.
+    #[inline(always)]
     move |input| {
         let before = input.eof_offset();
         let r = p.parse_next(input);
@@ -68,6 +71,9 @@ pub fn edge_reach<B: Slice, S: Clone + std::fmt::Debug, O, P, E>(
 where
     P: Parser<Input<B, S>, O, ErrMode<E>>,
 {
+    // Only the tracked copy calls this: inlining it costs the plain
+    // entries nothing, and leaves `p` to the rule body around it.
+    #[inline(always)]
     move |input| {
         let before = input.eof_offset();
         let r = p.parse_next(input);
@@ -235,6 +241,116 @@ impl Fail {
         match self {
             Fail::Backtrack(e) | Fail::Cut(e) => e,
             Fail::Stop => None,
+        }
+    }
+}
+
+/// The fast pass's error in a stream's steps: `EmptyError` under another
+/// name. It carries nothing and does nothing that `EmptyError` does not; it
+/// exists so that the tracked copy of a grammar with a `#[stream]` rule
+/// instantiates every generic parser it reaches for a type of its own (ADR
+/// 27 §3, *Per-mode copies*). With one type for both copies, each runtime
+/// parser - a number, a scan, a literal - had a caller in each copy, and the
+/// compiler called it from both instead of taking it into the rule, as it
+/// does where there is one copy. With its own type each copy compiles as
+/// the only one.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EdgeEmpty;
+
+impl<I: winnow::stream::Stream> winnow::error::ParserError<I> for EdgeEmpty {
+    type Inner = Self;
+
+    #[inline(always)]
+    fn from_input(_: &I) -> Self {
+        Self
+    }
+
+    #[inline(always)]
+    fn into_inner(self) -> Result<Self::Inner, Self> {
+        Ok(self)
+    }
+}
+
+impl<I: winnow::stream::Stream, C> winnow::error::AddContext<I, C> for EdgeEmpty {}
+
+impl<I, X> winnow::error::FromExternalError<I, X> for EdgeEmpty {
+    #[inline(always)]
+    fn from_external_error(_input: &I, _e: X) -> Self {
+        Self
+    }
+}
+
+impl std::fmt::Display for EdgeEmpty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        "failed to parse".fmt(f)
+    }
+}
+
+impl crate::Diagnostics for EdgeEmpty {
+    const RECORDING: bool = false;
+
+    #[inline(always)]
+    fn fail<I: winnow::stream::Stream + winnow::stream::Location + winnow::stream::AsBStr>(
+        _input: &I,
+        _message: &'static str,
+    ) -> Self {
+        Self
+    }
+
+    #[inline(always)]
+    fn item(self, _index: usize) -> Self {
+        self
+    }
+
+    #[inline(always)]
+    fn labelled(self, _start: usize, _label: &'static str) -> Self {
+        self
+    }
+
+    #[inline(always)]
+    fn expected(self, _start: usize, _what: &'static str) -> Self {
+        self
+    }
+
+    #[inline(always)]
+    fn in_lookahead(self) -> Self {
+        self
+    }
+
+    #[inline(always)]
+    fn record<S>(&self, _ctx: &mut crate::ParseContext<S>, _start: usize) {}
+
+    #[inline(always)]
+    fn record_if_begun<S>(&self, _ctx: &mut crate::ParseContext<S>, _start: usize) {}
+
+    #[inline(always)]
+    fn from_parse_error(_e: ParseError) -> Self {
+        Self
+    }
+
+    #[inline(always)]
+    fn into_parse_error(self) -> Option<ParseError> {
+        None
+    }
+
+    #[inline(always)]
+    fn external<
+        I: winnow::stream::Stream + winnow::stream::Location + winnow::stream::AsBStr,
+        X: std::fmt::Display,
+    >(
+        _input: &I,
+        _e: X,
+    ) -> Self {
+        Self
+    }
+}
+
+impl From<ErrMode<EdgeEmpty>> for Fail {
+    fn from(e: ErrMode<EdgeEmpty>) -> Self {
+        match e {
+            ErrMode::Backtrack(_) => Fail::Backtrack(None),
+            _ => Fail::Cut(None),
         }
     }
 }

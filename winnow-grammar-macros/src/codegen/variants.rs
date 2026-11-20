@@ -12,6 +12,7 @@ impl<'a> Codegen<'a> {
         is_rule_start: bool,
         label: Option<&str>,
     ) -> TokenStream {
+        let ws = self.ws();
         let span = Span::mixed_site();
         let input = &self.input_ident;
 
@@ -49,7 +50,7 @@ impl<'a> Codegen<'a> {
             let body = if hoist && label.is_none() && !is_lexical {
                 quote_spanned! {span=>
                     {
-                        ::winnow_grammar::rt::skip_trivia(WS, #input)?;
+                        ::winnow_grammar::rt::skip_trivia(#ws, #input)?;
                         #body
                     }
                 }
@@ -64,13 +65,14 @@ impl<'a> Codegen<'a> {
     /// when it is its own, its elements, and the `_span` they cover when the
     /// alternative asked for it.
     fn variant_steps(&self, v: &RuleVariant, is_lexical: bool, skip_inside: bool) -> TokenStream {
+        let ws = self.ws();
         let input = &self.input_ident;
         let origin = self.origin();
         let mut steps_code = TokenStream::new();
 
         // 1. Optional Leading WS
         if skip_inside && !is_lexical {
-            steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
+            steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(#ws, #input)?; });
         }
 
         // 2. Capture Start
@@ -243,6 +245,7 @@ impl<'a> Codegen<'a> {
         is_rule_start: bool,
         is_lexical: bool,
     ) -> TokenStream {
+        let ws = self.ws();
         let input_ty = self.input_ty();
         let Some(label) = label else {
             return body;
@@ -250,7 +253,7 @@ impl<'a> Codegen<'a> {
         let span = Span::mixed_site();
         let input = &self.input_ident;
         let lead = if is_rule_start && !is_lexical {
-            quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
+            quote! { ::winnow_grammar::rt::skip_trivia(#ws, #input)?; }
         } else {
             quote! {}
         };
@@ -273,6 +276,7 @@ impl<'a> Codegen<'a> {
         lhs_ident: &syn::Ident,
         is_lexical: bool,
     ) -> TokenStream {
+        let ws = self.ws();
         let span = Span::mixed_site();
         let input = &self.input_ident;
         let origin = self.origin();
@@ -301,7 +305,7 @@ impl<'a> Codegen<'a> {
             // pattern[1] follows LHS.
             // If !is_lexical, we must consume ws between LHS and pattern[1].
             if !is_lexical {
-                steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(WS, #input)?; });
+                steps_code.extend(quote! { ::winnow_grammar::rt::skip_trivia(#ws, #input)?; });
             }
 
             steps_code.extend(self.generate_sequence_steps(patterns, false, is_lexical));

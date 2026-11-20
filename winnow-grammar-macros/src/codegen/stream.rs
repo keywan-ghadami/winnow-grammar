@@ -18,6 +18,7 @@ use winnow_grammar_model::stream::{Level, StreamPath};
 
 impl Codegen<'_> {
     pub fn generate_stream_fns(&self, rule: &Rule) -> TokenStream {
+        let ws = self.ws();
         let name = rule.name.to_string();
         let Some(path) = self.streams.paths.get(&name) else {
             return quote! {};
@@ -59,7 +60,7 @@ impl Codegen<'_> {
             fn #end_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
                 input: &mut #input_ty,
             ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
-                ::winnow_grammar::rt::skip_trivia(WS, input)
+                ::winnow_grammar::rt::skip_trivia(#ws, input)
             }
         };
         let body = self.stream_level(path, 0, &view, &mut helpers, false);
@@ -258,6 +259,7 @@ impl Codegen<'_> {
         view: &TokenStream,
         helpers: &mut TokenStream,
     ) -> (TokenStream, bool) {
+        let ws = self.ws();
         let span = Span::mixed_site();
         let level: &Level = &path.levels[j];
         let rule = self.rule(&level.rule);
@@ -265,7 +267,7 @@ impl Codegen<'_> {
         let at = level.at;
         let lexical = rule.is_lexical;
         let input = &self.input_ident;
-        let skip = quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(WS, #input)?; };
+        let skip = quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(#ws, #input)?; };
         let params = value_params(rule);
         let prefix_fn = format_ident!("__stream_{}_{}_prefix", path.levels[0].rule, j, span = span);
         let mut steps = TokenStream::new();
@@ -284,7 +286,7 @@ impl Codegen<'_> {
             .iter()
             .any(|p| matches!(p, ModelPattern::Cut(_)));
         if !lexical && at > 0 {
-            steps.extend(Self::skip_stmt(input, prefix_cut));
+            steps.extend(self.skip_stmt(input, prefix_cut));
         }
         let next_params = match path.levels.get(j + 1) {
             Some(next) => value_params(self.rule(&next.rule)),
@@ -351,7 +353,7 @@ impl Codegen<'_> {
             .any(|p| matches!(p, ModelPattern::Cut(_)));
         let mut steps = TokenStream::new();
         if !lexical && !suffix_pats.is_empty() {
-            steps.extend(Self::skip_stmt(input, cut));
+            steps.extend(self.skip_stmt(input, cut));
         }
         steps.extend(self.generate_sequence_steps(suffix_pats, cut, lexical));
         let returned = &level.returned;
@@ -401,6 +403,7 @@ impl Codegen<'_> {
         lexical: bool,
         helpers: &mut TokenStream,
     ) -> bool {
+        let ws = self.ws();
         let span = Span::mixed_site();
         let item_rule = self.rule(item_rule);
         let input = &self.input_ident;
@@ -408,7 +411,7 @@ impl Codegen<'_> {
         let rt_error = self.rt_error();
         let state_bound = self.state_bound();
         let item_ret = &item_rule.return_type;
-        let item_inner = format_ident!("parse_{}_inner", item_rule.name, span = span);
+        let item_inner = self.inner_name(&item_rule.name.to_string(), self.edge_copy());
         let item_fn = format_ident!("__stream_{}_item", stream_rule, span = span);
         let step_fn = format_ident!("__stream_{}_step", stream_rule, span = span);
         let a_names: Vec<syn::Ident> = (0..item_rule.params.len())
@@ -422,7 +425,7 @@ impl Codegen<'_> {
         let skip = if lexical {
             quote! {}
         } else {
-            quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(WS, #input)?; }
+            quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(#ws, #input)?; }
         };
         // A separator comes before every item but the first, and is taken
         // only with the item after it, as in memory.
@@ -556,18 +559,23 @@ impl Codegen<'_> {
         let emitted = each.then(|| emitted_type(&self.stream_item_type(path)));
         let (tap, stopped) = each_tap(emitted.as_ref());
         let (bounds, at_max, short) = fold_bounds(computed.as_deref(), *min, *max);
+        // The step is always taken into the reader's loop: called, it was a
+        // frame of its own around the item rule every item, once that rule's
+        // tracked copy had one caller and was taken into it. Its fast pass
+        // runs with `EdgeEmpty`, so that what the tracked copy reaches is
+        // compiled apart from the plain copy (ADR 27 §3, *Per-mode copies*).
         quote_spanned! {span=>
             #bounds
             let mut __acc = ::core::option::Option::Some((#init)());
             let mut __step = #step_fn(&__acc, #step);
             let mut __n = 0usize;
-            while __stream.items(&[#(#rules),*], &mut __n, |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, __item: usize| {
+            while __stream.items(&[#(#rules),*], &mut __n, #[inline(always)] |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, __item: usize| {
                 #at_max
                 let __v = if pass.diagnose() {
                     #item_fn::<__WgS, ::winnow_grammar::ParseError>(input, #sep_arg #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 } else {
-                    #item_fn::<__WgS, ::winnow::error::EmptyError>(input, #sep_arg #(#args),*)
+                    #item_fn::<__WgS, ::winnow_grammar::rt::stream::EdgeEmpty>(input, #sep_arg #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 };
                 if ::winnow_grammar::rt::stream::commit(input, pass) {
@@ -657,7 +665,7 @@ fn step_call(view: &TokenStream, f: &syn::Ident, args: &[TokenStream]) -> TokenS
                 #f::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
                     .map_err(::winnow_grammar::rt::stream::Fail::from)
             } else {
-                #f::<__WgS, ::winnow::error::EmptyError>(input, #(#args),*)
+                #f::<__WgS, ::winnow_grammar::rt::stream::EdgeEmpty>(input, #(#args),*)
                     .map_err(::winnow_grammar::rt::stream::Fail::from)
             }
         }

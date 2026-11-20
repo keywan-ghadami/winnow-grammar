@@ -296,7 +296,7 @@ impl Codegen<'_> {
     /// `p` wrapped in `rt::edge`, in a grammar that tracks edges; `p` as it
     /// is otherwise. `pattern` is what it parses, where that is known.
     pub fn edge(&self, p: TokenStream, pattern: Option<&ModelPattern>) -> TokenStream {
-        if !self.streaming {
+        if !self.streaming.get() {
             return p;
         }
         let span = Span::mixed_site();
@@ -318,7 +318,7 @@ impl Codegen<'_> {
     /// `+ input.state.origin` where spans are moved to the whole input's
     /// positions - in a stream's steps.
     pub fn origin(&self) -> TokenStream {
-        if !self.streaming {
+        if !self.streaming.get() {
             return TokenStream::new();
         }
         let input = &self.input_ident;
