@@ -90,11 +90,14 @@ enum Start {
 /// The first-byte sets of a grammar's alternatives.
 pub struct FirstBytes<'g> {
     rules: HashMap<String, &'g Rule>,
-    /// A rule's set, by name and by whether it is called where trivia has
-    /// already been skipped. `None` while it is being computed, which is how a
-    /// cycle comes out unknown.
-    memo: RefCell<HashMap<(String, bool), Start>>,
-    visiting: RefCell<HashSet<(String, bool)>>,
+    /// A rule's start, by name and by whether it is called where trivia has
+    /// already been skipped: the least fixed point over the grammar, so
+    /// that a recursive rule - a node inside a node - has the set its
+    /// alternatives give rather than none.
+    table: RefCell<HashMap<(String, bool), Start>>,
+    /// The calls with patterns being read, so that a cycle through them is
+    /// not followed.
+    visiting: RefCell<HashSet<String>>,
     /// Every parameter's name, of every rule.
     params: HashSet<String>,
 }
@@ -105,19 +108,61 @@ type Env = HashMap<String, Start>;
 
 impl<'g> FirstBytes<'g> {
     pub fn new(grammar: &'g GrammarDefinition) -> Self {
-        FirstBytes {
+        let first = FirstBytes {
             rules: grammar
                 .rules
                 .iter()
                 .map(|r| (r.name.to_string(), r))
                 .collect(),
-            memo: RefCell::new(HashMap::new()),
+            table: RefCell::new(HashMap::new()),
             visiting: RefCell::new(HashSet::new()),
             params: grammar
                 .rules
                 .iter()
                 .flat_map(|r| r.params.iter().map(|p| p.name.to_string()))
                 .collect(),
+        };
+        first.solve();
+        first
+    }
+
+    /// Every rule's start from nothing (no match yet) up to the fixed
+    /// point: each round reads the rules called through the last round's
+    /// table, and a start only grows - a larger set, `Consumes` to `Maybe`,
+    /// anything to `Unknown` - so the rounds end.
+    fn solve(&self) {
+        let keys: Vec<(String, bool)> = self
+            .rules
+            .keys()
+            .flat_map(|n| [(n.clone(), false), (n.clone(), true)])
+            .collect();
+        {
+            let mut table = self.table.borrow_mut();
+            for k in &keys {
+                table.insert(k.clone(), Start::Consumes(ByteSet::default()));
+            }
+        }
+        loop {
+            let mut changed = false;
+            for (name, trivia_skipped) in &keys {
+                let rule = self.rules[name];
+                let now = if !rule.is_lexical && !trivia_skipped {
+                    // A syntactic rule skips whitespace first; only where
+                    // that has already happened does it begin at its first
+                    // token.
+                    Start::Unknown
+                } else {
+                    self.variants(rule, *trivia_skipped, &Env::new())
+                };
+                let key = (name.clone(), *trivia_skipped);
+                if self.table.borrow()[&key] != now {
+                    self.table.borrow_mut().insert(key, now);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
         }
     }
 
@@ -170,47 +215,7 @@ impl<'g> FirstBytes<'g> {
                 generics,
                 args,
                 ..
-            } => {
-                if !generics.is_empty() {
-                    return Start::Unknown;
-                }
-                let Some(name) = rule_path.get_ident().map(|i| i.to_string()) else {
-                    return Start::Unknown;
-                };
-                // A pattern parameter of the rule being read: what the call
-                // passed. Any other parameter's name is not resolved.
-                if let Some(start) = env.get(&name) {
-                    return *start;
-                }
-                if self.params.contains(&name) {
-                    return Start::Unknown;
-                }
-                // What the call passes as patterns, read where it is made.
-                let patterns: Vec<(Option<String>, Start)> = args
-                    .iter()
-                    .filter_map(|a| match a {
-                        Argument::Positional(p) => {
-                            Some((None, self.element(p, trivia_skipped, env)))
-                        }
-                        Argument::Named(n, p) => {
-                            Some((Some(n.to_string()), self.element(p, trivia_skipped, env)))
-                        }
-                        Argument::Value(..) => None,
-                    })
-                    .collect();
-                // The grammar's own rule under a builtin's name is that rule.
-                if self.rules.contains_key(&name) {
-                    if patterns.is_empty() {
-                        return self.rule(&name, trivia_skipped);
-                    }
-                    return self.rule_with(&name, trivia_skipped, &patterns);
-                }
-                match (name.as_str(), patterns.as_slice()) {
-                    ("empty", []) => Start::Transparent,
-                    (_, []) if args.is_empty() => builtin(&name),
-                    _ => Start::Unknown,
-                }
-            }
+            } => self.call(rule_path, generics, args, trivia_skipped, env),
             ModelPattern::Group { alts, .. } => {
                 let mut all = ByteSet::default();
                 let mut nullable = false;
@@ -248,9 +253,17 @@ impl<'g> FirstBytes<'g> {
             ModelPattern::Count { pattern, .. } => {
                 optional(self.element(pattern, trivia_skipped, env))
             }
-            // A lookahead consumes nothing; what it demands of the byte is a
-            // further condition, and leaving it out only makes the set larger.
-            ModelPattern::Peek(..) | ModelPattern::Not(..) => Start::Transparent,
+            // A lookahead consumes nothing. `peek(p)` where `p` begins with a
+            // known byte fixes the byte here, which is the sequence's first
+            // where nothing was consumed before: past it - a cut included -
+            // the sequence is reached only with that byte, and at the end of
+            // the input not at all. `not(..)` only adds a condition, and
+            // leaving it out makes the set larger.
+            ModelPattern::Peek(inner, _, _) => match self.element(inner, trivia_skipped, env) {
+                Start::Consumes(set) => Start::Consumes(set),
+                _ => Start::Transparent,
+            },
+            ModelPattern::Not(..) => Start::Transparent,
             // A guard consumes nothing either, and can only fail more.
             ModelPattern::Guard { .. } => Start::Transparent,
             // A cut before anything is consumed makes the alternative's failure
@@ -260,25 +273,65 @@ impl<'g> FirstBytes<'g> {
         }
     }
 
+    /// A call of a rule, a parameter or a builtin.
+    fn call(
+        &self,
+        rule_path: &syn::Path,
+        generics: &[syn::Type],
+        args: &[Argument],
+        trivia_skipped: bool,
+        env: &Env,
+    ) -> Start {
+        if !generics.is_empty() {
+            return Start::Unknown;
+        }
+        let Some(name) = rule_path.get_ident().map(|i| i.to_string()) else {
+            return Start::Unknown;
+        };
+        // A pattern parameter of the rule being read: what the call
+        // passed. Any other parameter's name is not resolved.
+        if let Some(start) = env.get(&name) {
+            return *start;
+        }
+        if self.params.contains(&name) {
+            return Start::Unknown;
+        }
+        // What the call passes as patterns, read where it is made.
+        let patterns: Vec<(Option<String>, Start)> = args
+            .iter()
+            .filter_map(|a| match a {
+                Argument::Positional(p) => Some((None, self.element(p, trivia_skipped, env))),
+                Argument::Named(n, p) => {
+                    Some((Some(n.to_string()), self.element(p, trivia_skipped, env)))
+                }
+                Argument::Value(..) => None,
+            })
+            .collect();
+        // The grammar's own rule under a builtin's name is that rule.
+        if self.rules.contains_key(&name) {
+            if patterns.is_empty() {
+                return self.rule(&name, trivia_skipped);
+            }
+            return self.rule_with(&name, trivia_skipped, &patterns);
+        }
+        match (name.as_str(), patterns.as_slice()) {
+            ("empty", []) => Start::Transparent,
+            // `eof` consumes nothing and matches only where there
+            // is no byte: a sequence it makes nullable is not
+            // guarded, and after it nothing more can match.
+            ("eof", []) => Start::Transparent,
+            // What `p` matched, as text, bytes or a span: `p`'s start.
+            ("text" | "bytes" | "span", [(None, p)]) => *p,
+            // `any` consumes one byte, whichever it is.
+            ("any", []) => Start::Consumes(ByteSet([u64::MAX; 4])),
+            (_, []) if args.is_empty() => builtin(&name),
+            _ => Start::Unknown,
+        }
+    }
+
     /// A rule called with values only: its start, the same at every call.
     fn rule(&self, name: &str, trivia_skipped: bool) -> Start {
-        let rule = self.rules[name];
-        // A syntactic rule skips whitespace first; only where that has already
-        // happened does it begin at its first token.
-        if !rule.is_lexical && !trivia_skipped {
-            return Start::Unknown;
-        }
-        let key = (name.to_string(), trivia_skipped);
-        if let Some(known) = self.memo.borrow().get(&key) {
-            return *known;
-        }
-        if !self.visiting.borrow_mut().insert(key.clone()) {
-            return Start::Unknown;
-        }
-        let result = self.variants(rule, trivia_skipped, &Env::new());
-        self.visiting.borrow_mut().remove(&key);
-        self.memo.borrow_mut().insert(key, result);
-        result
+        self.table.borrow()[&(name.to_string(), trivia_skipped)]
     }
 
     /// A rule called with patterns: read afresh with them in place of its
@@ -307,7 +360,7 @@ impl<'g> FirstBytes<'g> {
             }
         }
         // A cycle through calls with patterns is not followed.
-        let key = (format!("{name} with patterns"), trivia_skipped);
+        let key = name.to_string();
         if !self.visiting.borrow_mut().insert(key.clone()) {
             return Start::Unknown;
         }
@@ -450,14 +503,19 @@ mod tests {
     }
 
     #[test]
-    fn a_cut_before_the_first_byte_or_a_cycle_has_no_set() {
+    fn a_cut_before_the_first_byte_has_no_set_and_a_cycle_its_bases() {
         let g = grammar(quote! {
             grammar test {
                 rule A = => "x" | "y" => "z" | B
                 rule B = B "b" | "c"
             }
         });
-        assert_eq!(sets(&g, "A"), vec![None, Some(vec![b'y']), None]);
+        // Every match of `B` begins with its base case's `c`: the fixed
+        // point finds it where reading `B` inside `B` gave up.
+        assert_eq!(
+            sets(&g, "A"),
+            vec![None, Some(vec![b'y']), Some(vec![b'c'])]
+        );
     }
 
     #[test]
