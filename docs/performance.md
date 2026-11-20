@@ -133,7 +133,7 @@ only those counts are the ones CI checks.
 | example | what it exercises |
 |---|---|
 | `cut_profile` | statements in memory, grouped and from a reader, with and without cuts (ADR 15) |
-| `stream_profile` | a fold in memory, under `#[stream]` and with frames (ADR 27 §5) |
+| `stream_profile` | a fold in memory, under `#[stream]` and with frames (ADR 27 §5); `list`, many short streams with a prefix and a suffix step |
 | `param_profile` | rules with value parameters, passed on at nearly every call (ADR 26) |
 
 `scripts/profile-cut.sh` and `scripts/profile-stream.sh` turn the counts of
