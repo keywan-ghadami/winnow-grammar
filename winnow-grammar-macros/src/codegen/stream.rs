@@ -559,18 +559,23 @@ impl Codegen<'_> {
         let emitted = each.then(|| emitted_type(&self.stream_item_type(path)));
         let (tap, stopped) = each_tap(emitted.as_ref());
         let (bounds, at_max, short) = fold_bounds(computed.as_deref(), *min, *max);
+        // The step is always taken into the reader's loop: called, it was a
+        // frame of its own around the item rule every item, once that rule's
+        // tracked copy had one caller and was taken into it. Its fast pass
+        // runs with `EdgeEmpty`, so that what the tracked copy reaches is
+        // compiled apart from the plain copy (ADR 27 §3, *Per-mode copies*).
         quote_spanned! {span=>
             #bounds
             let mut __acc = ::core::option::Option::Some((#init)());
             let mut __step = #step_fn(&__acc, #step);
             let mut __n = 0usize;
-            while __stream.items(&[#(#rules),*], &mut __n, |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, __item: usize| {
+            while __stream.items(&[#(#rules),*], &mut __n, #[inline(always)] |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, __item: usize| {
                 #at_max
                 let __v = if pass.diagnose() {
                     #item_fn::<__WgS, ::winnow_grammar::ParseError>(input, #sep_arg #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 } else {
-                    #item_fn::<__WgS, ::winnow::error::EmptyError>(input, #sep_arg #(#args),*)
+                    #item_fn::<__WgS, ::winnow_grammar::rt::stream::EdgeEmpty>(input, #sep_arg #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 };
                 if ::winnow_grammar::rt::stream::commit(input, pass) {
@@ -660,7 +665,7 @@ fn step_call(view: &TokenStream, f: &syn::Ident, args: &[TokenStream]) -> TokenS
                 #f::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
                     .map_err(::winnow_grammar::rt::stream::Fail::from)
             } else {
-                #f::<__WgS, ::winnow::error::EmptyError>(input, #(#args),*)
+                #f::<__WgS, ::winnow_grammar::rt::stream::EdgeEmpty>(input, #(#args),*)
                     .map_err(::winnow_grammar::rt::stream::Fail::from)
             }
         }

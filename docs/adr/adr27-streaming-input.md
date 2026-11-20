@@ -188,19 +188,31 @@ reaches, and the grammar's own `WS`, get a tracked copy
 parsed in memory is generated once. `WINNOW_GRAMMAR_EDGES` still generates
 one tracked copy of everything, which is what it is for.
 
-Two copies share the runtime's closures, and that moved the compiler's
-inlining: `rt::class`'s closure, the default whitespace skip's scan, now has
-two callers where it had one and was called at every skip instead of taken
-in. Its closure is `#[inline(always)]`, and so are the closures of `rt::edge`
-and `rt::edge_reach`, which only the tracked copy calls. With both,
-`examples/cut_profile.rs` counts fewer instructions than before the split in
-every case, the stream reader included (`stream_none` 507.9M -> 446.5M at
-one codegen unit), and `stream_profile`'s `memory` is `plain`'s. Its
-`stream` stays about 5 % above: the tracked `LINE` now has one caller and is
-inlined into the reader's step, where it costs some 17 instructions a row
-more than called. Marking the tracked copy `#[inline(never)]` gave that back
-at one codegen unit and lost more elsewhere; marking `rt::expected` like
-`rt::class` made the plain parse slower. Both were measured and left out.
+Two copies at first shared one instance of every runtime parser they both
+reach - a number, a scan, a literal, the whitespace skip - and so gave each
+two callers where it had had one. The compiler then called them from both
+copies instead of taking them into the rule, and the stream got slower than
+before the split. Marking the parsers one by one moved the problem a level
+down each time (`rt::expected`, then the `FnMut` of `rt::dec_uint`) and made
+the plain parse slower where it forced inlining. What holds is a type: the
+fast pass of the stream's steps runs with `rt::stream::EdgeEmpty`,
+`EmptyError` under another name, so every generic parser the tracked copy
+reaches is instantiated apart from the plain copy's, and each copy compiles
+as if it were the only one. Three attributes complete it: the closure of
+`rt::class` (the default whitespace skip, which both copies' `WS` call) and
+those of `rt::edge` and `rt::edge_reach` (only in the tracked copy) are
+`#[inline(always)]`, and the step a stream hands its reader is
+`#[inline(always)]`, so the item rule's tracked copy, which now has one
+caller and is taken into the step, does not leave the step a frame of its
+own every item.
+
+callgrind, base b16b75c (one copy) against this, release profile and one
+codegen unit: `stream_profile` `stream` 52.7M / 63.3M -> 51.7M / 50.3M,
+`memory` 43.2M / 55.2M -> 34.2M / 47.2M; `cut_profile` `stream_none`
+419.5M / 507.9M -> 409.9M / 439.7M, `stmts_none` 406.6M / 490.1M ->
+396.6M / 421.2M. Each of the three attributes was taken out once and cost
+instructions without it; an out-of-line diagnosing pass (`#[cold]`) and
+`#[inline(never)]` on the tracked copy were measured and left out.
 
 ### The path
 
