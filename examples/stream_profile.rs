@@ -9,6 +9,7 @@
 //! | `plain` | the fold in memory, no edge tracking |
 //! | `memory` | the same fold in memory, in a grammar with a `#[stream]` rule |
 //! | `stream` | its `#[stream]` reader over a `Cursor` |
+//! | `slice` | the same rule over the input all in memory (`parse_ROWS_slice`): the plain steps |
 //! | `frames_memory` | `par_fold` in memory, `Parallelism::Off` |
 //! | `frames_reader` | its reader, `Parallelism::Off` |
 //! | `list` | 20 000 `#[stream]` readers of `[1,2,…,10]`: a prefix step, ten items and a suffix step each, 200 000 items in all, blocks of 64 bytes |
@@ -48,6 +49,10 @@ fn main() {
             let mut ctx = ParseContext::<()>::default();
             Tracked::parse_ROWS_reader(Cursor::new(rows.as_bytes()), &mut ctx, Reading::default())
                 .unwrap()
+        }
+        "slice" => {
+            let mut ctx = ParseContext::<()>::default();
+            Tracked::parse_ROWS_slice(rows.as_bytes(), &mut ctx).unwrap()
         }
         "frames_memory" => {
             Plain::parse_FILE_pieces(&rows, &ParseContext::<()>::default(), Parallelism::Off)

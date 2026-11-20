@@ -359,6 +359,19 @@ reach and the lookahead, as `reaching` is. A step that leaves a cut open is
 still recorded at once. The buffer keeps what a pending entry starts at.
 `examples/stream_profile.rs list`: 2 480 → 878 instructions a row.
 
+An input that is all in memory need not pay for the edge tracking at all
+(2026-11-20): `parse_<rule>_slice` / `_slice_each` build the stream with
+`Stream::whole`, which reads the input to its end at once, so every step
+runs with `Pass::last`. The generator writes each step function twice, from
+the tracked rules and from the plain ones (`…_plain`, `Codegen::plain_steps`),
+and a step closure takes the plain one under `Pass::last`, in both passes.
+For that the plain copy of a grammar with a `#[stream]` rule moves its spans
+by `origin` like the tracked one (`Codegen::moves_spans`; `origin` is 0 in
+memory). The plain parsers note no `reach`, so a slice keeps every pending
+step (`REACH_UNKNOWN`) and a diagnosis replays the fold's items from its
+first (`Stream::replay_from`, `Replay::EndedFrom`), as the parse in memory
+replays from the start - on failure only.
+
 Found on the way, and fixed: under `Diagnose::Eager`, which records in the
 first pass, an item that touched the end of its window kept what it had
 recorded over the partial input when it was parsed again over more; its

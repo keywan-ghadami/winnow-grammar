@@ -31,6 +31,7 @@ impl Codegen<'_> {
         let k = self.edge_k;
         let reach = self.reach;
         let reader_fn = format_ident!("parse_{}_reader", rule.name, span = span);
+        let slice_fn = format_ident!("parse_{}_slice", rule.name, span = span);
         let ret = &rule.return_type;
         let params: Vec<TokenStream> = rule
             .params
@@ -43,19 +44,33 @@ impl Codegen<'_> {
                 quote! { #n: #t }
             })
             .collect();
-        let end_fn = format_ident!("__stream_{}_end", rule.name, span = span);
         let rt_error = self.rt_error();
-        let mut helpers = quote_spanned! {span=>
-            #[allow(dead_code, non_snake_case)]
-            fn #end_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
-                input: &mut #input_ty,
-            ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
-                ::winnow_grammar::rt::skip_trivia(#ws, input)
+        let end_def = |end_fn: &syn::Ident, ws: &syn::Ident| {
+            quote_spanned! {span=>
+                #[allow(dead_code, non_snake_case)]
+                fn #end_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
+                    input: &mut #input_ty,
+                ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
+                    ::winnow_grammar::rt::skip_trivia(#ws, input)
+                }
             }
         };
+        let end_fn = self.step_name(format!("__stream_{}_end", rule.name));
+        let mut helpers = end_def(&end_fn, &ws);
         let body = self.stream_level(path, 0, &view, &mut helpers, false);
+        if self.dual {
+            // The same steps again from the plain rules, for an input that is
+            // all there (`step_call`); their calls are already in `body`.
+            self.plain_steps.set(true);
+            self.streaming.set(false);
+            let plain_end = self.step_name(format!("__stream_{}_end", rule.name));
+            helpers.extend(end_def(&plain_end, &self.ws()));
+            let _ = self.stream_level(path, 0, &view, &mut helpers, false);
+            self.streaming.set(true);
+            self.plain_steps.set(false);
+        }
         let finish = {
-            let call = step_call(&view, &end_fn, &[]);
+            let call = step_call(&view, &end_fn, &[], self.dual);
             let keep = step_keep(&kind, &view, &end_fn, &[]);
             quote! { #call, #keep }
         };
@@ -88,6 +103,23 @@ impl Codegen<'_> {
                 __stream.finish(#finish)?;
                 ::core::result::Result::Ok(__value)
             }
+
+            /// [`#reader_fn`] over an input that is all in memory: every
+            /// step knows it has the rest of the input, and runs the plain
+            /// parsers, as fast as the parse in memory.
+            #[allow(dead_code, non_snake_case, unused_mut, unused_variables, clippy::let_unit_value)]
+            #vis fn #slice_fn<__WgS: ::std::fmt::Debug + Clone #state_bound>(
+                input: &[u8],
+                context: &mut ::winnow_grammar::ParseContext<__WgS>,
+                #(#params),*
+            ) -> ::core::result::Result<#ret, ::winnow_grammar::ParseError> {
+                let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::whole(
+                    input, context, #k,
+                );
+                let __value = #body;
+                __stream.finish(#finish)?;
+                ::core::result::Result::Ok(__value)
+            }
         }
     }
 
@@ -109,6 +141,7 @@ impl Codegen<'_> {
         let k = self.edge_k;
         let reach = self.reach;
         let each_fn = format_ident!("parse_{}_reader_each", rule.name, span = span);
+        let slice_each_fn = format_ident!("parse_{}_slice_each", rule.name, span = span);
         let body = self.stream_level(path, 0, view, &mut TokenStream::new(), true);
         let item = self.stream_item_type(path);
         let emitted = emitted_type(&item);
@@ -134,6 +167,26 @@ impl Codegen<'_> {
                 );
                 // `emit` in an action reaches `each` from here on; dropping
                 // `__stream` closes the sink again (ADR 28).
+                __stream.context().emits.open::<#emitted>();
+                let __value = #body;
+                __stream.finish(#finish)?;
+                ::core::result::Result::Ok(::core::ops::ControlFlow::Continue(__value))
+            }
+
+            /// [`#each_fn`] over an input that is all in memory: every step
+            /// knows it has the rest of the input, and runs the plain
+            /// parsers, as fast as the parse in memory.
+            #[allow(dead_code, non_snake_case, unused_mut, unused_variables, clippy::let_unit_value)]
+            #vis fn #slice_each_fn<__WgS: ::std::fmt::Debug + Clone #state_bound, __WgB>(
+                input: &[u8],
+                context: &mut ::winnow_grammar::ParseContext<__WgS>,
+                #(#params,)*
+                mut each: impl for<'a> FnMut(&#item) -> ::core::ops::ControlFlow<__WgB>,
+            ) -> ::core::result::Result<::core::ops::ControlFlow<__WgB, #ret>, ::winnow_grammar::ParseError> {
+                let mut __broken: ::core::option::Option<__WgB> = ::core::option::Option::None;
+                let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::whole(
+                    input, context, #k,
+                );
                 __stream.context().emits.open::<#emitted>();
                 let __value = #body;
                 __stream.finish(#finish)?;
@@ -263,7 +316,7 @@ impl Codegen<'_> {
         let input = &self.input_ident;
         let skip = quote_spanned! {span=> ::winnow_grammar::rt::skip_trivia(#ws, #input)?; };
         let params = value_params(rule);
-        let prefix_fn = format_ident!("__stream_{}_{}_prefix", path.levels[0].rule, j, span = span);
+        let prefix_fn = self.step_name(format!("__stream_{}_{}_prefix", path.levels[0].rule, j));
         let mut steps = TokenStream::new();
         if j == 0 {
             steps.extend(skip.clone());
@@ -312,7 +365,7 @@ impl Codegen<'_> {
         });
         let a_names = names(&next_params);
         let rules = path_rules(path, j);
-        let prefix_call = step_call(view, &prefix_fn, &clones(&params));
+        let prefix_call = step_call(view, &prefix_fn, &clones(&params), self.dual);
         let prefix_keep = step_keep(&self.stream_kind(), view, &prefix_fn, &clones(&params));
         let prefix = quote_spanned! {span=>
             let ((#(#c_names,)*), (#(#a_names,)*)) = __stream.chunk(&[#(#rules),*], #prefix_call, #prefix_keep)?;
@@ -341,7 +394,7 @@ impl Codegen<'_> {
         let at = level.at;
         let lexical = rule.is_lexical;
         let input = &self.input_ident;
-        let suffix_fn = format_ident!("__stream_{}_{}_suffix", path.levels[0].rule, j, span = span);
+        let suffix_fn = self.step_name(format!("__stream_{}_{}_suffix", path.levels[0].rule, j));
         let suffix_pats = &v.pattern[at + 1..];
         let cut = v.pattern[..=at]
             .iter()
@@ -374,7 +427,7 @@ impl Codegen<'_> {
             }
         });
         let rules = path_rules(path, j);
-        let suffix_call = step_call(view, &suffix_fn, &clones(&s_in));
+        let suffix_call = step_call(view, &suffix_fn, &clones(&s_in), self.dual);
         let suffix_keep = step_keep(&self.stream_kind(), view, &suffix_fn, &clones(&s_in));
         quote_spanned! {span=>
             let (#(#r_names,)*) = __stream.chunk(&[#(#rules),*], #suffix_call, #suffix_keep)?;
@@ -408,8 +461,8 @@ impl Codegen<'_> {
         let state_bound = self.state_bound();
         let item_ret = &item_rule.return_type;
         let item_inner = self.inner_name(&item_rule.name.to_string(), self.edge_copy());
-        let item_fn = format_ident!("__stream_{}_item", stream_rule, span = span);
-        let step_fn = format_ident!("__stream_{}_step", stream_rule, span = span);
+        let item_fn = self.step_name(format!("__stream_{}_item", stream_rule));
+        let step_fn = self.step_name(format!("__stream_{}_step", stream_rule));
         let a_names: Vec<syn::Ident> = (0..item_rule.params.len())
             .map(|i| format_ident!("__a{}", i, span = span))
             .collect();
@@ -522,8 +575,8 @@ impl Codegen<'_> {
             unreachable!("the model checked that a streamed fold's item is a rule call")
         };
         let item_rule = rule_path.segments.last().unwrap().ident.to_string();
-        let item_fn = format_ident!("__stream_{}_item", stream_rule, span = span);
-        let step_fn = format_ident!("__stream_{}_step", stream_rule, span = span);
+        let item_fn = self.step_name(format!("__stream_{}_item", stream_rule));
+        let step_fn = self.step_name(format!("__stream_{}_step", stream_rule));
         let in_place = self.stream_fold_fns(
             stream_rule,
             &item_rule,
@@ -568,6 +621,7 @@ impl Codegen<'_> {
         // tracked copy had one caller and was taken into it. Its fast pass
         // runs with `EdgeEmpty`, so that what the tracked copy reaches is
         // compiled apart from the plain copy (ADR 27 §3, *Per-mode copies*).
+        let plain_item = self.plain_item_call(&item_fn, &sep_arg, &args);
         quote_spanned! {span=>
             #bounds
             let mut __acc = ::core::option::Option::Some((#init)());
@@ -575,7 +629,7 @@ impl Codegen<'_> {
             let mut __n = 0usize;
             while __stream.items(&[#(#rules),*], &mut __n, #[inline(always)] |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, __item: usize| {
                 #at_max
-                let __v = if pass.diagnose() {
+                let __v = #plain_item if pass.diagnose() {
                     #item_fn::<__WgS, ::winnow_grammar::ParseError>(input, #sep_arg #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 } else {
@@ -593,6 +647,33 @@ impl Codegen<'_> {
             #stopped
             #short
             let __path = __acc.take().expect("the accumulator is there");
+        }
+    }
+
+    /// With the input all there, the item function from the plain rules, as
+    /// for a step (`step_call`): the start of an `if … else` before the
+    /// tracked calls, or nothing where the grammar has one copy.
+    fn plain_item_call(
+        &self,
+        item_fn: &syn::Ident,
+        sep_arg: &TokenStream,
+        args: &[TokenStream],
+    ) -> TokenStream {
+        if !self.dual {
+            return quote! {};
+        }
+        let span = Span::mixed_site();
+        let fp = format_ident!("{}_plain", item_fn, span = span);
+        quote_spanned! {span=>
+            if pass.last() {
+                if pass.diagnose() {
+                    #fp::<__WgS, ::winnow_grammar::ParseError>(input, #sep_arg #(#args),*)
+                        .map_err(::winnow_grammar::rt::stream::Fail::from)?
+                } else {
+                    #fp::<__WgS, ::winnow::error::EmptyError>(input, #sep_arg #(#args),*)
+                        .map_err(::winnow_grammar::rt::stream::Fail::from)?
+                }
+            } else
         }
     }
 
@@ -679,10 +760,29 @@ fn path_rules(path: &StreamPath, j: usize) -> Vec<&str> {
 
 /// The closure `Stream::chunk` runs a step function `f` with: in the
 /// diagnosing pass with `ParseError`, otherwise with `EmptyError`.
-fn step_call(view: &TokenStream, f: &syn::Ident, args: &[TokenStream]) -> TokenStream {
+fn step_call(view: &TokenStream, f: &syn::Ident, args: &[TokenStream], plain: bool) -> TokenStream {
     let span = Span::mixed_site();
+    // With the input all there, the step function from the plain rules:
+    // the end of the window cannot be what a parse depended on.
+    let plain_call = if plain {
+        let fp = format_ident!("{}_plain", f, span = span);
+        quote_spanned! {span=>
+            if pass.last() {
+                return if pass.diagnose() {
+                    #fp::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
+                        .map_err(::winnow_grammar::rt::stream::Fail::from)
+                } else {
+                    #fp::<__WgS, ::winnow::error::EmptyError>(input, #(#args),*)
+                        .map_err(::winnow_grammar::rt::stream::Fail::from)
+                };
+            }
+        }
+    } else {
+        quote! {}
+    };
     quote_spanned! {span=>
         |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, _: usize| {
+            #plain_call
             if pass.diagnose() {
                 #f::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
                     .map_err(::winnow_grammar::rt::stream::Fail::from)

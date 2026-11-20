@@ -48,10 +48,11 @@ const SMALL: Reading = Reading {
 
 const MODES: [Diagnose; 3] = [Diagnose::Replay, Diagnose::ReplayInPlace, Diagnose::Eager];
 
-fn agree<M, R>(input: &str, mem_parse: M, reader_parse: R) -> ParseError
+fn agree<M, R, L>(input: &str, mem_parse: M, reader_parse: R, slice_parse: L) -> ParseError
 where
     M: Fn(&mut ParseInput<'_, ()>) -> Result<usize, ParseError>,
     R: Fn(Trickle<'_>, &mut ParseContext<()>) -> Result<usize, ParseError>,
+    L: Fn(&[u8], &mut ParseContext<()>) -> Result<usize, ParseError>,
 {
     let mut last = None;
     for mode in MODES {
@@ -75,6 +76,17 @@ where
                 "{input:?} {mode:?} step {step}: stream {got:?}\nmemory {mem:?}"
             );
         }
+        // The input all in memory: `parse_<rule>_slice`.
+        let mut ctx = ParseContext::<()> {
+            diagnose: mode,
+            ..Default::default()
+        };
+        let got = slice_parse(input.as_bytes(), &mut ctx).unwrap_err();
+        assert_eq!(
+            (got.offset, got.headline()),
+            (mem.offset, mem.headline()),
+            "{input:?} {mode:?} slice: stream {got:?}\nmemory {mem:?}"
+        );
         last = Some(mem);
     }
     last.unwrap()
@@ -86,6 +98,7 @@ fn what_a_prefix_gave_up_is_there_for_an_error_further_on() {
         "%@bX",
         |i| Steps::parse_head().parse_next(i),
         |r, c| Steps::parse_head_reader(r, c, SMALL),
+        Steps::parse_head_slice,
     );
     assert_eq!(mem.offset, 3, "{mem:?}");
     assert!(mem.to_string().contains("`c`"), "{mem}");
@@ -97,6 +110,7 @@ fn what_a_suffix_gave_up_is_there_for_an_error_further_on() {
         "#y;!qX",
         |i| Steps::parse_tail().parse_next(i),
         |r, c| Steps::parse_tail_reader(r, c, SMALL),
+        Steps::parse_tail_slice,
     );
     assert_eq!(mem.offset, 5, "{mem:?}");
     assert!(mem.to_string().contains("`r`"), "{mem}");

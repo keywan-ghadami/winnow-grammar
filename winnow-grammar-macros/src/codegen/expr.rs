@@ -572,7 +572,7 @@ impl<'a> Codegen<'a> {
     /// In a stream's steps, a span bound with `@` is moved to the whole
     /// input's positions.
     fn span_moved(&self, span_var: &syn::Ident) -> TokenStream {
-        if !self.streaming.get() {
+        if !self.moves_spans() {
             return TokenStream::new();
         }
         let input = &self.input_ident;

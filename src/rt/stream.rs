@@ -224,6 +224,13 @@ impl Pass {
     pub fn diagnose(&self) -> bool {
         self.diagnose
     }
+
+    /// Whether the step has the rest of the stream: then where its window
+    /// ends cannot be what a parse depended on, and the generated reader
+    /// runs the plain parsers.
+    pub fn last(&self) -> bool {
+        self.last
+    }
 }
 
 /// How a step failed, with the error of the diagnosing pass.
@@ -480,7 +487,20 @@ enum Replay {
     /// item taken, and the item that did not come - each at its start in
     /// `buf`, with its number.
     Ended(Vec<(usize, usize)>),
+    /// The end of a fold over an input all in memory, whose plain parsers
+    /// note no reach: every item from the fold's first (at its start in
+    /// `buf`) up to the last taken, then the last taken and the item that
+    /// did not come, each with its start and number - as the parse in
+    /// memory replays them.
+    EndedFrom {
+        first: usize,
+        prev: Option<(usize, usize)>,
+        next: (usize, usize),
+    },
 }
+
+/// Where failures that were not noted may have got: to the end.
+const REACH_UNKNOWN: usize = usize::MAX / 2;
 
 impl<K: Kind, S> Pending<'_, K, S> {
     /// The first byte of `buf` it parses again.
@@ -488,6 +508,7 @@ impl<K: Kind, S> Pending<'_, K, S> {
         match &self.what {
             Replay::Chunk(s) => *s,
             Replay::Ended(items) => items.iter().map(|i| i.0).min().unwrap_or(self.reach),
+            Replay::EndedFrom { first, .. } => *first,
         }
     }
 
@@ -496,6 +517,13 @@ impl<K: Kind, S> Pending<'_, K, S> {
         match &mut self.what {
             Replay::Chunk(s) => *s -= by,
             Replay::Ended(items) => items.iter_mut().for_each(|i| i.0 -= by),
+            Replay::EndedFrom { first, prev, next } => {
+                *first -= by;
+                if let Some(p) = prev {
+                    p.0 -= by;
+                }
+                next.0 -= by;
+            }
         }
     }
 }
@@ -524,6 +552,12 @@ pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK:
     /// Matched steps whose records the diagnosing pass has not taken yet,
     /// oldest first: see [`Pending`].
     pending: Vec<Pending<'c, K, S>>,
+    /// The input is all in memory ([`Stream::whole`]): a read takes it to
+    /// the end.
+    whole: bool,
+    /// Over an input all in memory, where the current fold's first item
+    /// starts, in `buf`: a diagnosis replays the items from there.
+    fold_first: Option<usize>,
     /// The grammar's own lookahead.
     k: usize,
     /// The stream's offset of `buf[0]`.
@@ -576,6 +610,8 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             prev_item: None,
             reaching: Vec::new(),
             pending: Vec::new(),
+            whole: false,
+            fold_first: None,
             k,
             base: 0,
             visible: 0,
@@ -586,6 +622,24 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             cut_stash: Vec::new(),
             _kind: PhantomData,
         }
+    }
+
+    /// A stream over an input that is all in memory: it is read at once, so
+    /// every step knows it has the rest of the input (`Pass::last`) and
+    /// runs the plain parsers. The generated `parse_<rule>_slice` and
+    /// `parse_<rule>_slice_each` use it.
+    pub fn whole(input: R, context: &'c mut ParseContext<S>, k: usize) -> Self {
+        let mut stream = Stream::new(
+            input,
+            context,
+            super::Reading {
+                block: 1 << 16,
+                max_frame: usize::MAX / 4,
+            },
+            k,
+        );
+        stream.whole = true;
+        stream
     }
 
     /// The context, for the actions the driver runs between steps.
@@ -705,6 +759,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             while self.visible - self.pos < self.lookahead && !self.eof {
                 self.read_once(self.lookahead - (self.visible - self.pos))?;
             }
+        }
+        if self.whole && *n == 0 {
+            self.fold_first = Some(self.pos);
         }
         let last = self.eof && self.visible == self.buf.len();
         let pass = Pass {
@@ -1241,7 +1298,10 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         G: FnOnce() -> Replayer<'c, K, S>,
     {
         let end = self.pos + consumed;
-        let reach = if !TRACK {
+        let reach = if self.whole {
+            // The plain parsers note no reach.
+            REACH_UNKNOWN
+        } else if !TRACK {
             end
         } else if reach == usize::MAX {
             // Nothing of it failed: the diagnosing pass records nothing.
@@ -1282,6 +1342,21 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     ) where
         G: FnOnce() -> Replayer<'c, K, S>,
     {
+        if let (true, Some(first)) = (self.whole, self.fold_first) {
+            let state = self.context().user_state.clone();
+            self.pending.push(Pending {
+                run: keep(),
+                rules,
+                state,
+                what: Replay::EndedFrom {
+                    first,
+                    prev: self.prev_item.map(|p| (p, n)),
+                    next: (self.pos, n + 1),
+                },
+                reach: REACH_UNKNOWN,
+            });
+            return;
+        }
         let mut items = Vec::new();
         if let Some(prev) = self.prev_item {
             self.prune();
@@ -1354,6 +1429,13 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                         let _ = self.attempt(start, rules, &mut run, pass, Some(n));
                     }
                 }
+                Replay::EndedFrom { first, prev, next } => {
+                    if let Some((prev, n)) = prev {
+                        self.replay_from(first, prev, rules, &mut run, pass);
+                        let _ = self.attempt(prev, rules, &mut run, pass, Some(n));
+                    }
+                    let _ = self.attempt(next.0, rules, &mut run, pass, Some(next.1));
+                }
             }
             self.roll_back(None, saved);
             self.context().emits.discard();
@@ -1417,18 +1499,48 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             replay: true,
         };
         self.prune();
-        let earlier: Vec<Reaching> = self
-            .reaching
-            .iter()
-            .filter(|r| r.start < prev)
-            .copied()
-            .collect();
-        for r in earlier {
-            let _ = self.attempt(r.start, rules, f, pass, Some(r.n));
+        if let (true, Some(first)) = (self.whole, self.fold_first) {
+            self.replay_from(first, prev, rules, f, pass);
+        } else {
+            let earlier: Vec<Reaching> = self
+                .reaching
+                .iter()
+                .filter(|r| r.start < prev)
+                .copied()
+                .collect();
+            for r in earlier {
+                let _ = self.attempt(r.start, rules, f, pass, Some(r.n));
+            }
         }
         let _ = self.attempt(prev, rules, f, pass, Some(n.saturating_sub(1)));
         self.roll_back(None, saved);
         self.context().emits.restore(emitted);
+    }
+
+    /// Over an input all in memory: the items of the fold from its first,
+    /// at `first`, up to the one at `prev`, parsed again one after the
+    /// other by the diagnosing pass for what they record - the plain
+    /// parsers note no reach, so which of them reach `prev` is not known.
+    fn replay_from<T, F>(
+        &mut self,
+        first: usize,
+        prev: usize,
+        rules: &[&'static str],
+        f: &mut F,
+        pass: Pass,
+    ) where
+        F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail>,
+    {
+        let (mut at, mut n) = (first, 1);
+        while at < prev {
+            match self.attempt(at, rules, f, pass, Some(n)).0 {
+                Ok((_, consumed)) if consumed > 0 => {
+                    at += consumed;
+                    n += 1;
+                }
+                _ => break,
+            }
+        }
     }
 
     /// Runs `f` once over the window: the context goes in with its positions
@@ -1587,6 +1699,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                     self.eof = true;
                     break;
                 }
+                // All in memory: read on to the end, so that every step
+                // knows it has the rest.
+                Ok(_) if self.whole => {}
                 Ok(_) => break,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(e) => {

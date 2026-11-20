@@ -5,6 +5,20 @@
 
 ### Added
 
+- **`parse_<rule>_slice` and `parse_<rule>_slice_each`: a `#[stream]` rule
+  over an input that is all in memory.** The stream reads it at once
+  (`Stream::whole`), so every step has the rest of the input
+  (`Pass::last`), and the generated steps then run step functions made from
+  the plain rules (`…_plain`) instead of the edge-tracked copy: noting where
+  the window ends can change nothing there. In a grammar with a `#[stream]`
+  rule the plain copy moves its spans by `ParseContext::origin` too (0 in
+  memory), so positions agree. A diagnosis replays the fold's items from
+  its first, as the parse in memory does, since the plain parsers note no
+  reach. Errors are the parse in memory's (`stream_diagnose_test`,
+  `cut_error_wins_test`, `stream_step_records_test` check the slice under
+  every mode). callgrind, `examples/stream_profile.rs`: `slice` 49.6M
+  against `stream` 51.9M and `memory` 39.4M.
+
 - **`collect L;`: the collection a grammar's repetitions collect into.** A
   grammar that declares it collects every bound repetition (`xs:x*`, `xs:x+`,
   `xs:x{n,m}`, `xs:recover(r, s)*`) into `L<T>` instead of `Vec<T>`. `L` is a

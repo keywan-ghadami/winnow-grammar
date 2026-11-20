@@ -186,4 +186,10 @@ fn a_position_taken_by_hand_is_moved_by_span_at() {
     // The raw position is the step's: past the first item it is not the
     // stream's.
     assert!(got.iter().any(|&(a, b, _)| a != b), "{got:?}");
+    // All in memory, the steps run the plain parsers, which move their
+    // spans as well.
+    let mut ctx = ParseContext::<()>::default();
+    let whole = Positions::parse_doc_slice(input.as_bytes(), &mut ctx).unwrap();
+    let moved: Vec<_> = whole.iter().map(|&(_, b, s)| (b, s)).collect();
+    assert_eq!(moved, want, "the slice gives the stream's positions");
 }

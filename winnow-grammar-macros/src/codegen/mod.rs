@@ -83,6 +83,11 @@ pub struct Codegen<'a> {
     /// the one copy there is - which is how the whole test suite is run once
     /// with the wrapping on, to show that it changes no result.
     pub streaming: std::cell::Cell<bool>,
+    /// Set while a stream's step functions are generated a second time from
+    /// the plain copy, under `…_plain` names: the steps a stream runs when
+    /// its input is all there (`Pass::last`), where noting the end of the
+    /// window would change nothing (#2420 of Nikaia).
+    pub plain_steps: std::cell::Cell<bool>,
     /// Whether every rule's parser is generated twice (ADR 27 §3, *Per-mode
     /// copies*): untracked for the plain entry points, and tracked under
     /// `__edge_…` names for the stream readers and everything they reach.
@@ -136,6 +141,16 @@ impl Codegen<'_> {
             format_ident!("__edge_WS", span = Span::call_site())
         } else {
             format_ident!("WS", span = Span::call_site())
+        }
+    }
+
+    /// A stream step function's name: `…_plain` for the copy from the
+    /// plain rules (`plain_steps`).
+    pub fn step_name(&self, base: String) -> syn::Ident {
+        if self.plain_steps.get() {
+            format_ident!("{}_plain", base, span = Span::mixed_site())
+        } else {
+            format_ident!("{}", base, span = Span::mixed_site())
         }
     }
 
@@ -211,6 +226,7 @@ impl<'a> Codegen<'a> {
         Self {
             streams,
             streaming: std::cell::Cell::new(all_edges),
+            plain_steps: std::cell::Cell::new(false),
             dual,
             tracked_rules,
             edge_k: edge::lookahead(grammar),
