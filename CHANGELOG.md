@@ -99,6 +99,16 @@
 
 ### Fixed
 
+- **A stream step at the end of the input is parsed once.** A prefix or
+  suffix whose fast attempt touched the end of its window was rolled back and
+  parsed again after the next read, even when that read found the end of the
+  stream and the window was unchanged; with a zero-sized state that read
+  comes only then, so the last step of every stream was parsed twice (a yaml
+  stream whose prefix holds its only document: the whole document). The read
+  now comes first, and when it brings nothing the attempt stands.
+  `tests/stream_step_records_test.rs`, *a step that ends the stream is parsed
+  once*.
+
 - **A stream diagnoses only on failure again (ADR 17).** A prefix or suffix
   step that matched was parsed again by the diagnosing pass at once
   (`record_chunk`), and so was the item before the end of every fold: a

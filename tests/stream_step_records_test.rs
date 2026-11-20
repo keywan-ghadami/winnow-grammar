@@ -140,3 +140,40 @@ fn a_replayed_step_runs_its_actions_for_nothing() {
         }
     }
 }
+
+// --- A step at the end of the stream is parsed once ------------------------
+
+/// Counts the parses of `head` across the copies the stream takes of the
+/// state: a copy shares the count.
+#[derive(Debug, Clone, Default)]
+pub struct Parses {
+    pub heads: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+grammar! {
+    grammar Once {
+        use super::Parses;
+        state Parses;
+
+        #[stream]
+        pub doc -> usize = _h:head n:fold(word, || 0usize, |n: usize, _w: ()| n + 1) -> { n }
+        head -> () = "%" raw_ident -> { let c = &_state.user().heads; c.set(c.get() + 1); }
+        word -> () = "#" raw_ident -> { }
+    }
+}
+
+/// The prefix is the whole input and touches the end of what was read; the
+/// read after it finds the end of the stream, and the attempt over the same
+/// bytes stands instead of being parsed again.
+#[test]
+fn a_step_that_ends_the_stream_is_parsed_once() {
+    let input = "%title";
+    for mode in [Diagnose::Replay, Diagnose::ReplayInPlace, Diagnose::Off] {
+        let mut ctx = ParseContext::with_state(Parses::default());
+        ctx.diagnose = mode;
+        let n =
+            Once::parse_doc_reader(Trickle(input.as_bytes(), 1 << 20), &mut ctx, SMALL).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(ctx.user_state.heads.get(), 1, "{mode:?}");
+    }
+}

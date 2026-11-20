@@ -1090,7 +1090,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         }
         loop {
             let window = self.visible - self.pos;
-            let last = self.eof && self.visible == self.buf.len();
+            let mut last = self.eof && self.visible == self.buf.len();
             let full = window >= self.lookahead;
             let snapshot = (!zst && (mode == Diagnose::Replay || (lazy && !last && !full)))
                 .then(|| self.context().user_state.clone());
@@ -1100,11 +1100,6 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             };
             let first = Pass {
                 diagnose: mode == Diagnose::Eager,
-                last,
-                replay: false,
-            };
-            let diagnose = Pass {
-                diagnose: true,
                 last,
                 replay: false,
             };
@@ -1120,17 +1115,29 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 if full {
                     return Err(self.too_far());
                 }
-                // What the attempt's cut set aside comes back: it is parsed
-                // again, and sets it aside again if it still cuts.
-                self.cut_end(depth);
-                self.roll_back(snapshot, saved);
+                // Read first: when nothing more comes, the window was the
+                // rest of the stream and the attempt is the answer - parsed
+                // again, it would only be parsed over the same bytes.
                 let more = window.max(self.block);
-                let before = self.visible;
-                while self.visible == before && !self.eof {
+                // In stream positions: a read may drop what lies before.
+                let before = self.base + self.visible;
+                while self.base + self.visible == before && !self.eof {
                     self.read_once(more)?;
                 }
-                continue;
+                if self.base + self.visible != before || self.visible != self.buf.len() {
+                    // What the attempt's cut set aside comes back: it is
+                    // parsed again, and sets it aside again if it still cuts.
+                    self.cut_end(depth);
+                    self.roll_back(snapshot, saved);
+                    continue;
+                }
+                last = true;
             }
+            let diagnose = Pass {
+                diagnose: true,
+                last,
+                replay: false,
+            };
             return match r {
                 Ok((v, consumed)) => {
                     if !first.diagnose && mode != Diagnose::Off {
