@@ -409,17 +409,51 @@ struct Reaching {
 /// needs: the generated reader hands one over (`keep`) only when the stream
 /// asks, for a step whose records are left for later (ADR 17: explain on
 /// failure).
-pub type Replayer<'c, K, S> = Box<
-    dyn for<'w> FnMut(&mut Input<<K as Kind>::View<'w>, S>, &Pass, usize) -> Result<(), Fail> + 'c,
->;
+///
+/// A trait object of its own rather than a boxed `dyn for<'w> FnMut(&mut
+/// Input<K::View<'w>, S>, ..)`: that projection inside the object type made
+/// the nightly compiler under Miri fail in borrowck ("unnormalized
+/// aliases").
+pub type Replayer<'c, K, S> = Box<dyn Rerun<K, S> + 'c>;
 
-/// A [`Replayer`] of `f`, its value thrown away.
+/// What a [`Replayer`] does: parse the step once more, its value thrown
+/// away.
 #[doc(hidden)]
-pub fn replayer<'c, K: Kind, S: Clone + std::fmt::Debug + 'c, T, F>(mut f: F) -> Replayer<'c, K, S>
+pub trait Rerun<K: Kind, S> {
+    fn rerun(
+        &mut self,
+        input: &mut Input<K::View<'_>, S>,
+        pass: &Pass,
+        n: usize,
+    ) -> Result<(), Fail>;
+}
+
+/// A step's parser as a [`Rerun`]; `T` is its value's type.
+struct Keep<F, T>(F, PhantomData<fn() -> T>);
+
+impl<K: Kind, S, T, F> Rerun<K, S> for Keep<F, T>
+where
+    F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail>,
+{
+    fn rerun(
+        &mut self,
+        input: &mut Input<K::View<'_>, S>,
+        pass: &Pass,
+        n: usize,
+    ) -> Result<(), Fail> {
+        (self.0)(input, pass, n).map(|_| ())
+    }
+}
+
+/// A [`Replayer`] of `f`.
+#[doc(hidden)]
+pub fn replayer<'c, K: Kind + 'c, S: Clone + std::fmt::Debug + 'c, T: 'c, F>(
+    f: F,
+) -> Replayer<'c, K, S>
 where
     F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail> + 'c,
 {
-    Box::new(move |input, pass, n| f(input, pass, n).map(|_| ()))
+    Box::new(Keep(f, PhantomData))
 }
 
 /// What a matched step would have recorded, not yet recorded. The parse in
@@ -1286,12 +1320,22 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             last,
             replay: true,
         };
-        for mut p in pending {
-            self.context().user_state = p.state;
-            match p.what {
+        for p in pending {
+            let Pending {
+                mut run,
+                rules,
+                state,
+                what,
+                ..
+            } = p;
+            let mut run = |input: &mut Input<K::View<'_>, S>, pass: &Pass, n: usize| {
+                run.rerun(input, pass, n)
+            };
+            self.context().user_state = state;
+            match what {
                 Replay::Chunk(start) => {
                     let before = (self.furthest.clone(), self.cut_stash.len());
-                    let (_, touched) = self.attempt(start, p.rules, &mut p.run, pass, None);
+                    let (_, touched) = self.attempt(start, rules, &mut run, pass, None);
                     // Over input that is not all there it records nothing.
                     if touched && !last {
                         self.furthest = before.0;
@@ -1300,7 +1344,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 }
                 Replay::Ended(items) => {
                     for (start, n) in items {
-                        let _ = self.attempt(start, p.rules, &mut p.run, pass, Some(n));
+                        let _ = self.attempt(start, rules, &mut run, pass, Some(n));
                     }
                 }
             }
