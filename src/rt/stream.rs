@@ -405,6 +405,67 @@ struct Reaching {
     n: usize,
 }
 
+/// A step's parser as the diagnosing pass runs it again, owning what it
+/// needs: the generated reader hands one over (`keep`) only when the stream
+/// asks, for a step whose records are left for later (ADR 17: explain on
+/// failure).
+pub type Replayer<'c, K, S> = Box<
+    dyn for<'w> FnMut(&mut Input<<K as Kind>::View<'w>, S>, &Pass, usize) -> Result<(), Fail> + 'c,
+>;
+
+/// A [`Replayer`] of `f`, its value thrown away.
+#[doc(hidden)]
+pub fn replayer<'c, K: Kind, S: Clone + std::fmt::Debug + 'c, T, F>(mut f: F) -> Replayer<'c, K, S>
+where
+    F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail> + 'c,
+{
+    Box::new(move |input, pass, n| f(input, pass, n).map(|_| ()))
+}
+
+/// What a matched step would have recorded, not yet recorded. The parse in
+/// memory records it only on its way to an error, once its fast pass has
+/// failed; so the stream parses the step again for it only once a failure
+/// comes (or a cut sets the records aside), and forgets it once the stream
+/// is past where its failures reached.
+struct Pending<'c, K: Kind, S> {
+    run: Replayer<'c, K, S>,
+    rules: &'static [&'static str],
+    /// The user state the replay starts from.
+    state: S,
+    what: Replay,
+    /// The furthest its failures may have got, in `buf`.
+    reach: usize,
+}
+
+/// Which replay a [`Pending`] is.
+enum Replay {
+    /// A prefix or suffix, at its start in `buf` ([`Stream::record_chunk`]).
+    Chunk(usize),
+    /// The end of a fold (`Stop::Ended` in [`Stream::settle`]): the items
+    /// taken before it whose failures may reach it, oldest first, the last
+    /// item taken, and the item that did not come - each at its start in
+    /// `buf`, with its number.
+    Ended(Vec<(usize, usize)>),
+}
+
+impl<K: Kind, S> Pending<'_, K, S> {
+    /// The first byte of `buf` it parses again.
+    fn start(&self) -> usize {
+        match &self.what {
+            Replay::Chunk(s) => *s,
+            Replay::Ended(items) => items.iter().map(|i| i.0).min().unwrap_or(self.reach),
+        }
+    }
+
+    fn shift_back(&mut self, by: usize) {
+        self.reach -= by;
+        match &mut self.what {
+            Replay::Chunk(s) => *s -= by,
+            Replay::Ended(items) => items.iter_mut().for_each(|i| i.0 -= by),
+        }
+    }
+}
+
 /// The reader, the buffer and the context of a stream parse. See the module
 /// documentation; the generated `parse_<rule>_reader` is its only user.
 pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool = false> {
@@ -426,6 +487,9 @@ pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK:
     /// error further on, so the diagnosing pass replays them too while what
     /// they reached is not behind the next step. In `buf`, oldest first.
     reaching: Vec<Reaching>,
+    /// Matched steps whose records the diagnosing pass has not taken yet,
+    /// oldest first: see [`Pending`].
+    pending: Vec<Pending<'c, K, S>>,
     /// The grammar's own lookahead.
     k: usize,
     /// The stream's offset of `buf[0]`.
@@ -477,6 +541,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             pos: 0,
             prev_item: None,
             reaching: Vec::new(),
+            pending: Vec::new(),
             k,
             base: 0,
             visible: 0,
@@ -512,6 +577,8 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         if self.cut_stash.len() <= depth {
             return;
         }
+        // What the cut set aside competes with everything recorded since.
+        self.flush();
         let mut back = self.furthest.take();
         for f in self.cut_stash.drain(depth..).flatten() {
             back = Some(match back {
@@ -525,15 +592,22 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     /// One step: `f` parses a prefix or a suffix, whose value does not
     /// borrow the input. `rules` are the rules of the path the step is
     /// inside, outermost first.
-    pub fn chunk<T, F>(&mut self, rules: &[&'static str], mut f: F) -> Result<T, ParseError>
+    ///
+    /// `keep` makes the step's [`Replayer`]: the stream asks for it when the
+    /// step matched, for what its diagnosing pass would record should a
+    /// failure follow.
+    pub fn chunk<T, F, G>(
+        &mut self,
+        rules: &'static [&'static str],
+        mut f: F,
+        keep: G,
+    ) -> Result<T, ParseError>
     where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail>,
+        G: FnOnce() -> Replayer<'c, K, S>,
     {
-        let r = self.run(rules, &mut f, None);
-        match self.finished(r)? {
-            Some(v) => Ok(v),
-            None => unreachable!("a chunk is not an item"),
-        }
+        let r = self.run(rules, &mut f, keep);
+        self.finished(r)
     }
 
     /// Items of the fold, as many as the input that has arrived decides: `f`
@@ -554,30 +628,37 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     /// One window serves every item it decides, so a step costs the item's
     /// parse and little else; an item that touched the end of the window is
     /// parsed again in the next.
-    pub fn items<F>(
+    ///
+    /// `keep` makes the item's [`Replayer`], as for [`Stream::chunk`]: asked
+    /// for when the fold ends.
+    pub fn items<F, G>(
         &mut self,
-        rules: &[&'static str],
+        rules: &'static [&'static str],
         n: &mut usize,
         mut f: F,
+        keep: G,
     ) -> Result<bool, ParseError>
     where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<bool, Fail>,
+        G: FnOnce() -> Replayer<'c, K, S>,
     {
-        let r = self.items_once(rules, n, &mut f);
+        let r = self.items_once(rules, n, &mut f, keep);
         // An item hands its emits to `each` when it is taken, inside `f`:
         // what is left is an attempt's that was not (ADR 28).
         self.context().emits.discard();
         self.finished(r)
     }
 
-    fn items_once<F>(
+    fn items_once<F, G>(
         &mut self,
-        rules: &[&'static str],
+        rules: &'static [&'static str],
         n: &mut usize,
         f: &mut F,
+        keep: G,
     ) -> Result<bool, ParseError>
     where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<bool, Fail>,
+        G: FnOnce() -> Replayer<'c, K, S>,
     {
         let mode = self.context().diagnose;
         let zst = std::mem::size_of::<S>() == 0;
@@ -611,9 +692,11 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         if pass.diagnose {
             ctx.rules.extend_from_slice(rules);
         }
-        let (stop, at, mut ctx, prev, reaching) = self.scan_window(ctx, f, n, &pass, mode, lazy);
+        let (stop, at, mut ctx, prev, reaching, reach) =
+            self.scan_window(ctx, f, n, &pass, mode, lazy);
         ctx.rules.clear();
         ctx.origin = 0;
+        let mut ctx = self.flush_before_cut(ctx);
         end_step(&mut self.furthest, &mut self.cut_stash, &mut ctx, origin);
         for e in &mut ctx.recovered[recovered..] {
             *e = shift(e.clone(), origin);
@@ -623,6 +706,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             self.prev_item = Some(self.pos + p);
         }
         let pos = self.pos;
+        let reach = reach.map(|r| pos + r);
         self.reaching.extend(reaching.into_iter().map(|r| Reaching {
             start: pos + r.start,
             reach: pos + r.reach,
@@ -630,7 +714,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         }));
         self.pos += at;
         self.prune();
-        self.settle(stop, rules, n, f, &pass, mode)
+        self.settle(stop, rules, n, f, &pass, mode, keep, reach)
     }
 
     /// Parses items from the window until one stops the step: the item
@@ -644,7 +728,14 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         pass: &Pass,
         mode: Diagnose,
         lazy: bool,
-    ) -> (Stop, usize, ParseContext<S>, Option<usize>, Vec<Reaching>)
+    ) -> (
+        Stop,
+        usize,
+        ParseContext<S>,
+        Option<usize>,
+        Vec<Reaching>,
+        Option<usize>,
+    )
     where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<bool, Fail>,
     {
@@ -747,28 +838,36 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 }
             }
         };
+        // How far the failures of the item that ended the fold got, in the
+        // window: unknown (`None`) where the grammar does not track it.
+        let reach = (track && input.state.reach != usize::MAX).then(|| window - input.state.reach);
         (
             stop,
             input.current_token_start(),
             input.state,
             prev,
             reaching,
+            reach,
         )
     }
 
     /// Acts on how the step stopped: reads more, takes the error, or parses
     /// again with the diagnosing pass for what the fast one did not record.
-    fn settle<F>(
+    #[allow(clippy::too_many_arguments)]
+    fn settle<F, G>(
         &mut self,
         stop: Stop,
-        rules: &[&'static str],
+        rules: &'static [&'static str],
         n: &mut usize,
         f: &mut F,
         pass: &Pass,
         mode: Diagnose,
+        keep: G,
+        reach: Option<usize>,
     ) -> Result<bool, ParseError>
     where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<bool, Fail>,
+        G: FnOnce() -> Replayer<'c, K, S>,
     {
         let last = pass.last;
         let diagnose = Pass {
@@ -791,17 +890,10 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 // What the item expected is kept for an error further on, as
                 // the fold keeps it - and so is what the item before it
                 // recorded, which the parse in memory would have recorded on
-                // its way here.
+                // its way here. Kept to be parsed again should that error
+                // come (`Pending`), not parsed again now.
                 if !pass.diagnose && mode != Diagnose::Off {
-                    let saved = {
-                        let c = self.context();
-                        (c.recoveries, c.recovered.len())
-                    };
-                    let keep = self.context().user_state.clone();
-                    self.replay_prev(rules, f, Some(*n + 1), last);
-                    let _ = self.attempt(self.pos, rules, f, diagnose, Some(*n + 1));
-                    self.context().user_state = keep;
-                    self.roll_back(None, saved);
+                    self.defer_ended(rules, *n, keep, reach);
                 }
                 Ok(false)
             }
@@ -820,6 +912,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             }
             Stop::Failed(_) if mode == Diagnose::Off => Err(ParseError::undiagnosed()),
             Stop::Failed(_) => {
+                self.flush();
                 let keep = self.context().user_state.clone();
                 self.replay_prev(rules, f, Some(*n + 1), last);
                 self.context().user_state = keep;
@@ -840,6 +933,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         if self.context().diagnose == Diagnose::Off {
             return ParseError::undiagnosed();
         }
+        self.flush();
         let e = match &self.furthest {
             Some(f) => f.clone(),
             None => {
@@ -865,9 +959,10 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
 
     /// The end: `f` skips what the entry point skips after its rule, and then
     /// nothing may be left.
-    pub fn finish<F>(&mut self, f: F) -> Result<(), ParseError>
+    pub fn finish<F, G>(&mut self, f: F, keep: G) -> Result<(), ParseError>
     where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<(), Fail>,
+        G: FnOnce() -> Replayer<'c, K, S>,
     {
         // Every cut scope is closed by now: a step closes its own, the
         // reader closes those that span steps, and a step parsed again
@@ -877,7 +972,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             "an open cut at the end of the stream: {:?}",
             self.cut_stash
         );
-        self.chunk(&[], f)?;
+        self.chunk(&[], f, keep)?;
         while self.visible == self.pos && !self.eof {
             self.read_once(0)?;
         }
@@ -887,6 +982,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         if self.context().diagnose == Diagnose::Off {
             return Err(ParseError::undiagnosed());
         }
+        self.flush();
         let ctx = self.ctx.take().expect("the context is back between steps");
         let (e, ctx) = {
             let input = Input {
@@ -931,15 +1027,18 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         Err(e)
     }
 
-    fn run<T, F>(
+    /// The step of [`Stream::chunk`].
+    fn run<T, F, G>(
         &mut self,
-        rules: &[&'static str],
+        rules: &'static [&'static str],
         f: &mut F,
-        item: Option<usize>,
-    ) -> Result<Option<T>, ParseError>
+        keep: G,
+    ) -> Result<T, ParseError>
     where
         F: for<'w> FnMut(&mut Input<K::View<'w>, S>, &Pass, usize) -> Result<T, Fail>,
+        G: FnOnce() -> Replayer<'c, K, S>,
     {
+        let mut keep = Some(keep);
         let mode = self.context().diagnose;
         let zst = std::mem::size_of::<S>() == 0;
         // Parse with what is there, and again with more where that was not
@@ -979,7 +1078,10 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             // A step's emits are handed to `each` after `chunk` returns: what
             // is held then is the taken attempt's, and only that (ADR 28).
             self.context().emits.discard();
-            let (r, touched) = self.attempt(self.pos, rules, f, first, item);
+            if TRACK {
+                self.context().reach = usize::MAX;
+            }
+            let (r, touched) = self.attempt(self.pos, rules, f, first, None);
             if touched && !last {
                 if full {
                     return Err(self.too_far());
@@ -997,29 +1099,19 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             }
             return match r {
                 Ok((v, consumed)) => {
-                    if item.is_some() && consumed > 0 {
-                        self.prev_item = Some(self.pos);
-                    }
-                    if item.is_none() && !first.diagnose && mode != Diagnose::Off {
-                        self.record_chunk(rules, f, snapshot, last);
+                    if !first.diagnose && mode != Diagnose::Off {
+                        let reach = self.context().reach;
+                        // A step that leaves a cut open has its records set
+                        // aside with it: recorded now.
+                        match keep.take() {
+                            Some(keep) if self.cut_stash.len() == depth => {
+                                self.defer_chunk(rules, keep, snapshot, consumed, reach)
+                            }
+                            _ => self.record_chunk(rules, f, snapshot, last),
+                        }
                     }
                     self.pos += consumed;
-                    Ok(Some(v))
-                }
-                Err(Fail::Backtrack(_)) if item.is_some() => {
-                    // The end of the fold. What the item expected is kept for
-                    // an error further on, as the fold keeps it - and so is
-                    // what the item before it recorded, which the parse in
-                    // memory would have recorded on its way here.
-                    if !first.diagnose && mode != Diagnose::Off {
-                        let keep = self.context().user_state.clone();
-                        self.replay_prev(rules, f, item, last);
-                        let _ = self.attempt(self.pos, rules, f, diagnose, item);
-                        self.context().user_state = keep;
-                        self.roll_back(None, saved);
-                    }
-                    self.context().emits.discard();
-                    Ok(None)
+                    Ok(v)
                 }
                 Err(fail) if first.diagnose => {
                     Err(fail.error().unwrap_or_else(ParseError::undiagnosed))
@@ -1029,16 +1121,12 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                     if let Some(s) = snapshot {
                         self.context().user_state = s;
                     }
-                    if item.is_some() {
-                        let keep = self.context().user_state.clone();
-                        self.replay_prev(rules, f, item, last);
-                        self.context().user_state = keep;
-                    }
+                    self.flush();
                     self.context().emits.discard();
-                    match self.attempt(self.pos, rules, f, diagnose, item).0 {
+                    match self.attempt(self.pos, rules, f, diagnose, None).0 {
                         Ok((v, consumed)) => {
                             self.pos += consumed;
-                            Ok(Some(v))
+                            Ok(v)
                         }
                         Err(fail) => Err(fail.error().unwrap_or_else(ParseError::undiagnosed)),
                     }
@@ -1095,11 +1183,160 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         self.context().emits.restore(emitted);
     }
 
+    /// A prefix or suffix the fast pass matched, kept to be parsed again
+    /// as [`Stream::record_chunk`] does, should a failure come while what it
+    /// records may still compete. `reach` is the context's: how far its
+    /// failures got, before the end of the window - or `usize::MAX`, none
+    /// noted. Without it (`TRACK` off) its failures stay within the step and
+    /// its lookahead.
+    fn defer_chunk<G>(
+        &mut self,
+        rules: &'static [&'static str],
+        keep: G,
+        snapshot: Option<S>,
+        consumed: usize,
+        reach: usize,
+    ) where
+        G: FnOnce() -> Replayer<'c, K, S>,
+    {
+        let end = self.pos + consumed;
+        let reach = if !TRACK {
+            end
+        } else if reach == usize::MAX {
+            // Nothing of it failed: the diagnosing pass records nothing.
+            return;
+        } else {
+            self.visible - reach
+        };
+        if reach + self.k < end {
+            // Behind where the next step starts: an error there beats it.
+            return;
+        }
+        // The state goes in as `record_chunk` puts it in: put back under
+        // `Replay`, as the fast pass left it under `ReplayInPlace`.
+        let state = match snapshot {
+            Some(s) => s,
+            None => self.context().user_state.clone(),
+        };
+        self.pending.push(Pending {
+            run: keep(),
+            rules,
+            state,
+            what: Replay::Chunk(self.pos),
+            reach,
+        });
+    }
+
+    /// The end of a fold the fast pass found, kept to be parsed again as
+    /// `Stop::Ended` did: the last item taken and those before it whose
+    /// failures may reach the end (oldest first), then the item that did not
+    /// come, numbered `n + 1`. `reach` is how far that item's failures got,
+    /// in `buf`, where the grammar tracks it.
+    fn defer_ended<G>(
+        &mut self,
+        rules: &'static [&'static str],
+        n: usize,
+        keep: G,
+        reach: Option<usize>,
+    ) where
+        G: FnOnce() -> Replayer<'c, K, S>,
+    {
+        let mut items = Vec::new();
+        if let Some(prev) = self.prev_item {
+            self.prune();
+            items.extend(
+                self.reaching
+                    .iter()
+                    .filter(|r| r.start < prev)
+                    .map(|r| (r.start, r.n)),
+            );
+            items.push((prev, n));
+        }
+        items.push((self.pos, n + 1));
+        let reach = reach.unwrap_or(self.pos).max(self.pos);
+        let state = self.context().user_state.clone();
+        self.pending.push(Pending {
+            run: keep(),
+            rules,
+            state,
+            what: Replay::Ended(items),
+            reach,
+        });
+    }
+
+    /// Takes the records of every pending step now, oldest first, as the
+    /// parse in memory took them on its way here: a failure has come, or a
+    /// cut sets aside what was recorded. The context comes out as it went
+    /// in, user state, recoveries and emits alike.
+    fn flush(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        self.prune();
+        let pending = std::mem::take(&mut self.pending);
+        let saved = {
+            let c = self.context();
+            (c.recoveries, c.recovered.len())
+        };
+        let emitted = self.context().emits.set_aside();
+        let keep = self.context().user_state.clone();
+        let last = self.eof && self.visible == self.buf.len();
+        let pass = Pass {
+            diagnose: true,
+            last,
+            replay: true,
+        };
+        for mut p in pending {
+            self.context().user_state = p.state;
+            match p.what {
+                Replay::Chunk(start) => {
+                    let before = (self.furthest.clone(), self.cut_stash.len());
+                    let (_, touched) = self.attempt(start, p.rules, &mut p.run, pass, None);
+                    // Over input that is not all there it records nothing.
+                    if touched && !last {
+                        self.furthest = before.0;
+                        self.cut_stash.truncate(before.1);
+                    }
+                }
+                Replay::Ended(items) => {
+                    for (start, n) in items {
+                        let _ = self.attempt(start, p.rules, &mut p.run, pass, Some(n));
+                    }
+                }
+            }
+            self.roll_back(None, saved);
+            self.context().emits.discard();
+        }
+        self.context().user_state = keep;
+        self.context().emits.restore(emitted);
+    }
+
+    /// Before a step that leaves a cut open sets aside what was recorded
+    /// (`end_step`), what is pending is recorded: in memory the cut's
+    /// `commit` takes it too. `ctx` is the step's, taken out of the stream.
+    fn flush_before_cut(&mut self, mut ctx: ParseContext<S>) -> ParseContext<S> {
+        if ctx.cut_stash.is_empty() || self.pending.is_empty() {
+            return ctx;
+        }
+        let open = std::mem::take(&mut ctx.cut_stash);
+        let recorded = ctx.furthest.take();
+        let back = self.ctx.replace(ctx);
+        debug_assert!(back.is_none());
+        self.flush();
+        let mut ctx = self.ctx.take().expect("the flush gives the context back");
+        ctx.cut_stash = open;
+        ctx.furthest = recorded;
+        ctx
+    }
+
     /// Forgets the items whose failures lie behind the next step: an error
     /// from there on is further, and beats them.
     fn prune(&mut self) {
         let (pos, k) = (self.pos, self.k);
         self.reaching.retain(|r| r.reach + k >= pos);
+        if !self.pending.is_empty() {
+            self.pending.retain(|p| p.reach + k >= pos);
+        }
     }
 
     /// The items taken whose failures may reach the next step, and the last
@@ -1181,41 +1418,44 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             // An item hands its emits over inside `f`, when it is taken.
             ctx.emits.discard();
         }
-        let mut input = Input {
-            input: winnow::stream::LocatingSlice::new(K::view(
-                &self.buf.bytes()[start..self.visible],
-            )),
-            state: ctx,
+        // The view ends here, before the context goes back to the stream.
+        let (r, touched, mut ctx) = {
+            let mut input = Input {
+                input: winnow::stream::LocatingSlice::new(K::view(
+                    &self.buf.bytes()[start..self.visible],
+                )),
+                state: ctx,
+            };
+            let r = f(&mut input, &pass, item.unwrap_or(0));
+            let consumed = input.current_token_start();
+            let r = match r {
+                Ok(v) => Ok((v, consumed)),
+                Err(Fail::Stop) => Err(Fail::Stop),
+                Err(Fail::Backtrack(Some(e))) if item.is_some() => {
+                    let e = e.item(item.unwrap_or(0));
+                    e.record(&mut input.state, 0);
+                    Err(Fail::Backtrack(None))
+                }
+                Err(fail) => {
+                    let cut = matches!(fail, Fail::Cut(_));
+                    let e = fail.error().map(|mut e| {
+                        for r in rules.iter().rev() {
+                            e.push_rule(r);
+                        }
+                        e
+                    });
+                    Err(if cut {
+                        Fail::Cut(e)
+                    } else {
+                        Fail::Backtrack(e)
+                    })
+                }
+            };
+            (r, input.state.touched, input.state)
         };
-        let r = f(&mut input, &pass, item.unwrap_or(0));
-        let consumed = input.current_token_start();
-        let r = match r {
-            Ok(v) => Ok((v, consumed)),
-            Err(Fail::Stop) => Err(Fail::Stop),
-            Err(Fail::Backtrack(Some(e))) if item.is_some() => {
-                let e = e.item(item.unwrap_or(0));
-                e.record(&mut input.state, 0);
-                Err(Fail::Backtrack(None))
-            }
-            Err(fail) => {
-                let cut = matches!(fail, Fail::Cut(_));
-                let e = fail.error().map(|mut e| {
-                    for r in rules.iter().rev() {
-                        e.push_rule(r);
-                    }
-                    e
-                });
-                Err(if cut {
-                    Fail::Cut(e)
-                } else {
-                    Fail::Backtrack(e)
-                })
-            }
-        };
-        let touched = input.state.touched;
-        let mut ctx = input.state;
         ctx.rules.clear();
         ctx.origin = 0;
+        let mut ctx = self.flush_before_cut(ctx);
         end_step(&mut self.furthest, &mut self.cut_stash, &mut ctx, origin);
         for e in &mut ctx.recovered[recovered..] {
             *e = shift(e.clone(), origin);
@@ -1262,7 +1502,18 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     fn read_once(&mut self, want: usize) -> Result<(), ParseError> {
         self.prune();
         let oldest = self.reaching.first().map_or(self.pos, |r| r.start);
-        let keep = self.prev_item.unwrap_or(self.pos).min(self.pos).min(oldest);
+        let pending = self
+            .pending
+            .iter()
+            .map(Pending::start)
+            .min()
+            .unwrap_or(self.pos);
+        let keep = self
+            .prev_item
+            .unwrap_or(self.pos)
+            .min(self.pos)
+            .min(oldest)
+            .min(pending);
         let keep = self.buf.droppable(keep, self.max_frame);
         if keep >= self.block {
             self.buf.drop_front(keep);
@@ -1273,6 +1524,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             for r in &mut self.reaching {
                 r.start -= keep;
                 r.reach -= keep;
+            }
+            for p in &mut self.pending {
+                p.shift_back(keep);
             }
         }
         let len = self.buf.len();

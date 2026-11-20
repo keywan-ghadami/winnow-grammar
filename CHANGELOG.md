@@ -99,6 +99,19 @@
 
 ### Fixed
 
+- **A stream diagnoses only on failure again (ADR 17).** A prefix or suffix
+  step that matched was parsed again by the diagnosing pass at once
+  (`record_chunk`), and so was the item before the end of every fold: a
+  successful stream paid for a diagnosis it never read, about as much as the
+  diagnosing pass of the whole step. These replays are now kept as pending
+  (`rt::stream::Replayer`, which the generated reader hands over when the
+  stream asks) and run only when a failure comes, a cut sets aside what was
+  recorded, or never, once the stream is past where their failures reached.
+  Messages are unchanged (the stream and diagnostics tests pass as they
+  were). callgrind, `examples/stream_profile.rs list`: 499 480 809 → 178 669
+  164 instructions. `Stream::chunk`, `items` and `finish` take the replayer
+  factory as a new last argument, and `rules` as `&'static`.
+
 - **`_state` in the actions of a `#[stream]` rule's reader functions.** The
   binding was spanned `mixed_site`, so an action's own tokens could not name
   it; it is spanned at the call site now, as in memory (ADR 28).

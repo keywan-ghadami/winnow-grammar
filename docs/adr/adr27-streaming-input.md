@@ -342,6 +342,23 @@ per rule of the path, not per item. A replay that touches the end of its
 window keeps nothing. `tests/stream_step_records_test.rs` pins prefix, suffix
 and the state.
 
+Since then (2026-11-20) these records are taken lazily, as ADR 17 has it for
+the parse in memory: parsing a step again at once made every successful
+stream pay for the diagnosing pass of each prefix and suffix - and, through
+the end of each fold, of the item before it - which for a grammar whose
+prefix holds a whole document is the diagnosing pass of that document. A
+step that matched, and the end of a fold, now leave a `Pending` entry: the
+step's `Replayer` (the generated reader makes one, owning clones of the
+step's arguments, only when `keep` is called), the user state it starts
+from, where it starts and how far its failures got (`reach`, where the
+grammar tracks it; else the step's end). The entries are replayed oldest
+first (`Stream::flush`) when a failure is diagnosed, before `short` and
+`finish` read what was recorded, before a cut sets the records aside
+(`flush_before_cut`, `cut_end`), and dropped once the stream is past their
+reach and the lookahead, as `reaching` is. A step that leaves a cut open is
+still recorded at once. The buffer keeps what a pending entry starts at.
+`examples/stream_profile.rs list`: 2 480 → 878 instructions a row.
+
 Found on the way, and fixed: under `Diagnose::Eager`, which records in the
 first pass, an item that touched the end of its window kept what it had
 recorded over the partial input when it was parsed again over more; its

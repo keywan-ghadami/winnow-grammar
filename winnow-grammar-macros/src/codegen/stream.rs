@@ -27,17 +27,7 @@ impl Codegen<'_> {
         let state_bound = self.state_bound();
         let input_ty = self.input_ty();
         let vis = &rule.vis;
-        let (kind, view) = if self.is_bytes() {
-            (
-                quote! { ::winnow_grammar::rt::stream::Bytes },
-                quote! { ::winnow_grammar::ParseBytes<'_, __WgS> },
-            )
-        } else {
-            (
-                quote! { ::winnow_grammar::rt::stream::Text },
-                quote! { ::winnow_grammar::ParseInput<'_, __WgS> },
-            )
-        };
+        let (kind, view) = (self.stream_kind(), self.stream_view());
         let k = self.edge_k;
         let reach = self.reach;
         let reader_fn = format_ident!("parse_{}_reader", rule.name, span = span);
@@ -64,7 +54,11 @@ impl Codegen<'_> {
             }
         };
         let body = self.stream_level(path, 0, &view, &mut helpers, false);
-        let finish = step_call(&view, &end_fn, &[]);
+        let finish = {
+            let call = step_call(&view, &end_fn, &[]);
+            let keep = step_keep(&kind, &view, &end_fn, &[]);
+            quote! { #call, #keep }
+        };
         let each_fn = if path.each {
             self.stream_each_fn(rule, path, &view, &kind, &finish, &params)
         } else {
@@ -319,8 +313,9 @@ impl Codegen<'_> {
         let a_names = names(&next_params);
         let rules = path_rules(path, j);
         let prefix_call = step_call(view, &prefix_fn, &clones(&params));
+        let prefix_keep = step_keep(&self.stream_kind(), view, &prefix_fn, &clones(&params));
         let prefix = quote_spanned! {span=>
-            let ((#(#c_names,)*), (#(#a_names,)*)) = __stream.chunk(&[#(#rules),*], #prefix_call)?;
+            let ((#(#c_names,)*), (#(#a_names,)*)) = __stream.chunk(&[#(#rules),*], #prefix_call, #prefix_keep)?;
         };
         (prefix, prefix_cut)
     }
@@ -380,8 +375,9 @@ impl Codegen<'_> {
         });
         let rules = path_rules(path, j);
         let suffix_call = step_call(view, &suffix_fn, &clones(&s_in));
+        let suffix_keep = step_keep(&self.stream_kind(), view, &suffix_fn, &clones(&s_in));
         quote_spanned! {span=>
-            let (#(#r_names,)*) = __stream.chunk(&[#(#rules),*], #suffix_call)?;
+            let (#(#r_names,)*) = __stream.chunk(&[#(#rules),*], #suffix_call, #suffix_keep)?;
         }
     }
 
@@ -559,6 +555,14 @@ impl Codegen<'_> {
         let emitted = each.then(|| emitted_type(&self.stream_item_type(path)));
         let (tap, stopped) = each_tap(emitted.as_ref());
         let (bounds, at_max, short) = fold_bounds(computed.as_deref(), *min, *max);
+        let item_keep = item_keep(
+            &self.stream_kind(),
+            view,
+            &item_fn,
+            &sep_arg,
+            &args,
+            &at_max_check(computed.as_deref(), *max, quote! { () }),
+        );
         // The step is always taken into the reader's loop: called, it was a
         // frame of its own around the item rule every item, once that rule's
         // tracked copy had one caller and was taken into it. Its fast pass
@@ -585,7 +589,7 @@ impl Codegen<'_> {
                 } else {
                     ::core::result::Result::Ok(false)
                 }
-            })? {}
+            }, #item_keep)? {}
             #stopped
             #short
             let __path = __acc.take().expect("the accumulator is there");
@@ -606,6 +610,24 @@ impl Codegen<'_> {
         self.rule(&rule_path.segments.last().unwrap().ident.to_string())
             .return_type
             .clone()
+    }
+
+    /// The stream's `rt::stream::Kind`.
+    fn stream_kind(&self) -> TokenStream {
+        if self.is_bytes() {
+            quote! { ::winnow_grammar::rt::stream::Bytes }
+        } else {
+            quote! { ::winnow_grammar::rt::stream::Text }
+        }
+    }
+
+    /// The input of one step.
+    fn stream_view(&self) -> TokenStream {
+        if self.is_bytes() {
+            quote! { ::winnow_grammar::ParseBytes<'_, __WgS> }
+        } else {
+            quote! { ::winnow_grammar::ParseInput<'_, __WgS> }
+        }
     }
 
     fn rule(&self, name: &str) -> &Rule {
@@ -672,6 +694,66 @@ fn step_call(view: &TokenStream, f: &syn::Ident, args: &[TokenStream]) -> TokenS
     }
 }
 
+/// The item of a streamed fold as the diagnosing pass parses it again
+/// (`rt::stream::Replayer`): its arguments as they are when the fold ends,
+/// nothing taken.
+fn item_keep(
+    kind: &TokenStream,
+    view: &TokenStream,
+    item_fn: &syn::Ident,
+    sep_arg: &TokenStream,
+    args: &[TokenStream],
+    at_max: &TokenStream,
+) -> TokenStream {
+    let span = Span::mixed_site();
+    let names: Vec<syn::Ident> = (0..args.len())
+        .map(|i| format_ident!("__wg_keep{}", i, span = span))
+        .collect();
+    quote_spanned! {span=>
+        || {
+            #(let #names = #args;)*
+            ::winnow_grammar::rt::stream::replayer::<#kind, __WgS, _, _>(
+                move |input: &mut #view, _: &::winnow_grammar::rt::stream::Pass, __item: usize| {
+                    #at_max
+                    #item_fn::<__WgS, ::winnow_grammar::ParseError>(
+                        input, #sep_arg #(::core::clone::Clone::clone(&#names)),*
+                    )
+                    .map(|_| ())
+                    .map_err(::winnow_grammar::rt::stream::Fail::from)
+                },
+            )
+        }
+    }
+}
+
+/// What [`step_call`] runs, as the diagnosing pass runs it again
+/// (`rt::stream::Replayer`): the arguments taken once, when the stream asks,
+/// and cloned for every replay.
+fn step_keep(
+    kind: &TokenStream,
+    view: &TokenStream,
+    f: &syn::Ident,
+    args: &[TokenStream],
+) -> TokenStream {
+    let span = Span::mixed_site();
+    let names: Vec<syn::Ident> = (0..args.len())
+        .map(|i| format_ident!("__wg_keep{}", i, span = span))
+        .collect();
+    quote_spanned! {span=>
+        || {
+            #(let #names = #args;)*
+            ::winnow_grammar::rt::stream::replayer::<#kind, __WgS, _, _>(
+                move |input: &mut #view, _: &::winnow_grammar::rt::stream::Pass, _: usize| {
+                    #f::<__WgS, ::winnow_grammar::ParseError>(
+                        input, #(::core::clone::Clone::clone(&#names)),*
+                    )
+                    .map_err(::winnow_grammar::rt::stream::Fail::from)
+                },
+            )
+        }
+    }
+}
+
 /// The bounds of a streamed fold, as the code before its loop (computed
 /// sides, ADR 26 D3), the check that ends it at `max`, and the check after
 /// it that fails short of `min`.
@@ -706,21 +788,7 @@ fn fold_bounds(
         None => quote! {},
     };
     // `max = N`: the fold takes no item past the N-th.
-    let at_max = match (computed, max) {
-        (Some(_), _) => quote_spanned! {span=>
-            if let ::core::option::Option::Some(__m) = __hi {
-                if __item > __m {
-                    return ::core::result::Result::Ok(false);
-                }
-            }
-        },
-        (None, Some(m)) => quote_spanned! {span=>
-            if __item > #m {
-                return ::core::result::Result::Ok(false);
-            }
-        },
-        (None, None) => quote! {},
-    };
+    let at_max = at_max_check(computed, max, quote! { false });
     // `min = N`: fewer items fail the parse with what the next one
     // expected, as in memory.
     let short = if computed.is_some() {
@@ -739,6 +807,31 @@ fn fold_bounds(
         quote! {}
     };
     (bounds, at_max, short)
+}
+
+/// The check that ends a streamed fold at `max = N`: past the N-th item the
+/// item step returns `Ok(value)` before parsing.
+fn at_max_check(
+    computed: Option<&FoldBounds>,
+    max: Option<usize>,
+    value: TokenStream,
+) -> TokenStream {
+    let span = Span::mixed_site();
+    match (computed, max) {
+        (Some(_), _) => quote_spanned! {span=>
+            if let ::core::option::Option::Some(__m) = __hi {
+                if __item > __m {
+                    return ::core::result::Result::Ok(#value);
+                }
+            }
+        },
+        (None, Some(m)) => quote_spanned! {span=>
+            if __item > #m {
+                return ::core::result::Result::Ok(#value);
+            }
+        },
+        (None, None) => quote! {},
+    }
 }
 
 /// For `_reader_each`: the check that hands each item to the caller before
