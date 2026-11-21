@@ -109,3 +109,33 @@ fn each_and_the_user_state_agree_on_success() {
         assert_eq!(c.user_state, Tally { items: 3, heads: 1 }, "{mode:?}");
     }
 }
+
+/// `parse_<rule>_str` is the slice entry over a `&str`, which is not checked
+/// as UTF-8 again: the same value, error and user state, `each` included.
+#[test]
+fn the_str_entries_are_the_slice_entries() {
+    for input in INPUTS.iter().copied().chain(["[ => 1, 2, é ]"]) {
+        for mode in MODES {
+            let mut a = ctx(mode);
+            let mut b = ctx(mode);
+            let slice = Count::parse_doc_slice(input.as_bytes(), &mut a).map_err(|e| e.to_string());
+            let s = Count::parse_doc_str(input, &mut b).map_err(|e| e.to_string());
+            assert_eq!(s, slice, "{input:?} {mode:?}");
+            assert_eq!(b.user_state, a.user_state, "{input:?} {mode:?}");
+
+            let (mut seen_a, mut seen_b) = (Vec::new(), Vec::new());
+            let slice = Count::parse_doc_slice_each(input.as_bytes(), &mut ctx(mode), |v: &i64| {
+                seen_a.push(*v);
+                ControlFlow::<()>::Continue(())
+            })
+            .map_err(|e| e.to_string());
+            let s = Count::parse_doc_str_each(input, &mut ctx(mode), |v: &i64| {
+                seen_b.push(*v);
+                ControlFlow::<()>::Continue(())
+            })
+            .map_err(|e| e.to_string());
+            assert_eq!(s, slice, "{input:?} {mode:?}");
+            assert_eq!(seen_b, seen_a, "{input:?} {mode:?}");
+        }
+    }
+}

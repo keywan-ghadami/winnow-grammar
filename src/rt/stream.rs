@@ -1817,7 +1817,15 @@ impl<'c, K: Kind, S: Clone + std::fmt::Debug, const TRACK: bool>
     /// no reach, so a step kept for a diagnosis that may come
     /// (`Pending`) would not know which items to parse again.
     /// [`slice_passes`] runs the two passes of the other modes.
-    pub fn whole(input: &'c [u8], context: &'c mut ParseContext<S>, k: usize) -> Self {
+    ///
+    /// `checked`: the input is known to be UTF-8 - it came as a `&str` - so
+    /// a text stream does not check it again.
+    pub fn whole(
+        input: &'c [u8],
+        checked: bool,
+        context: &'c mut ParseContext<S>,
+        k: usize,
+    ) -> Self {
         debug_assert!(
             matches!(context.diagnose, Diagnose::Off | Diagnose::Eager),
             "a whole stream runs one pass: {:?}",
@@ -1833,6 +1841,10 @@ impl<'c, K: Kind, S: Clone + std::fmt::Debug, const TRACK: bool>
             k,
         );
         stream.src = input;
+        if checked {
+            stream.visible = input.len();
+            stream.eof = true;
+        }
         stream
     }
 }

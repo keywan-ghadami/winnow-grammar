@@ -131,7 +131,10 @@ impl Codegen<'_> {
     }
 
     /// `parse_<rule>_slice`: the stream rule over an input all in memory,
-    /// its passes those of the parse in memory (`rt::stream::slice_passes`).
+    /// its passes those of the parse in memory (`rt::stream::slice_passes`);
+    /// and in a text grammar `parse_<rule>_str`, the same over a `&str`,
+    /// which is not checked as UTF-8 again. Both call one function, which
+    /// takes whether the input is checked.
     fn stream_slice_fn(
         &self,
         rule: &Rule,
@@ -146,12 +149,20 @@ impl Codegen<'_> {
         let kind = self.stream_kind();
         let (k, reach) = (self.edge_k, self.reach);
         let slice_fn = format_ident!("parse_{}_slice", rule.name, span = span);
+        let whole_fn = format_ident!("__wg_{}_whole", rule.name, span = span);
         let doc = slice_doc(&format!("parse_{}_reader", rule.name));
+        let str_entry = self.str_entry(
+            rule,
+            &whole_fn,
+            &quote! { ::core::result::Result<#ret, ::winnow_grammar::ParseError> },
+            (params, names),
+            &[],
+        );
         quote_spanned! {span=>
-            #[doc = #doc]
             #[allow(dead_code, non_snake_case, unused_mut, unused_variables, clippy::let_unit_value)]
-            #vis fn #slice_fn<__WgS: ::std::fmt::Debug + Clone #state_bound>(
+            fn #whole_fn<__WgS: ::std::fmt::Debug + Clone #state_bound>(
                 input: &[u8],
+                checked: bool,
                 context: &mut ::winnow_grammar::ParseContext<__WgS>,
                 #(#params),*
             ) -> ::core::result::Result<#ret, ::winnow_grammar::ParseError> {
@@ -159,7 +170,7 @@ impl Codegen<'_> {
                     -> ::core::result::Result<#ret, ::winnow_grammar::ParseError>
                 {
                     let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach, true>::whole(
-                        input, context, #k,
+                        input, checked, context, #k,
                     );
                     let __value = #slice_body;
                     __stream.finish(#slice_finish)?;
@@ -168,6 +179,71 @@ impl Codegen<'_> {
                 ::winnow_grammar::rt::stream::slice_passes(context, |context, _| {
                     __run(context, #(::core::clone::Clone::clone(&#names)),*)
                 })
+            }
+
+            #[doc = #doc]
+            #[allow(dead_code, non_snake_case, clippy::let_unit_value)]
+            #vis fn #slice_fn<__WgS: ::std::fmt::Debug + Clone #state_bound>(
+                input: &[u8],
+                context: &mut ::winnow_grammar::ParseContext<__WgS>,
+                #(#params),*
+            ) -> ::core::result::Result<#ret, ::winnow_grammar::ParseError> {
+                #whole_fn(input, false, context, #(#names),*)
+            }
+
+            #str_entry
+        }
+    }
+
+    /// `parse_<rule>_str` / `parse_<rule>_str_each` in a text grammar: the
+    /// slice entry over a `&str`, whose bytes the stream does not check as
+    /// UTF-8 again. Nothing in a byte grammar.
+    fn str_entry(
+        &self,
+        rule: &Rule,
+        whole_fn: &syn::Ident,
+        ret: &TokenStream,
+        (params, names): (&[TokenStream], &[&syn::Ident]),
+        each: &[TokenStream],
+    ) -> TokenStream {
+        if self.is_bytes() {
+            return quote! {};
+        }
+        let span = Span::mixed_site();
+        let state_bound = self.state_bound();
+        let vis = &rule.vis;
+        let (str_fn, slice_fn, generics) = if each.is_empty() {
+            (
+                format_ident!("parse_{}_str", rule.name, span = span),
+                format!("parse_{}_slice", rule.name),
+                quote! {},
+            )
+        } else {
+            (
+                format_ident!("parse_{}_str_each", rule.name, span = span),
+                format!("parse_{}_slice_each", rule.name),
+                quote! { , __WgB },
+            )
+        };
+        let doc = format!(
+            " [`{slice_fn}`] over a `&str`: the same parse, without checking the input as\n \
+             UTF-8 again."
+        );
+        let each_arg = if each.is_empty() {
+            quote! {}
+        } else {
+            quote! { each }
+        };
+        quote_spanned! {span=>
+            #[doc = #doc]
+            #[allow(dead_code, non_snake_case, clippy::let_unit_value)]
+            #vis fn #str_fn<__WgS: ::std::fmt::Debug + Clone #state_bound #generics>(
+                input: &str,
+                context: &mut ::winnow_grammar::ParseContext<__WgS>,
+                #(#params,)*
+                #(#each)*
+            ) -> #ret {
+                #whole_fn(input.as_bytes(), true, context, #(#names,)* #each_arg)
             }
         }
     }
@@ -200,6 +276,14 @@ impl Codegen<'_> {
         });
         let item = self.stream_item_type(path);
         let emitted = emitted_type(&item);
+        let whole_each_fn = format_ident!("__wg_{}_whole_each", rule.name, span = span);
+        let str_each = self.str_entry(
+            rule,
+            &whole_each_fn,
+            &quote! { ::core::result::Result<::core::ops::ControlFlow<__WgB, #ret>, ::winnow_grammar::ParseError> },
+            (params, names),
+            &[quote! { each: impl for<'a> FnMut(&#item) -> ::core::ops::ControlFlow<__WgB>, }],
+        );
         quote_spanned! {span=>
             /// [`#reader_fn`], showing `each` every item of the fold as
             /// it is taken, before the fold's step takes it. `each`
@@ -229,10 +313,10 @@ impl Codegen<'_> {
                 ::core::result::Result::Ok(::core::ops::ControlFlow::Continue(__value))
             }
 
-            #[doc = #slice_doc]
             #[allow(dead_code, non_snake_case, unused_mut, unused_variables, clippy::let_unit_value)]
-            #vis fn #slice_each_fn<__WgS: ::std::fmt::Debug + Clone #state_bound, __WgB>(
+            fn #whole_each_fn<__WgS: ::std::fmt::Debug + Clone #state_bound, __WgB>(
                 input: &[u8],
+                checked: bool,
                 context: &mut ::winnow_grammar::ParseContext<__WgS>,
                 #(#params,)*
                 mut each: impl for<'a> FnMut(&#item) -> ::core::ops::ControlFlow<__WgB>,
@@ -242,7 +326,7 @@ impl Codegen<'_> {
                 {
                     let mut __broken: ::core::option::Option<__WgB> = ::core::option::Option::None;
                     let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach, true>::whole(
-                        input, context, #k,
+                        input, checked, context, #k,
                     );
                     __stream.context().emits.open::<#emitted>();
                     let __value = #slice_body;
@@ -253,6 +337,19 @@ impl Codegen<'_> {
                     __run(context, __again, #(::core::clone::Clone::clone(&#names)),*)
                 })
             }
+
+            #[doc = #slice_doc]
+            #[allow(dead_code, non_snake_case, clippy::let_unit_value)]
+            #vis fn #slice_each_fn<__WgS: ::std::fmt::Debug + Clone #state_bound, __WgB>(
+                input: &[u8],
+                context: &mut ::winnow_grammar::ParseContext<__WgS>,
+                #(#params,)*
+                each: impl for<'a> FnMut(&#item) -> ::core::ops::ControlFlow<__WgB>,
+            ) -> ::core::result::Result<::core::ops::ControlFlow<__WgB, #ret>, ::winnow_grammar::ParseError> {
+                #whole_each_fn(input, false, context, #(#names,)* each)
+            }
+
+            #str_each
         }
     }
 
