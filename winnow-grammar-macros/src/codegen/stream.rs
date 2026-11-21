@@ -58,6 +58,15 @@ impl Codegen<'_> {
         let end_fn = self.step_name(format!("__stream_{}_end", rule.name));
         let mut helpers = end_def(&end_fn, &ws);
         let body = self.stream_level(path, 0, &view, &mut helpers, false);
+        // The slice entry's body: the same steps, calling the plain step
+        // functions once the input is all there. The reader's body does not
+        // call them, so that a program with the reader and the parse in
+        // memory but no slice entry does not instantiate them: a plain rule
+        // with a second caller is no longer taken into the fold in memory
+        // (cut_profile `stmts_*`, one call per item).
+        let slice_body = self.with_plain_calls(|| {
+            self.stream_level(path, 0, &view, &mut TokenStream::new(), false)
+        });
         if self.dual {
             // The same steps again from the plain rules, for an input that is
             // all there (`step_call`); their calls are already in `body`.
@@ -69,13 +78,14 @@ impl Codegen<'_> {
             self.streaming.set(true);
             self.plain_steps.set(false);
         }
-        let finish = {
-            let call = step_call(&view, &end_fn, &[], self.dual);
+        let finish = |plain: bool| {
+            let call = step_call(&view, &end_fn, &[], plain);
             let keep = step_keep(&kind, &view, &end_fn, &[]);
             quote! { #call, #keep }
         };
+        let (finish, slice_finish) = (finish(false), finish(self.dual));
         let each_fn = if path.each {
-            self.stream_each_fn(rule, path, &view, &kind, &finish, &params)
+            self.stream_each_fn(rule, path, &view, &kind, (&finish, &slice_finish), &params)
         } else {
             quote! {}
         };
@@ -116,8 +126,8 @@ impl Codegen<'_> {
                 let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::whole(
                     input, context, #k,
                 );
-                let __value = #body;
-                __stream.finish(#finish)?;
+                let __value = #slice_body;
+                __stream.finish(#slice_finish)?;
                 ::core::result::Result::Ok(__value)
             }
         }
@@ -131,7 +141,7 @@ impl Codegen<'_> {
         path: &StreamPath,
         view: &TokenStream,
         kind: &TokenStream,
-        finish: &TokenStream,
+        (finish, slice_finish): (&TokenStream, &TokenStream),
         params: &[TokenStream],
     ) -> TokenStream {
         let span = Span::mixed_site();
@@ -143,6 +153,9 @@ impl Codegen<'_> {
         let each_fn = format_ident!("parse_{}_reader_each", rule.name, span = span);
         let slice_each_fn = format_ident!("parse_{}_slice_each", rule.name, span = span);
         let body = self.stream_level(path, 0, view, &mut TokenStream::new(), true);
+        let slice_body = self.with_plain_calls(|| {
+            self.stream_level(path, 0, view, &mut TokenStream::new(), true)
+        });
         let item = self.stream_item_type(path);
         let emitted = emitted_type(&item);
         quote_spanned! {span=>
@@ -188,8 +201,8 @@ impl Codegen<'_> {
                     input, context, #k,
                 );
                 __stream.context().emits.open::<#emitted>();
-                let __value = #body;
-                __stream.finish(#finish)?;
+                let __value = #slice_body;
+                __stream.finish(#slice_finish)?;
                 ::core::result::Result::Ok(::core::ops::ControlFlow::Continue(__value))
             }
         }
@@ -365,7 +378,7 @@ impl Codegen<'_> {
         });
         let a_names = names(&next_params);
         let rules = path_rules(path, j);
-        let prefix_call = step_call(view, &prefix_fn, &clones(&params), self.dual);
+        let prefix_call = step_call(view, &prefix_fn, &clones(&params), self.plain_calls.get());
         let prefix_keep = step_keep(&self.stream_kind(), view, &prefix_fn, &clones(&params));
         let prefix = quote_spanned! {span=>
             let ((#(#c_names,)*), (#(#a_names,)*)) = __stream.chunk(&[#(#rules),*], #prefix_call, #prefix_keep)?;
@@ -427,7 +440,7 @@ impl Codegen<'_> {
             }
         });
         let rules = path_rules(path, j);
-        let suffix_call = step_call(view, &suffix_fn, &clones(&s_in), self.dual);
+        let suffix_call = step_call(view, &suffix_fn, &clones(&s_in), self.plain_calls.get());
         let suffix_keep = step_keep(&self.stream_kind(), view, &suffix_fn, &clones(&s_in));
         quote_spanned! {span=>
             let (#(#r_names,)*) = __stream.chunk(&[#(#rules),*], #suffix_call, #suffix_keep)?;
@@ -659,7 +672,7 @@ impl Codegen<'_> {
         sep_arg: &TokenStream,
         args: &[TokenStream],
     ) -> TokenStream {
-        if !self.dual {
+        if !self.plain_calls.get() {
             return quote! {};
         }
         let span = Span::mixed_site();

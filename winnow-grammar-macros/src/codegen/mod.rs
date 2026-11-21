@@ -88,6 +88,11 @@ pub struct Codegen<'a> {
     /// its input is all there (`Pass::last`), where noting the end of the
     /// window would change nothing (#2420 of Nikaia).
     pub plain_steps: std::cell::Cell<bool>,
+    /// Set while the body of a slice entry (`parse_<rule>_slice`) is
+    /// generated: its steps call the `…_plain` step functions under
+    /// `Pass::last`. Only there - the reader's steps never do, so that the
+    /// plain rules get no second caller where no slice entry is used.
+    pub plain_calls: std::cell::Cell<bool>,
     /// Whether every rule's parser is generated twice (ADR 27 §3, *Per-mode
     /// copies*): untracked for the plain entry points, and tracked under
     /// `__edge_…` names for the stream readers and everything they reach.
@@ -152,6 +157,14 @@ impl Codegen<'_> {
         } else {
             format_ident!("{}", base, span = Span::mixed_site())
         }
+    }
+
+    /// `f` with `plain_calls` set, where the grammar has a plain copy.
+    pub fn with_plain_calls<T>(&self, f: impl FnOnce() -> T) -> T {
+        let before = self.plain_calls.replace(self.dual);
+        let r = f();
+        self.plain_calls.set(before);
+        r
     }
 
     /// Whether the tracked copy of a `dual` grammar is being generated.
@@ -227,6 +240,7 @@ impl<'a> Codegen<'a> {
             streams,
             streaming: std::cell::Cell::new(all_edges),
             plain_steps: std::cell::Cell::new(false),
+            plain_calls: std::cell::Cell::new(false),
             dual,
             tracked_rules,
             edge_k: edge::lookahead(grammar),
