@@ -122,6 +122,39 @@
   its first version, a discard per item, fails at +14.4 % / +6.0 %.
   `docs/performance.md`, *Two builds*.
 
+### Breaking Changes
+
+- **A stream lends its context to a step; the rules of a grammar with a
+  `#[stream]` rule are generic over the context type.** A reader or slice
+  entry moved the 256-byte `ParseContext` into each step's input and back -
+  a prefix, a suffix, the end, every attempt - and cloned it at the start and
+  wrote it back at the end. Now each step that runs once borrows it
+  (`&mut ParseContext`, `rt::stream::Step`); the item loop still holds it,
+  moved in and back once a window (`rt::stream::Held`): lent, LLVM loads the
+  pointer again after every item (26 instructions an item, measured). So the
+  rules of such a grammar take `C: winnow_grammar::Ctx` - `ParseContext<S>`
+  in memory, `&mut ParseContext<S>` in a step - instead of the user state
+  `S`, and read `ParseInputOf<'a, C>` / `ParseBytesOf<'a, C>`
+  (`ParseInput<'a, S>` is `ParseInputOf<'a, ParseContext<S>>`). What changes
+  for a user: an `extern rule` that such a grammar calls takes the context
+  type, `fn r<'a, C: Ctx>(i: &mut ParseInputOf<'a, C>)`, and reaches the
+  context with `i.state.cx()` / `cx_mut()` (SYNTAX.md, *Hand-written parsers
+  in a stream grammar*); a rule named with a turbofish names the context,
+  `parse_x::<ParseContext<()>>()`. Grammars without a `#[stream]` rule are
+  unchanged. With it, the loop over a window that holds the rest of the
+  input - every window of a slice - is compiled apart (no touch to check,
+  nothing to put back), and `rt::skip_trivia` is always inlined: rustc had
+  stopped taking it into the item rules once its type parameters changed.
+  callgrind against main, default build / one codegen unit:
+  `stream_profile list` (20 000 short streams) -10.3 % / -17.9 %,
+  `slice_profile list` -9.4 % / -23.2 %, `stream` -0.8 % / -0.8 %,
+  `cut_profile stream_none` -2.2 % / -5.5 %, `slice_profile doc_none`
+  -2.4 % / -6.1 %; in memory `cut_profile stmts_none` +0.05 % / -8.2 %.
+  One case is slower in both builds, `slice_profile memory` (+0.5 % /
+  +2.5 %): the same rule as `stream_profile memory`, which is faster
+  (-0.01 % / -1.7 %) - the register allocation of one function in that
+  binary, five instructions a row.
+
 ### Fixed
 
 - **An emit is a push, not a box.** The sink of `parse_<rule>_reader_each` /
