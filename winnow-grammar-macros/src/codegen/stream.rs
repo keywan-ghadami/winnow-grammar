@@ -31,7 +31,6 @@ impl Codegen<'_> {
         let k = self.edge_k;
         let reach = self.reach;
         let reader_fn = format_ident!("parse_{}_reader", rule.name, span = span);
-        let slice_fn = format_ident!("parse_{}_slice", rule.name, span = span);
         let ret = &rule.return_type;
         let params: Vec<TokenStream> = rule
             .params
@@ -44,6 +43,7 @@ impl Codegen<'_> {
                 quote! { #n: #t }
             })
             .collect();
+        let names: Vec<&syn::Ident> = rule.params.iter().map(|p| &p.name).collect();
         let rt_error = self.rt_error();
         let end_def = |end_fn: &syn::Ident, ws: &syn::Ident| {
             quote_spanned! {span=>
@@ -64,9 +64,8 @@ impl Codegen<'_> {
         // memory but no slice entry does not instantiate them: a plain rule
         // with a second caller is no longer taken into the fold in memory
         // (cut_profile `stmts_*`, one call per item).
-        let slice_body = self.with_plain_calls(|| {
-            self.stream_level(path, 0, &view, &mut TokenStream::new(), false)
-        });
+        let slice_body = self
+            .with_plain_calls(|| self.stream_level(path, 0, &view, &mut TokenStream::new(), false));
         if self.dual {
             // The same steps again from the plain rules, for an input that is
             // all there (`step_call`); their calls are already in `body`.
@@ -84,8 +83,16 @@ impl Codegen<'_> {
             quote! { #call, #keep }
         };
         let (finish, slice_finish) = (finish(false), finish(self.dual));
+        let slice_entry = self.stream_slice_fn(rule, &slice_body, &slice_finish, (&params, &names));
         let each_fn = if path.each {
-            self.stream_each_fn(rule, path, &view, &kind, (&finish, &slice_finish), &params)
+            self.stream_each_fn(
+                rule,
+                path,
+                &view,
+                &kind,
+                (&finish, &slice_finish),
+                (&params, &names),
+            )
         } else {
             quote! {}
         };
@@ -114,21 +121,48 @@ impl Codegen<'_> {
                 ::core::result::Result::Ok(__value)
             }
 
-            /// [`#reader_fn`] over an input that is all in memory: every
-            /// step knows it has the rest of the input, and runs the plain
-            /// parsers, as fast as the parse in memory.
+            #slice_entry
+        }
+    }
+
+    /// `parse_<rule>_slice`: the stream rule over an input all in memory,
+    /// its passes those of the parse in memory (`rt::stream::slice_passes`).
+    fn stream_slice_fn(
+        &self,
+        rule: &Rule,
+        slice_body: &TokenStream,
+        slice_finish: &TokenStream,
+        (params, names): (&[TokenStream], &[&syn::Ident]),
+    ) -> TokenStream {
+        let span = Span::mixed_site();
+        let state_bound = self.state_bound();
+        let vis = &rule.vis;
+        let ret = &rule.return_type;
+        let kind = self.stream_kind();
+        let (k, reach) = (self.edge_k, self.reach);
+        let slice_fn = format_ident!("parse_{}_slice", rule.name, span = span);
+        let doc = slice_doc(&format!("parse_{}_reader", rule.name));
+        quote_spanned! {span=>
+            #[doc = #doc]
             #[allow(dead_code, non_snake_case, unused_mut, unused_variables, clippy::let_unit_value)]
             #vis fn #slice_fn<__WgS: ::std::fmt::Debug + Clone #state_bound>(
                 input: &[u8],
                 context: &mut ::winnow_grammar::ParseContext<__WgS>,
                 #(#params),*
             ) -> ::core::result::Result<#ret, ::winnow_grammar::ParseError> {
-                let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::whole(
-                    input, context, #k,
-                );
-                let __value = #slice_body;
-                __stream.finish(#slice_finish)?;
-                ::core::result::Result::Ok(__value)
+                let mut __run = |context: &mut ::winnow_grammar::ParseContext<__WgS>, #(#params),*|
+                    -> ::core::result::Result<#ret, ::winnow_grammar::ParseError>
+                {
+                    let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::whole(
+                        input, context, #k,
+                    );
+                    let __value = #slice_body;
+                    __stream.finish(#slice_finish)?;
+                    ::core::result::Result::Ok(__value)
+                };
+                ::winnow_grammar::rt::stream::slice_passes(context, |context, _| {
+                    __run(context, #(::core::clone::Clone::clone(&#names)),*)
+                })
             }
         }
     }
@@ -142,7 +176,7 @@ impl Codegen<'_> {
         view: &TokenStream,
         kind: &TokenStream,
         (finish, slice_finish): (&TokenStream, &TokenStream),
-        params: &[TokenStream],
+        (params, names): (&[TokenStream], &[&syn::Ident]),
     ) -> TokenStream {
         let span = Span::mixed_site();
         let state_bound = self.state_bound();
@@ -152,10 +186,10 @@ impl Codegen<'_> {
         let reach = self.reach;
         let each_fn = format_ident!("parse_{}_reader_each", rule.name, span = span);
         let slice_each_fn = format_ident!("parse_{}_slice_each", rule.name, span = span);
+        let slice_doc = slice_doc(&format!("parse_{}_reader_each", rule.name));
         let body = self.stream_level(path, 0, view, &mut TokenStream::new(), true);
-        let slice_body = self.with_plain_calls(|| {
-            self.stream_level(path, 0, view, &mut TokenStream::new(), true)
-        });
+        let slice_body = self
+            .with_plain_calls(|| self.stream_level(path, 0, view, &mut TokenStream::new(), true));
         let item = self.stream_item_type(path);
         let emitted = emitted_type(&item);
         quote_spanned! {span=>
@@ -175,6 +209,7 @@ impl Codegen<'_> {
                 mut each: impl for<'a> FnMut(&#item) -> ::core::ops::ControlFlow<__WgB>,
             ) -> ::core::result::Result<::core::ops::ControlFlow<__WgB, #ret>, ::winnow_grammar::ParseError> {
                 let mut __broken: ::core::option::Option<__WgB> = ::core::option::Option::None;
+                let __again = false;
                 let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::new(
                     reader, context, reading, #k,
                 );
@@ -186,9 +221,7 @@ impl Codegen<'_> {
                 ::core::result::Result::Ok(::core::ops::ControlFlow::Continue(__value))
             }
 
-            /// [`#each_fn`] over an input that is all in memory: every step
-            /// knows it has the rest of the input, and runs the plain
-            /// parsers, as fast as the parse in memory.
+            #[doc = #slice_doc]
             #[allow(dead_code, non_snake_case, unused_mut, unused_variables, clippy::let_unit_value)]
             #vis fn #slice_each_fn<__WgS: ::std::fmt::Debug + Clone #state_bound, __WgB>(
                 input: &[u8],
@@ -196,14 +229,21 @@ impl Codegen<'_> {
                 #(#params,)*
                 mut each: impl for<'a> FnMut(&#item) -> ::core::ops::ControlFlow<__WgB>,
             ) -> ::core::result::Result<::core::ops::ControlFlow<__WgB, #ret>, ::winnow_grammar::ParseError> {
-                let mut __broken: ::core::option::Option<__WgB> = ::core::option::Option::None;
-                let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::whole(
-                    input, context, #k,
-                );
-                __stream.context().emits.open::<#emitted>();
-                let __value = #slice_body;
-                __stream.finish(#slice_finish)?;
-                ::core::result::Result::Ok(::core::ops::ControlFlow::Continue(__value))
+                let mut __run = |context: &mut ::winnow_grammar::ParseContext<__WgS>, __again: bool, #(#params),*|
+                    -> ::core::result::Result<::core::ops::ControlFlow<__WgB, #ret>, ::winnow_grammar::ParseError>
+                {
+                    let mut __broken: ::core::option::Option<__WgB> = ::core::option::Option::None;
+                    let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::whole(
+                        input, context, #k,
+                    );
+                    __stream.context().emits.open::<#emitted>();
+                    let __value = #slice_body;
+                    __stream.finish(#slice_finish)?;
+                    ::core::result::Result::Ok(::core::ops::ControlFlow::Continue(__value))
+                };
+                ::winnow_grammar::rt::stream::slice_passes(context, |context, __again| {
+                    __run(context, __again, #(::core::clone::Clone::clone(&#names)),*)
+                })
             }
         }
     }
@@ -771,6 +811,16 @@ fn path_rules(path: &StreamPath, j: usize) -> Vec<&str> {
     path.levels[..=j].iter().map(|l| l.rule.as_str()).collect()
 }
 
+/// The documentation of a slice entry: `reader`, over an input all in
+/// memory.
+fn slice_doc(reader: &str) -> String {
+    format!(
+        " [`{reader}`] over an input that is all in memory: every step knows it has the\n \
+         rest of the input and runs the plain parsers. Its passes are those of the parse\n \
+         in memory (ADR 17): a fast pass and, only if that fails, a diagnosing one."
+    )
+}
+
 /// The closure `Stream::chunk` runs a step function `f` with: in the
 /// diagnosing pass with `ParseError`, otherwise with `EmptyError`.
 fn step_call(view: &TokenStream, f: &syn::Ident, args: &[TokenStream], plain: bool) -> TokenStream {
@@ -959,12 +1009,12 @@ fn each_tap(emitted: Option<&syn::Type>) -> (TokenStream, TokenStream) {
         (
             quote_spanned! {span=>
                 for __e in input.state.emits.drain::<#emitted>() {
-                    if let ::core::ops::ControlFlow::Break(__b) = each(&__e) {
+                    if let ::core::ops::ControlFlow::Break(__b) = ::winnow_grammar::rt::stream::see(__again, &mut each, &__e) {
                         __broken = ::core::option::Option::Some(__b);
                         return ::core::result::Result::Err(::winnow_grammar::rt::stream::Fail::Stop);
                     }
                 }
-                if let ::core::ops::ControlFlow::Break(__b) = each(&__v) {
+                if let ::core::ops::ControlFlow::Break(__b) = ::winnow_grammar::rt::stream::see(__again, &mut each, &__v) {
                     __broken = ::core::option::Option::Some(__b);
                     return ::core::result::Result::Err(::winnow_grammar::rt::stream::Fail::Stop);
                 }
@@ -987,7 +1037,7 @@ fn deliver_emits(emitted: &syn::Type) -> TokenStream {
     let span = Span::mixed_site();
     quote_spanned! {span=>
         for __e in __stream.context().emits.drain::<#emitted>() {
-            if let ::core::ops::ControlFlow::Break(__b) = each(&__e) {
+            if let ::core::ops::ControlFlow::Break(__b) = ::winnow_grammar::rt::stream::see(__again, &mut each, &__e) {
                 return ::core::result::Result::Ok(::core::ops::ControlFlow::Break(__b));
             }
         }

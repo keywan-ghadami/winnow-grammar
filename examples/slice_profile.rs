@@ -14,6 +14,7 @@
 //! | `memory` | the fold in memory, in a grammar with a `#[stream]` rule |
 //! | `slice` | the same rule over the input all in memory (`parse_ROWS_slice`): the plain steps |
 //! | `list` | 20 000 slices `[1,2,…,10]`: a prefix step, ten items and a suffix step each |
+//! | `doc_none` / `doc_cut` | `[` 200 000 statements `]`, without and with a cut after `[` that stays open across the fold (cut_profile's grammars) |
 
 use winnow::stream::LocatingSlice;
 use winnow::Parser;
@@ -25,6 +26,10 @@ pub const ROWS: usize = 200_000;
 #[path = "../benches/shared/stream.rs"]
 mod shared;
 use shared::Tracked;
+
+#[path = "../benches/shared/cut.rs"]
+#[allow(dead_code)]
+mod cut;
 
 fn main() {
     let rows = "station12;345\n".repeat(ROWS);
@@ -51,8 +56,18 @@ fn main() {
             }
             sum
         }
+        "doc_none" | "doc_cut" => {
+            let doc = format!("[{}]", cut::stmts(ROWS));
+            let mut ctx = ParseContext::<()>::default();
+            let n = if case == "doc_cut" {
+                cut::Cuts::parse_doc_slice(doc.as_bytes(), &mut ctx)
+            } else {
+                cut::NoCuts::parse_doc_slice(doc.as_bytes(), &mut ctx)
+            };
+            n.unwrap() as u64
+        }
         _ => {
-            eprintln!("usage: slice_profile none|memory|slice|list");
+            eprintln!("usage: slice_profile none|memory|slice|list|doc_none|doc_cut");
             std::process::exit(2);
         }
     };

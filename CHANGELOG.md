@@ -6,18 +6,26 @@
 ### Added
 
 - **`parse_<rule>_slice` and `parse_<rule>_slice_each`: a `#[stream]` rule
-  over an input that is all in memory.** The stream reads it at once
-  (`Stream::whole`), so every step has the rest of the input
-  (`Pass::last`), and the generated steps then run step functions made from
-  the plain rules (`…_plain`) instead of the edge-tracked copy: noting where
-  the window ends can change nothing there. In a grammar with a `#[stream]`
-  rule the plain copy moves its spans by `ParseContext::origin` too (0 in
-  memory), so positions agree. A diagnosis replays the fold's items from
-  its first, as the parse in memory does, since the plain parsers note no
-  reach. Errors are the parse in memory's (`stream_diagnose_test`,
-  `cut_error_wins_test`, `stream_step_records_test` check the slice under
-  every mode). callgrind, `examples/stream_profile.rs`: `slice` 49.6M
-  against `stream` 51.9M and `memory` 39.4M.
+  over an input that is all in memory.** The stream reads the slice where it
+  is (`Stream::whole`, nothing copied), so every step has the rest of the
+  input (`Pass::last`), and the generated steps then run step functions made
+  from the plain rules (`…_plain`) instead of the edge-tracked copy: noting
+  where the window ends can change nothing there. Only the slice entries call
+  them; the reader's steps do not, so a program that uses the reader and the
+  parse in memory but no slice entry gives no plain rule a second caller.
+  In a grammar with a `#[stream]` rule the plain copy moves its spans by
+  `ParseContext::origin` too (0 in memory), so positions agree. The passes
+  are the parse in memory's (ADR 17, `rt::stream::slice_passes`): a stream
+  with nothing diagnosed and, only if that fails, one with every step
+  diagnosed - on the user state from before the first under `Replay`, on the
+  one it left under `ReplayInPlace`; `each` sees no item twice. So a
+  successful slice keeps no step for a diagnosis, and a cut that stays open
+  across a fold costs it no second pass. Errors and the user state are the
+  parse in memory's (`stream_slice_test`, and `stream_diagnose_test`,
+  `cut_error_wins_test`, `stream_step_records_test` under every mode).
+  callgrind, `examples/slice_profile.rs`, one codegen unit: `slice` 41.4M
+  against `memory` 39.8M; `doc_cut` (a cut open across 200 000 items)
+  445.2M against `doc_none` 428.0M.
 
 - **`collect L;`: the collection a grammar's repetitions collect into.** A
   grammar that declares it collects every bound repetition (`xs:x*`, `xs:x+`,
