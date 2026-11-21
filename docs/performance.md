@@ -134,9 +134,15 @@ only those counts are the ones CI checks.
 |---|---|
 | `cut_profile` | statements in memory, grouped and from a reader, with and without cuts (ADR 15) |
 | `stream_profile` | a fold in memory, under `#[stream]` and with frames (ADR 27 §5); `list`, many short streams with a prefix and a suffix step |
+| `slice_profile` | a `#[stream]` rule over an input all in memory (`parse_<rule>_slice`), next to its parse in memory |
 | `param_profile` | rules with value parameters, passed on at nearly every call (ADR 26) |
 
 `scripts/profile-cut.sh` and `scripts/profile-stream.sh` turn the counts of
 one revision into instructions per item, the tables of the ADRs. A new
 profile example goes into the list at the top of `scripts/compare-perf.sh`
 and into this table.
+
+A case that calls something base does not have goes into a new example, not
+into one that is already there: `compare-perf.sh` copies HEAD's examples into
+base, and an example that then does not build there has none of its cases
+compared - the old ones included. The script warns when that happens.

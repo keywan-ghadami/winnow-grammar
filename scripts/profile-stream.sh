@@ -12,7 +12,7 @@ refs() {
 }
 "$(dirname "$0")/perf-env.sh"
 base=$(refs none)
-for case in plain memory stream slice frames_memory frames_reader list; do
+for case in plain memory stream frames_memory frames_reader list; do
     printf '%-14s %s instructions/row\n' "$case" \
         "$(( ($(refs "$case") - base) / 200000 ))"
 done

@@ -8,7 +8,9 @@
 # Both revisions are compared on the SAME workload: the profile examples and
 # `benches/shared/` of HEAD are copied into BASE, so that only the library
 # differs. A case whose example does not build on BASE (it uses something
-# new) is reported as skipped.
+# new) is reported as skipped. If that example is already on BASE, none of
+# its cases is compared - a warning, since a new case belongs in an example
+# of its own then (docs/performance.md).
 #
 # Each revision is built twice: with the release profile as it is, and with
 # codegen-units 1. Exits 1 if a case executes more instructions on HEAD than
@@ -29,6 +31,7 @@ tolerance=${PERF_TOLERANCE_PCT:-0.01}
 profiles=(
     "cut_profile none stmts_none stmts_cut grouped_none grouped_cut stream_none stream_cut"
     "stream_profile none plain memory stream frames_memory frames_reader list"
+    "slice_profile none memory slice list"
     "param_profile none yaml"
 )
 
@@ -106,6 +109,7 @@ slower() { # "difference (pct %)"
 report=$(mktemp)
 regressions=0
 shifts=0
+unchecked=()
 {
     echo "Instructions executed, counted by callgrind: base ${base_sha:0:7}, head ${head_sha:0:7}."
     scripts/perf-env.sh
@@ -136,8 +140,15 @@ for spec in "${profiles[@]}"; do
         fi
     done
     if $skipped; then
+        why="skipped: does not build on base"
+        if git cat-file -e "$base_sha:examples/$ex.rs" 2>/dev/null; then
+            # The example is on BASE, and HEAD's no longer builds there:
+            # its existing cases go unchecked.
+            why="**unchecked**: on base, but HEAD's version does not build there"
+            unchecked+=("$ex")
+        fi
         for c in $cases; do
-            echo "| $ex | $c | - | - | - | - | - | - | skipped: does not build on base |" >>"$report"
+            echo "| $ex | $c | - | - | - | - | - | - | $why |" >>"$report"
         done
         continue
     fi
@@ -166,6 +177,10 @@ if [ "$regressions" -gt 0 ]; then
 else
     printf 'No case executes more instructions than on base in both builds.\n' >>"$report"
 fi
+if [ "${#unchecked[@]}" -gt 0 ]; then
+    printf 'Not compared at all: %s. Each is on base, but uses something new on HEAD; a new case goes into an example of its own (docs/performance.md).\n' \
+        "${unchecked[*]}" >>"$report"
+fi
 if [ "$shifts" -gt 0 ]; then
     printf '%s case(s) are slower in one build only: a shift in the code layout, not a cost (docs/performance.md).\n' \
         "$shifts" >>"$report"
@@ -177,6 +192,9 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 fi
 if [ "$shifts" -gt 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
     echo "::warning::$shifts case(s) slower in one build only - a shift in the code layout; see the job summary."
+fi
+if [ "${#unchecked[@]}" -gt 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::warning::Not compared, on base but not buildable there with HEAD's version: ${unchecked[*]} - put a new case into an example of its own."
 fi
 rm -f "$report"
 [ "$regressions" -eq 0 ]
