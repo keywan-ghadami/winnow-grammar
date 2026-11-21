@@ -22,7 +22,7 @@ mod outer {
 
         // Inside `inner`, the `pub(super)` rule is in reach.
         pub fn near_is_here() {
-            let _ = G::parse_near::<()>;
+            let _ = G::parse_near::<winnow_grammar::ParseContext<()>>;
         }
     }
 }
@@ -32,5 +32,5 @@ pub use outer::inner::G::{parse_doc, parse_doc_reader, parse_docs_reader_each};
 
 fn main() {
     outer::inner::near_is_here();
-    let _ = outer::inner::G::parse_near::<()>;
+    let _ = outer::inner::G::parse_near::<winnow_grammar::ParseContext<()>>;
 }

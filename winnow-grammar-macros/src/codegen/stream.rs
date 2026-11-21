@@ -48,7 +48,7 @@ impl Codegen<'_> {
         let end_def = |end_fn: &syn::Ident, ws: &syn::Ident| {
             quote_spanned! {span=>
                 #[allow(dead_code, non_snake_case)]
-                fn #end_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
+                fn #end_fn<'a, __WgC: ::winnow_grammar::Ctx<State: ::std::fmt::Debug + Clone #state_bound>, __WgEr: #rt_error>(
                     input: &mut #input_ty,
                 ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
                     ::winnow_grammar::rt::skip_trivia(#ws, input)
@@ -414,7 +414,7 @@ impl Codegen<'_> {
             (self.input_ty(), self.rt_error(), self.state_bound());
         helpers.extend(quote_spanned! {span=>
             #[allow(dead_code, non_snake_case, unused_variables, unused_mut, clippy::let_unit_value)]
-            fn #prefix_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
+            fn #prefix_fn<'a, __WgC: ::winnow_grammar::Ctx<State: ::std::fmt::Debug + Clone #state_bound>, __WgEr: #rt_error>(
                 #input: &mut #input_ty,
                 #(#p_typed),*
             ) -> ::winnow::Result<((#(#c_types,)*), (#(#a_types,)*)), ::winnow::error::ErrMode<__WgEr>> {
@@ -477,7 +477,7 @@ impl Codegen<'_> {
             (self.input_ty(), self.rt_error(), self.state_bound());
         helpers.extend(quote_spanned! {span=>
             #[allow(dead_code, non_snake_case, unused_variables, unused_mut, clippy::let_unit_value)]
-            fn #suffix_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
+            fn #suffix_fn<'a, __WgC: ::winnow_grammar::Ctx<State: ::std::fmt::Debug + Clone #state_bound>, __WgEr: #rt_error>(
                 #input: &mut #input_ty,
                 #(#s_typed),*
             ) -> ::winnow::Result<(#(#r_types,)*), ::winnow::error::ErrMode<__WgEr>> {
@@ -579,7 +579,7 @@ impl Codegen<'_> {
         };
         helpers.extend(quote_spanned! {span=>
             #[allow(dead_code, non_snake_case, unused_variables, unused_mut)]
-            fn #item_fn<'a, __WgS: ::std::fmt::Debug + Clone #state_bound, __WgEr: #rt_error>(
+            fn #item_fn<'a, __WgC: ::winnow_grammar::Ctx<State: ::std::fmt::Debug + Clone #state_bound>, __WgEr: #rt_error>(
                 #input: &mut #input_ty,
                 #sep_param
                 #(#a_names: #a_types),*
@@ -638,6 +638,7 @@ impl Codegen<'_> {
         let item_rule = rule_path.segments.last().unwrap().ident.to_string();
         let item_fn = self.step_name(format!("__stream_{}_item", stream_rule));
         let step_fn = self.step_name(format!("__stream_{}_step", stream_rule));
+        let held_view = self.held_view();
         let in_place = self.stream_fold_fns(
             stream_rule,
             &item_rule,
@@ -688,13 +689,13 @@ impl Codegen<'_> {
             let mut __acc = ::core::option::Option::Some((#init)());
             let mut __step = #step_fn(&__acc, #step);
             let mut __n = 0usize;
-            while __stream.items(&[#(#rules),*], &mut __n, #[inline(always)] |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, __item: usize| {
+            while __stream.items(&[#(#rules),*], &mut __n, #[inline(always)] |input: &mut #held_view, pass: &::winnow_grammar::rt::stream::Pass, __item: usize| {
                 #at_max
                 let __v = #plain_item if pass.diagnose() {
-                    #item_fn::<__WgS, ::winnow_grammar::ParseError>(input, #sep_arg #(#args),*)
+                    #item_fn::<_, ::winnow_grammar::ParseError>(input, #sep_arg #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 } else {
-                    #item_fn::<__WgS, ::winnow_grammar::rt::stream::EdgeEmpty>(input, #sep_arg #(#args),*)
+                    #item_fn::<_, ::winnow_grammar::rt::stream::EdgeEmpty>(input, #sep_arg #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 };
                 if ::winnow_grammar::rt::stream::commit(input, pass) {
@@ -728,10 +729,10 @@ impl Codegen<'_> {
         quote_spanned! {span=>
             if pass.last() {
                 if pass.diagnose() {
-                    #fp::<__WgS, ::winnow_grammar::ParseError>(input, #sep_arg #(#args),*)
+                    #fp::<_, ::winnow_grammar::ParseError>(input, #sep_arg #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 } else {
-                    #fp::<__WgS, ::winnow::error::EmptyError>(input, #sep_arg #(#args),*)
+                    #fp::<_, ::winnow::error::EmptyError>(input, #sep_arg #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)?
                 }
             } else
@@ -763,12 +764,23 @@ impl Codegen<'_> {
         }
     }
 
-    /// The input of one step.
-    fn stream_view(&self) -> TokenStream {
+    /// The input of the item loop: it holds the context for the window's
+    /// length (`rt::stream::Held`), so that the loop keeps its fields at
+    /// fixed places instead of behind the pointer it is lent through.
+    fn held_view(&self) -> TokenStream {
         if self.is_bytes() {
             quote! { ::winnow_grammar::ParseBytes<'_, __WgS> }
         } else {
             quote! { ::winnow_grammar::ParseInput<'_, __WgS> }
+        }
+    }
+
+    /// The input of one step.
+    fn stream_view(&self) -> TokenStream {
+        if self.is_bytes() {
+            quote! { ::winnow_grammar::ParseBytesOf<'_, &mut ::winnow_grammar::ParseContext<__WgS>> }
+        } else {
+            quote! { ::winnow_grammar::ParseInputOf<'_, &mut ::winnow_grammar::ParseContext<__WgS>> }
         }
     }
 
@@ -840,10 +852,10 @@ fn step_call(view: &TokenStream, f: &syn::Ident, args: &[TokenStream], plain: bo
         quote_spanned! {span=>
             if pass.last() {
                 return if pass.diagnose() {
-                    #fp::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
+                    #fp::<_, ::winnow_grammar::ParseError>(input, #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)
                 } else {
-                    #fp::<__WgS, ::winnow::error::EmptyError>(input, #(#args),*)
+                    #fp::<_, ::winnow::error::EmptyError>(input, #(#args),*)
                         .map_err(::winnow_grammar::rt::stream::Fail::from)
                 };
             }
@@ -855,10 +867,10 @@ fn step_call(view: &TokenStream, f: &syn::Ident, args: &[TokenStream], plain: bo
         |input: &mut #view, pass: &::winnow_grammar::rt::stream::Pass, _: usize| {
             #plain_call
             if pass.diagnose() {
-                #f::<__WgS, ::winnow_grammar::ParseError>(input, #(#args),*)
+                #f::<_, ::winnow_grammar::ParseError>(input, #(#args),*)
                     .map_err(::winnow_grammar::rt::stream::Fail::from)
             } else {
-                #f::<__WgS, ::winnow_grammar::rt::stream::EdgeEmpty>(input, #(#args),*)
+                #f::<_, ::winnow_grammar::rt::stream::EdgeEmpty>(input, #(#args),*)
                     .map_err(::winnow_grammar::rt::stream::Fail::from)
             }
         }
@@ -886,7 +898,7 @@ fn item_keep(
             ::winnow_grammar::rt::stream::replayer::<#kind, __WgS, _, _>(
                 move |input: &mut #view, _: &::winnow_grammar::rt::stream::Pass, __item: usize| {
                     #at_max
-                    #item_fn::<__WgS, ::winnow_grammar::ParseError>(
+                    #item_fn::<_, ::winnow_grammar::ParseError>(
                         input, #sep_arg #(::core::clone::Clone::clone(&#names)),*
                     )
                     .map(|_| ())
@@ -915,7 +927,7 @@ fn step_keep(
             #(let #names = #args;)*
             ::winnow_grammar::rt::stream::replayer::<#kind, __WgS, _, _>(
                 move |input: &mut #view, _: &::winnow_grammar::rt::stream::Pass, _: usize| {
-                    #f::<__WgS, ::winnow_grammar::ParseError>(
+                    #f::<_, ::winnow_grammar::ParseError>(
                         input, #(::core::clone::Clone::clone(&#names)),*
                     )
                     .map_err(::winnow_grammar::rt::stream::Fail::from)
@@ -1016,7 +1028,7 @@ fn each_tap(emitted: Option<&syn::Type>) -> (TokenStream, TokenStream) {
     if let Some(emitted) = emitted {
         (
             quote_spanned! {span=>
-                for __e in input.state.emits.drain::<#emitted>() {
+                for __e in ::winnow_grammar::Ctx::cx_mut(&mut input.state).emits.drain::<#emitted>() {
                     if let ::core::ops::ControlFlow::Break(__b) = ::winnow_grammar::rt::stream::see(__again, &mut each, &__e) {
                         __broken = ::core::option::Option::Some(__b);
                         return ::core::result::Result::Err(::winnow_grammar::rt::stream::Fail::Stop);

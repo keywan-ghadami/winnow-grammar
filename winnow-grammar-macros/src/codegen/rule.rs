@@ -9,6 +9,7 @@ use winnow_grammar_model::{
 impl<'a> Codegen<'a> {
     pub fn generate_rule(&self, rule: &Rule) -> TokenStream {
         let state_bound = self.state_bound();
+        let ctx_param = self.ctx_param(&state_bound);
         if super::is_template(rule) {
             // Template rules are not compiled as functions of their own.
             // They are inlined directly at the call site in expr.rs via AST substitution.
@@ -80,7 +81,7 @@ impl<'a> Codegen<'a> {
 
         let (rule_lifetimes, rule_others) = split_generics(gen_params);
         let outer_generics = quote! {
-            'a, #(#rule_lifetimes,)* __WgS: ::std::fmt::Debug + Clone #state_bound #(, #rule_others)*
+            'a, #(#rule_lifetimes,)* #ctx_param #(, #rule_others)*
         };
 
         let outer_fn_body = self.entry_body(rule, &arg_names);
@@ -193,6 +194,8 @@ impl<'a> Codegen<'a> {
         let rt_error = self.rt_error();
         let input_ty = self.input_ty();
         let state_bound = self.state_bound();
+        let ctx_param = self.ctx_param(&state_bound);
+        let ws_param = self.ctx_param(&quote! {});
         let input = &self.input_ident;
         let span = Span::mixed_site();
         let rule_name_str = rule.name.to_string();
@@ -207,7 +210,7 @@ impl<'a> Codegen<'a> {
         let gen_params = &rule.generics.params;
         let (rule_lifetimes, rule_others) = split_generics(gen_params);
         let all_generics = quote! {
-            'a, #(#rule_lifetimes,)* __WgS: ::std::fmt::Debug + Clone #state_bound,
+            'a, #(#rule_lifetimes,)* #ctx_param,
             __WgEr: #rt_error #(, #rule_others)*
         };
 
@@ -215,7 +218,7 @@ impl<'a> Codegen<'a> {
         let ws_shadow = if rule_name_str == "WS" {
             quote_spanned! {span=>
                 #[allow(dead_code)]
-                fn #ws<'a, __WgS: ::std::fmt::Debug + Clone, __WgEr>(_: &mut #input_ty) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
+                fn #ws<'a, #ws_param, __WgEr>(_: &mut #input_ty) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
                     ::core::result::Result::Ok(())
                 }
             }
@@ -244,7 +247,7 @@ impl<'a> Codegen<'a> {
                 // Errors passed out collect it via `.context(Label)`. The fast
                 // pass records nothing and keeps no stack.
                 if <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING {
-                    #input.state.rules.push(#rule_name_str);
+                    ::winnow_grammar::Ctx::cx_mut(&mut #input.state).rules.push(#rule_name_str);
                 }
                 let result = {
                     #[cfg(feature = "trace")]
@@ -257,7 +260,7 @@ impl<'a> Codegen<'a> {
                     }
                 };
                 if <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING {
-                    #input.state.rules.pop();
+                    ::winnow_grammar::Ctx::cx_mut(&mut #input.state).rules.pop();
                 }
                 result
             }
@@ -341,7 +344,8 @@ impl<'a> Codegen<'a> {
     ///   the `rayon` feature the pieces run in parallel, without it in
     ///   sequence - same cut, same answer.
     fn generate_frame_fns(&self, rule: &Rule) -> TokenStream {
-        let input_ty = self.input_ty();
+        // A piece holds its own context, made by `new_context`.
+        let input_ty = self.held_input_ty();
         let rts = self.rts();
         // What the entry points take: `&str`, or `&[u8]` under `input bytes;`.
         let slice = if self.is_bytes() {

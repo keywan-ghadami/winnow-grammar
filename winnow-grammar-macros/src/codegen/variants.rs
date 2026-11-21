@@ -102,7 +102,7 @@ impl<'a> Codegen<'a> {
     /// field; it has no `state_mut()`.
     fn state_injection(&self) -> TokenStream {
         let input = &self.input_ident;
-        quote! { let _state = &mut #input.state; }
+        quote! { let _state = ::winnow_grammar::Ctx::cx_mut(&mut #input.state); }
     }
 
     /// One alternative of several, as the parser `alt` tries: labelled,
@@ -326,7 +326,7 @@ impl<'a> Codegen<'a> {
             // name a hidden part of the API. `&mut` so that an action can both
             // read the context and intern into it (ADR 18 §2). `Stateful`
             // keeps its state in a public field; it has no `state_mut()`.
-            let state_injection = quote! { let _state = &mut #input.state; };
+            let state_injection = quote! { let _state = ::winnow_grammar::Ctx::cx_mut(&mut #input.state); };
 
             let final_expr = if use_with_span && !is_explicit {
                 // If implicit action, use WithSpan.
@@ -390,7 +390,7 @@ impl<'a> Codegen<'a> {
                         // it like a discarded alternative, or the loop's quiet
                         // backtrack leaves only "input left over" behind.
                         ::core::result::Result::Err(::winnow::error::ErrMode::Backtrack(e)) => {
-                            <__WgEr as ::winnow_grammar::Diagnostics>::record_if_begun(&e, &mut #input.state, lr_start);
+                            <__WgEr as ::winnow_grammar::Diagnostics>::record_if_begun(&e, ::winnow_grammar::Ctx::cx_mut(&mut #input.state), lr_start);
                             ::winnow::stream::Stream::reset(#input, &checkpoint);
                         }
                         ::core::result::Result::Err(e) => return ::core::result::Result::Err(e),

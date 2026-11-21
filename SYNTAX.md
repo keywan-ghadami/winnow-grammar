@@ -1448,7 +1448,16 @@ generated code notes that the parse touched the end when the parser stopped -
 or failed where it began - within `k` bytes of the end of its input. `k` is
 the furthest the grammar's own parsers look: its longest literal, and up to 8
 bytes for its built-ins (a float's `infinity`). For most hand-written parsers
-that is all, and nothing is to be done. Two cases need a line of code:
+that is all, and nothing is to be done.
+
+Its signature takes the context type as a parameter, `C: Ctx`, and reads the
+input as `ParseInputOf<'a, C>` (`ParseBytesOf` under `input bytes;`): a
+stream lends its context to a step (`C` is `&mut ParseContext`), the parse in
+memory holds it (`C` is `ParseContext`, `ParseInputOf<'a, ParseContext<S>>`
+is `ParseInput<'a, S>`). The context is `i.state.cx()` / `i.state.cx_mut()`.
+A grammar without a `#[stream]` rule takes `ParseInput` as before.
+
+Two cases need a line of code:
 
 **1. A parser that decides further away calls `rt::touch`.** A parser that
 looks past where it stops by more than `k` bytes, or fails because of
@@ -1457,10 +1466,10 @@ scan to the next keyword, a parser that peeks ahead at a whole token - must
 say so when it reached the end of its input without deciding:
 
 ```rust,ignore
-use winnow_grammar::rt;
+use winnow_grammar::{rt, Ctx, ParseInputOf};
 
 /// `/* … */`
-fn comment<'a, S: Clone + std::fmt::Debug>(i: &mut ParseInput<'a, S>) -> Result<&'a str, ParseError> {
+fn comment<'a, C: Ctx>(i: &mut ParseInputOf<'a, C>) -> Result<&'a str, ParseError> {
     let rest: &str = &i.input;
     let Some(body) = rest.strip_prefix("/*") else {
         return Err(ParseError::from_stream(&i.input).add_expected("a comment"));

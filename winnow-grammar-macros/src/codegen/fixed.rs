@@ -580,7 +580,7 @@ impl<'a> Codegen<'a> {
         let input = &self.input_ident;
         // The rule's action sees what it sees in its own function:
         // its bindings and the context (`variants.rs`).
-        let state = quote! { let _state = &mut #input.state; };
+        let state = quote! { let _state = ::winnow_grammar::Ctx::cx_mut(&mut #input.state); };
         after.extend(quote_spanned! {span=>
             let #v_pat: #ret = {
                 #lets
@@ -877,7 +877,7 @@ mod tests {
             "T"
         ));
         assert!(!inlined(
-            quote! { T -> usize = digit -> { input.state.rules.len() } },
+            quote! { T -> usize = digit -> { ::winnow_grammar::Ctx::cx(&input.state).rules.len() } },
             "T"
         ));
         assert!(!inlined(

@@ -199,8 +199,20 @@ impl Codegen<'_> {
     }
 
     /// The input every rule of this grammar reads: `ParseInput`, or
-    /// `ParseBytes` under `input bytes;`.
+    /// `ParseBytes` under `input bytes;`. In a grammar with a `#[stream]`
+    /// rule, over the rule's context parameter `__WgC` (see [`Self::ctx_ty`]).
     pub fn input_ty(&self) -> TokenStream {
+        let ctx = self.ctx_ty();
+        if self.is_bytes() {
+            quote! { ::winnow_grammar::ParseBytesOf<'a, #ctx> }
+        } else {
+            quote! { ::winnow_grammar::ParseInputOf<'a, #ctx> }
+        }
+    }
+
+    /// The input of a rule that holds its context, whatever the grammar:
+    /// what a `par_fold` piece reads, with the context `new_context` made.
+    pub fn held_input_ty(&self) -> TokenStream {
         if self.is_bytes() {
             quote! { ::winnow_grammar::ParseBytes<'a, __WgS> }
         } else {
@@ -208,13 +220,37 @@ impl Codegen<'_> {
         }
     }
 
+    /// The context type of a rule's input. A grammar with a `#[stream]` rule
+    /// is generic over it (`__WgC`, a `Ctx`): the parse in memory holds its
+    /// context, a stream lends its own to each step instead of moving it in
+    /// and out. Any other grammar holds it, `ParseContext<__WgS>`, so that
+    /// its extern rules keep taking a `ParseInput`.
+    pub fn ctx_ty(&self) -> TokenStream {
+        if self.dual {
+            quote! { __WgC }
+        } else {
+            quote! { ::winnow_grammar::ParseContext<__WgS> }
+        }
+    }
+
+    /// A rule's generic parameter for its state and context, with `bound`
+    /// (the grammar's [`Self::state_bound`], or nothing) on the user state.
+    pub fn ctx_param(&self, bound: &TokenStream) -> TokenStream {
+        if self.dual {
+            quote! { __WgC: ::winnow_grammar::Ctx<State: ::std::fmt::Debug + Clone #bound> }
+        } else {
+            quote! { __WgS: ::std::fmt::Debug + Clone #bound }
+        }
+    }
+
     /// The bound on a rule's error type parameter `__WgEr`, for this grammar's
     /// input.
     pub fn rt_error(&self) -> TokenStream {
+        let ctx = self.ctx_ty();
         if self.is_bytes() {
-            quote! { ::winnow_grammar::rt::RtError<'a, __WgS, &'a [u8]> }
+            quote! { ::winnow_grammar::rt::RtError<'a, #ctx, &'a [u8]> }
         } else {
-            quote! { ::winnow_grammar::rt::RtError<'a, __WgS> }
+            quote! { ::winnow_grammar::rt::RtError<'a, #ctx> }
         }
     }
 
@@ -304,9 +340,11 @@ impl<'a> Codegen<'a> {
         let input_ty = self.input_ty();
         let rt_error = self.rt_error();
         let rts = self.rts();
+        let wgc = self.ctx_ty();
+        let ws_param = self.ctx_param(&quote! {});
 
         let class = quote_spanned! {span=>
-            #rts::class::<__WgS, __WgEr>(::winnow_grammar::ascii::AsciiClass::MULTISPACE, 0)
+            #rts::class::<#wgc, __WgEr>(::winnow_grammar::ascii::AsciiClass::MULTISPACE, 0)
         };
         let default_ws = self.edge(class.clone(), None);
 
@@ -320,7 +358,7 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=>
                 // Whitespace handling (similar to syn)
                 #[allow(dead_code)]
-                fn WS<'a, __WgS: ::std::fmt::Debug + Clone, __WgEr: #rt_error>(
+                fn WS<'a, #ws_param, __WgEr: #rt_error>(
                     #input: &mut #input_ty,
                 ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
                     use ::winnow::Parser;
@@ -348,7 +386,7 @@ impl<'a> Codegen<'a> {
                 self.streaming.set(false);
                 quote_spanned! {span=>
                     #[allow(dead_code, non_snake_case)]
-                    fn #edge_ws<'a, __WgS: ::std::fmt::Debug + Clone, __WgEr: #rt_error>(
+                    fn #edge_ws<'a, #ws_param, __WgEr: #rt_error>(
                         #input: &mut #input_ty,
                     ) -> ::winnow::Result<(), ::winnow::error::ErrMode<__WgEr>> {
                         use ::winnow::Parser;

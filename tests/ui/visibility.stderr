@@ -37,7 +37,7 @@ note: consider marking `parse_docs_reader_each` as `pub` in the imported module
 error[E0603]: function `parse_near` is private
   --> tests/ui/visibility.rs:35:30
    |
-35 |     let _ = outer::inner::G::parse_near::<()>;
+35 |     let _ = outer::inner::G::parse_near::<winnow_grammar::ParseContext<()>>;
    |                              ^^^^^^^^^^ private function
    |
 note: the function `parse_near` is defined here

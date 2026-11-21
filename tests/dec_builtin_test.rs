@@ -128,7 +128,7 @@ macro_rules! text_cases {
             let s = s.concat();
             $(
                 agree::<&str, $t>(
-                    rt::$f::<_, (), $t, ParseError>,
+                    rt::$f::<_, winnow_grammar::ParseContext<()>, $t, ParseError>,
                     winnow::ascii::$f::<Input<&str, ()>, $t, ErrMode<ParseError>>,
                     s.as_str(),
                 );
@@ -148,7 +148,7 @@ macro_rules! byte_cases {
             let s = s.concat();
             $(
                 agree::<&[u8], $t>(
-                    rt::$f::<_, (), $t, ParseError>,
+                    rt::$f::<_, winnow_grammar::ParseContext<()>, $t, ParseError>,
                     winnow::ascii::$f::<Input<&[u8], ()>, $t, ErrMode<ParseError>>,
                     s.as_slice(),
                 );
@@ -195,32 +195,32 @@ fn the_longest_values_and_one_past_them() {
         "0123",
     ] {
         agree::<&str, u8>(
-            rt::dec_uint::<_, (), u8, ParseError>,
+            rt::dec_uint::<_, winnow_grammar::ParseContext<()>, u8, ParseError>,
             winnow::ascii::dec_uint,
             s,
         );
         agree::<&str, i8>(
-            rt::dec_int::<_, (), i8, ParseError>,
+            rt::dec_int::<_, winnow_grammar::ParseContext<()>, i8, ParseError>,
             winnow::ascii::dec_int,
             s,
         );
         agree::<&str, u64>(
-            rt::dec_uint::<_, (), u64, ParseError>,
+            rt::dec_uint::<_, winnow_grammar::ParseContext<()>, u64, ParseError>,
             winnow::ascii::dec_uint,
             s,
         );
         agree::<&str, i64>(
-            rt::dec_int::<_, (), i64, ParseError>,
+            rt::dec_int::<_, winnow_grammar::ParseContext<()>, i64, ParseError>,
             winnow::ascii::dec_int,
             s,
         );
         agree::<&str, u128>(
-            rt::dec_uint::<_, (), u128, ParseError>,
+            rt::dec_uint::<_, winnow_grammar::ParseContext<()>, u128, ParseError>,
             winnow::ascii::dec_uint,
             s,
         );
         agree::<&str, i128>(
-            rt::dec_int::<_, (), i128, ParseError>,
+            rt::dec_int::<_, winnow_grammar::ParseContext<()>, i128, ParseError>,
             winnow::ascii::dec_int,
             s,
         );

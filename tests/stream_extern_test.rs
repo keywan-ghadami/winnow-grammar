@@ -8,21 +8,22 @@
 //!   memory does not.
 //! * A position taken by hand is one in the step's input; `rt::span_at` moves
 //!   it to the stream's.
+//!
+//! Each takes the context type `C: Ctx` as a parameter: a stream lends its
+//! context to a step (`&mut ParseContext`), the parse in memory holds it.
 
 use std::io::Read;
 use winnow::stream::{LocatingSlice, Location, Stream};
 use winnow::Parser;
 use winnow_grammar::rt::{self, Reading};
-use winnow_grammar::{grammar, ParseContext, ParseError, ParseInput};
+use winnow_grammar::{grammar, Ctx, ParseContext, ParseError, ParseInput, ParseInputOf};
 
 /// `/* … */`, its text. Fails where it began when there is no `*/`.
-fn scan<'a, S: Clone + std::fmt::Debug>(
-    i: &mut ParseInput<'a, S>,
-    touch: bool,
-) -> Result<&'a str, ParseError> {
+fn scan<'a, C: Ctx>(i: &mut ParseInputOf<'a, C>, touch: bool) -> Result<&'a str, ParseError> {
     let rest: &str = &i.input;
-    let fail =
-        |i: &ParseInput<'a, S>| ParseError::from_stream(&i.input).add_expected("a closed comment");
+    let fail = |i: &ParseInputOf<'a, C>| {
+        ParseError::from_stream(&i.input).add_expected("a closed comment")
+    };
     let Some(body) = rest.strip_prefix("/*") else {
         return Err(fail(i));
     };
@@ -39,27 +40,21 @@ fn scan<'a, S: Clone + std::fmt::Debug>(
     }
 }
 
-pub fn comment<'a, S: Clone + std::fmt::Debug>(
-    i: &mut ParseInput<'a, S>,
-) -> Result<&'a str, ParseError> {
+pub fn comment<'a, C: Ctx>(i: &mut ParseInputOf<'a, C>) -> Result<&'a str, ParseError> {
     scan(i, true)
 }
 
-pub fn comment_untouched<'a, S: Clone + std::fmt::Debug>(
-    i: &mut ParseInput<'a, S>,
-) -> Result<&'a str, ParseError> {
+pub fn comment_untouched<'a, C: Ctx>(i: &mut ParseInputOf<'a, C>) -> Result<&'a str, ParseError> {
     scan(i, false)
 }
 
 /// Where the parser is, in the step's input.
-pub fn here<S: Clone + std::fmt::Debug>(i: &mut ParseInput<'_, S>) -> Result<usize, ParseError> {
+pub fn here<C: Ctx>(i: &mut ParseInputOf<'_, C>) -> Result<usize, ParseError> {
     Ok(i.current_token_start())
 }
 
 /// Where the parser is, in the stream's.
-pub fn here_moved<S: Clone + std::fmt::Debug>(
-    i: &mut ParseInput<'_, S>,
-) -> Result<usize, ParseError> {
+pub fn here_moved<C: Ctx>(i: &mut ParseInputOf<'_, C>) -> Result<usize, ParseError> {
     let at = i.current_token_start();
     Ok(rt::span_at(i, at..at).start)
 }

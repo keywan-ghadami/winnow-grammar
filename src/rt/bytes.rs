@@ -1,5 +1,5 @@
 //! The helpers of [`super`] that hand back what they matched, over
-//! [`ParseBytes`] - the input of a grammar that declares `input bytes;`
+//! [`ParseBytes`](crate::ParseBytes) - the input of a grammar that declares `input bytes;`
 //! (ADR 25).
 //!
 //! Everything that only steps, records and decides is shared with text
@@ -18,7 +18,7 @@
 use super::RtError;
 use crate::ascii::AsciiClass;
 use crate::error::Diagnostics;
-use crate::ParseBytes;
+use crate::ParseBytesOf;
 use winnow::error::{ErrMode, StrContext};
 use winnow::stream::{AsBStr, FindSlice, Stream};
 use winnow::Parser;
@@ -70,13 +70,13 @@ pub fn ascii_or_checked(b: &[u8]) -> Result<&str, usize> {
 /// [`ascii_or_checked`]. What a `digit{…}` run yields in a byte grammar,
 /// where it is text as it is in a text grammar (D2).
 #[doc(hidden)]
-pub fn ascii_run<'a, S, P, E>(
+pub fn ascii_run<'a, Cx, P, E>(
     mut p: P,
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<&'a str, ErrMode<E>>
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<&'a str, ErrMode<E>>
 where
-    S: Clone + std::fmt::Debug,
-    P: Parser<ParseBytes<'a, S>, &'a [u8], ErrMode<E>>,
-    E: RtError<'a, S, &'a [u8]>,
+    Cx: crate::Ctx,
+    P: Parser<ParseBytesOf<'a, Cx>, &'a [u8], ErrMode<E>>,
+    E: RtError<'a, Cx, &'a [u8]>,
 {
     move |input| {
         let start = input.checkpoint();
@@ -94,9 +94,9 @@ where
 /// has to name the byte, not the last alternative tried.
 #[cold]
 #[inline(never)]
-pub fn invalid_utf8<'a, S: Clone + std::fmt::Debug, E: Diagnostics>(
-    input: &mut ParseBytes<'a, S>,
-    start: &<ParseBytes<'a, S> as Stream>::Checkpoint,
+pub fn invalid_utf8<'a, Cx: crate::Ctx, E: Diagnostics>(
+    input: &mut ParseBytesOf<'a, Cx>,
+    start: &<ParseBytesOf<'a, Cx> as Stream>::Checkpoint,
     at: usize,
 ) -> ErrMode<E> {
     input.reset(start);
@@ -107,7 +107,7 @@ pub fn invalid_utf8<'a, S: Clone + std::fmt::Debug, E: Diagnostics>(
 
 /// The input not yet consumed, as bytes - [`super::rest`] for a byte grammar.
 #[inline]
-pub fn rest<'a, S: Clone + std::fmt::Debug>(input: &ParseBytes<'a, S>) -> &'a [u8] {
+pub fn rest<'a, Cx: crate::Ctx>(input: &ParseBytesOf<'a, Cx>) -> &'a [u8] {
     let n = input.eof_offset();
     // SAFETY: `n` is the length of what is not yet consumed.
     unsafe { input.peek_slice_unchecked(n) }
@@ -121,8 +121,8 @@ pub fn rest<'a, S: Clone + std::fmt::Debug>(input: &ParseBytes<'a, S>) -> &'a [u
 ///
 /// `n` is at most the length of [`rest`].
 #[inline(always)]
-unsafe fn take_in_bounds<'a, S: Clone + std::fmt::Debug>(
-    input: &mut ParseBytes<'a, S>,
+unsafe fn take_in_bounds<'a, Cx: crate::Ctx>(
+    input: &mut ParseBytesOf<'a, Cx>,
     n: usize,
 ) -> &'a [u8] {
     debug_assert!(n <= input.eof_offset());
@@ -133,7 +133,7 @@ unsafe fn take_in_bounds<'a, S: Clone + std::fmt::Debug>(
 /// Consume `n` bytes that [`rest`] showed to be matched. Always inlined, as
 /// [`super::advance`] is.
 #[inline(always)]
-pub fn advance<S: Clone + std::fmt::Debug>(input: &mut ParseBytes<'_, S>, n: usize) {
+pub fn advance<Cx: crate::Ctx>(input: &mut ParseBytesOf<'_, Cx>, n: usize) {
     input.next_slice(n);
 }
 
@@ -141,11 +141,11 @@ pub fn advance<S: Clone + std::fmt::Debug>(input: &mut ParseBytes<'_, S>, n: usi
 /// and one step in the fast pass, the literal with its expectation in the
 /// diagnosing pass. Yields the byte, as a literal does in a byte grammar.
 #[inline]
-pub fn lit_byte<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
+pub fn lit_byte<'a, Cx: crate::Ctx, E: RtError<'a, Cx, &'a [u8]>>(
     byte: u8,
     lit: &'static str,
     char_lit: Option<char>,
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<&'a [u8], ErrMode<E>> {
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<&'a [u8], ErrMode<E>> {
     move |input| {
         if !E::RECORDING {
             let rest = rest(input);
@@ -173,9 +173,9 @@ pub fn lit_byte<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
 
 /// [`super::scan_to_literal`] over bytes: what lay before the terminator,
 /// unchecked - `until(t)` in a byte grammar yields `&'a [u8]` (D3).
-pub fn scan_to_literal<'a, S: Clone + std::fmt::Debug, E>(
+pub fn scan_to_literal<'a, Cx: crate::Ctx, E>(
     needle: &'static str,
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<&'a [u8], ErrMode<E>> {
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<&'a [u8], ErrMode<E>> {
     move |input| {
         let end = match input.find_slice(needle) {
             Some(range) => range.start,
@@ -187,8 +187,8 @@ pub fn scan_to_literal<'a, S: Clone + std::fmt::Debug, E>(
 }
 
 /// [`super::scan_to_line_ending`] over bytes.
-pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug, E>(
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<&'a [u8], ErrMode<E>> {
+pub fn scan_to_line_ending<'a, Cx: crate::Ctx, E>(
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<&'a [u8], ErrMode<E>> {
     move |input| {
         let end = match input.find_slice(b'\n') {
             Some(range) => {
@@ -207,10 +207,10 @@ pub fn scan_to_line_ending<'a, S: Clone + std::fmt::Debug, E>(
 }
 
 /// [`super::scan_to_any`] over bytes.
-pub fn scan_to_any<'a, S: Clone + std::fmt::Debug, E>(
+pub fn scan_to_any<'a, Cx: crate::Ctx, E>(
     lits: &'static [&'static str],
     line_ending: bool,
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<&'a [u8], ErrMode<E>> {
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<&'a [u8], ErrMode<E>> {
     move |input| {
         let hit = match (lits, line_ending) {
             ([], false) => None,
@@ -243,10 +243,10 @@ pub fn scan_to_any<'a, S: Clone + std::fmt::Debug, E>(
 /// [`super::scan_to_bytes`] over bytes: the static searcher of a scan site
 /// whose needles are all single bytes (ADR 24 §12b).
 #[inline]
-pub fn scan_to_bytes<'a, S: Clone + std::fmt::Debug, E, F: super::FindBytes>(
+pub fn scan_to_bytes<'a, Cx: crate::Ctx, E, F: super::FindBytes>(
     find: &'static F,
     line_ending: bool,
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<&'a [u8], ErrMode<E>> {
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<&'a [u8], ErrMode<E>> {
     move |input| {
         let hay = rest(input);
         let end = match find.find(hay) {
@@ -261,10 +261,10 @@ pub fn scan_to_bytes<'a, S: Clone + std::fmt::Debug, E, F: super::FindBytes>(
 
 /// [`super::class`] over bytes: a run of an ASCII class, yielding `&'a str`
 /// as it does in a text grammar - by construction, not by a check (D2).
-pub fn class<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
+pub fn class<'a, Cx: crate::Ctx, E: RtError<'a, Cx, &'a [u8]>>(
     class: AsciiClass,
     min: usize,
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<&'a str, ErrMode<E>> {
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<&'a str, ErrMode<E>> {
     // Always inlined: the whitespace skip of both copies of a stream
     // grammar (ADR 27 §3, *Per-mode copies*) shares this closure, and with
     // two callers the compiler would call it at every skip instead.
@@ -280,8 +280,8 @@ pub fn class<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
 }
 
 /// [`super::digit`] over bytes.
-pub fn digit<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<char, ErrMode<E>> {
+pub fn digit<'a, Cx: crate::Ctx, E: RtError<'a, Cx, &'a [u8]>>(
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<char, ErrMode<E>> {
     move |input| match input.as_bstr().first() {
         Some(&b) if b.is_ascii_digit() => {
             input.next_token();
@@ -292,8 +292,8 @@ pub fn digit<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
 }
 
 /// [`super::hex_digit`] over bytes.
-pub fn hex_digit<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<char, ErrMode<E>> {
+pub fn hex_digit<'a, Cx: crate::Ctx, E: RtError<'a, Cx, &'a [u8]>>(
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<char, ErrMode<E>> {
     move |input| match input.as_bstr().first() {
         Some(&b) if b.is_ascii_hexdigit() => {
             input.next_token();
@@ -333,11 +333,11 @@ fn decode_char(b: &[u8]) -> Result<Option<char>, usize> {
 /// checked; from a byte `>= 0x80` one character is decoded *with validation*
 /// and tested with `wide`. A sequence that is not UTF-8 is the cut of
 /// [`invalid_utf8`] at its first byte, wherever in the identifier it is.
-pub fn class_or_wide<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
+pub fn class_or_wide<'a, Cx: crate::Ctx, E: RtError<'a, Cx, &'a [u8]>>(
     class: AsciiClass,
     wide: fn(char) -> bool,
     min: usize,
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<&'a str, ErrMode<E>> {
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<&'a str, ErrMode<E>> {
     move |input| {
         let b = rest(input);
         let mut n = 0;
@@ -379,9 +379,9 @@ pub fn class_or_wide<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>
 /// what `char` reads between its quotes in a byte grammar. Backtracks at an
 /// excluded byte and at the end, as `none_of` does; a sequence that is not
 /// UTF-8 is the cut of [`invalid_utf8`].
-pub fn char_except<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
+pub fn char_except<'a, Cx: crate::Ctx, E: RtError<'a, Cx, &'a [u8]>>(
     except: &'static [u8],
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<char, ErrMode<E>> {
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<char, ErrMode<E>> {
     move |input| {
         let b = rest(input);
         if b.first().is_some_and(|c| except.contains(c)) {
@@ -405,13 +405,13 @@ pub fn char_except<'a, S: Clone + std::fmt::Debug, E: RtError<'a, S, &'a [u8]>>(
 /// UTF-8 (D3). `p` is `take(…)` of the pattern for `text(…)` itself and the
 /// delimited body for `string`; either way its bytes lie in the input, so a
 /// bad byte is reported at its absolute offset.
-pub fn text<'a, S, P, E>(
+pub fn text<'a, Cx, P, E>(
     mut p: P,
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<&'a str, ErrMode<E>>
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<&'a str, ErrMode<E>>
 where
-    S: Clone + std::fmt::Debug,
-    P: Parser<ParseBytes<'a, S>, &'a [u8], ErrMode<E>>,
-    E: RtError<'a, S, &'a [u8]>,
+    Cx: crate::Ctx,
+    P: Parser<ParseBytesOf<'a, Cx>, &'a [u8], ErrMode<E>>,
+    E: RtError<'a, Cx, &'a [u8]>,
 {
     move |input| {
         let start = input.checkpoint();
@@ -448,16 +448,16 @@ fn offset_in(whole: &[u8], part: &[u8]) -> usize {
 /// compared, and [`ascii_or_checked`] turns them into text with one
 /// `is_ascii`. What is not text is the cut of D5, what does not read as a
 /// `T` the error of [`super::dec`].
-pub fn dec<'a, S, T, P, O, E>(
+pub fn dec<'a, Cx, T, P, O, E>(
     mut p: P,
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<T, ErrMode<E>>
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<T, ErrMode<E>>
 where
-    S: Clone + std::fmt::Debug,
+    Cx: crate::Ctx,
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
     O: AsRef<[u8]>,
-    P: Parser<ParseBytes<'a, S>, O, ErrMode<E>>,
-    E: RtError<'a, S, &'a [u8]>,
+    P: Parser<ParseBytesOf<'a, Cx>, O, ErrMode<E>>,
+    E: RtError<'a, Cx, &'a [u8]>,
 {
     move |input| {
         let cp = input.checkpoint();
@@ -478,21 +478,21 @@ where
 
 /// `intern(p)` in a byte grammar, into the context's interner: the bytes `p`
 /// yields, checked only when the interner does not already hold them (D4).
-pub fn intern<'a, S, O, P, E>(
+pub fn intern<'a, Cx, O, P, E>(
     mut p: P,
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<crate::Symbol, ErrMode<E>>
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<crate::Symbol, ErrMode<E>>
 where
-    S: Clone + std::fmt::Debug,
+    Cx: crate::Ctx,
     O: AsRef<[u8]>,
-    P: Parser<ParseBytes<'a, S>, O, ErrMode<E>>,
-    E: RtError<'a, S, &'a [u8]>,
+    P: Parser<ParseBytesOf<'a, Cx>, O, ErrMode<E>>,
+    E: RtError<'a, Cx, &'a [u8]>,
 {
     move |input| {
         let start = input.checkpoint();
         let whole = rest(input);
         let value = p.parse_next(input)?;
         let bytes = value.as_ref();
-        match input.state.intern_bytes(bytes) {
+        match input.state.cx_mut().intern_bytes(bytes) {
             Ok(sym) => Ok(sym),
             Err(bad) => {
                 let at = offset_in(whole, bytes);
@@ -505,22 +505,23 @@ where
 /// `intern(p)` in a byte grammar that declares `interner I;`: as [`intern`],
 /// with the declared interner's [`lookup_bytes`](crate::Interner::lookup_bytes)
 /// asked first.
-pub fn intern_declared<'a, I, S, O, P, E>(
+pub fn intern_declared<'a, I, Cx, O, P, E>(
     mut p: P,
-) -> impl FnMut(&mut ParseBytes<'a, S>) -> Result<crate::Symbol, ErrMode<E>>
+) -> impl FnMut(&mut ParseBytesOf<'a, Cx>) -> Result<crate::Symbol, ErrMode<E>>
 where
     I: crate::Interner,
-    S: Clone + std::fmt::Debug + crate::InternerOf<I>,
+    Cx: crate::Ctx,
+    Cx::State: crate::InternerOf<I>,
     O: AsRef<[u8]>,
-    P: Parser<ParseBytes<'a, S>, O, ErrMode<E>>,
-    E: RtError<'a, S, &'a [u8]>,
+    P: Parser<ParseBytesOf<'a, Cx>, O, ErrMode<E>>,
+    E: RtError<'a, Cx, &'a [u8]>,
 {
     move |input| {
         let start = input.checkpoint();
         let whole = rest(input);
         let value = p.parse_next(input)?;
         let bytes = value.as_ref();
-        let interner = crate::InternerOf::<I>::interner(&mut input.state.user_state);
+        let interner = crate::InternerOf::<I>::interner(&mut input.state.cx_mut().user_state);
         // No UTF-8 check on a hit, on purpose (ADR 25 D4): the interner only
         // holds what came to it as a `&str`, so bytes it recognises are valid
         // UTF-8 already - the `Interner::lookup_bytes` contract. Only a miss

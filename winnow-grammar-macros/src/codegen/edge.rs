@@ -330,6 +330,6 @@ impl Codegen<'_> {
             return TokenStream::new();
         }
         let input = &self.input_ident;
-        quote_spanned! {Span::mixed_site()=> + #input.state.origin }
+        quote_spanned! {Span::mixed_site()=> + ::winnow_grammar::Ctx::cx(&#input.state).origin }
     }
 }
