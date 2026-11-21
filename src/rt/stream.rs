@@ -1750,7 +1750,7 @@ impl<'c, K: Kind, S: Clone + std::fmt::Debug, const TRACK: bool>
     ///
     /// Only `Diagnose::Off` and `Diagnose::Eager`: the plain parsers note
     /// no reach, so a step kept for a diagnosis that may come
-    /// ([`Pending`]) would not know which items to parse again.
+    /// (`Pending`) would not know which items to parse again.
     /// [`slice_passes`] runs the two passes of the other modes.
     pub fn whole(input: &'c [u8], context: &'c mut ParseContext<S>, k: usize) -> Self {
         debug_assert!(
