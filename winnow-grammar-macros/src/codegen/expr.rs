@@ -1126,6 +1126,7 @@ impl<'a> Codegen<'a> {
     ) -> TokenStream {
         let input_ty = self.input_ty();
         let rts = self.rts();
+        let wgc = self.ctx_ty();
         let span = Span::mixed_site();
         let inner_err_type = quote_spanned! {span=> ::winnow::error::ErrMode<__WgEr> };
         let input_type = quote_spanned! {span=> #input_ty };
@@ -1133,7 +1134,7 @@ impl<'a> Codegen<'a> {
         // `raw_ident`'s characters, shared with `ident` - which is
         // `intern(raw_ident)` and nothing else (ADR 18 §1).
         let raw_ident = quote_spanned! {span=>
-            #rts::class_or_wide::<__WgS, __WgEr>(
+            #rts::class_or_wide::<#wgc, __WgEr>(
                 ::winnow_grammar::ascii::AsciiClass::IDENT,
                 |c| c.is_alphanumeric(),
                 1,
@@ -1208,12 +1209,12 @@ impl<'a> Codegen<'a> {
             // repetition (`digit{1,2}`), which a greedy terminal cannot express.
             // Tested as a byte rather than decoded as a `char` (`rt::digit`).
             "digit" => quote_spanned! {span=>
-                #rts::digit::<__WgS, __WgEr>()
+                #rts::digit::<#wgc, __WgEr>()
             },
             // One hex digit, for fixed-width hex fields (`hex_digit{2}`), as
             // `digit` is for decimal ones.
             "hex_digit" => quote_spanned! {span=>
-                #rts::hex_digit::<__WgS, __WgEr>()
+                #rts::hex_digit::<#wgc, __WgEr>()
             },
             // The runs of one ASCII class, scanned a word at a time.
             name if ascii_class(name).is_some() => {
@@ -1222,7 +1223,7 @@ impl<'a> Codegen<'a> {
                 let mut min = proc_macro2::Literal::usize_unsuffixed(min);
                 min.set_span(span);
                 quote_spanned! {span=>
-                    #rts::class::<__WgS, __WgEr>(
+                    #rts::class::<#wgc, __WgEr>(
                         ::winnow_grammar::ascii::AsciiClass::#class,
                         #min,
                     )
@@ -1239,11 +1240,11 @@ impl<'a> Codegen<'a> {
             winnow_grammar_model::frame::FRAME_END => return self.frame_end_parser(),
             "u8" | "u16" | "u32" | "u64" | "u128" | "usize" => {
                 let ty = quote::format_ident!("{}", name_str, span = span);
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, __WgS, #ty, __WgEr> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_uint::<_, #wgc, #ty, __WgEr> }
             }
             "i8" | "i16" | "i32" | "i64" | "i128" | "isize" => {
                 let ty = quote::format_ident!("{}", name_str, span = span);
-                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, __WgS, #ty, __WgEr> }
+                quote_spanned! {span=> ::winnow_grammar::rt::dec_int::<_, #wgc, #ty, __WgEr> }
             }
             "f32" | "f64" => {
                 let ty = quote::format_ident!("{}", name_str, span = span);
@@ -1496,9 +1497,9 @@ impl<'a> Codegen<'a> {
             // says so first, so that the parser need not build one
             // (`ParseError::from_input`).
             quote_spanned! {span=> (|i: &mut #input_ty| {
-                let outer = ::core::mem::replace(&mut i.state.diagnosing, <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING);
+                let outer = ::core::mem::replace(&mut ::winnow_grammar::Ctx::cx_mut(&mut i.state).diagnosing, <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING);
                 let r = ::winnow::Parser::parse_next(&mut #rule_path, i);
-                i.state.diagnosing = outer;
+                ::winnow_grammar::Ctx::cx_mut(&mut i.state).diagnosing = outer;
                 r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
             }) }
         } else {
@@ -1506,9 +1507,9 @@ impl<'a> Codegen<'a> {
                 .iter()
                 .map(|arg| self.generate_argument_expr(arg, is_lexical));
             quote_spanned! {span=> (|i: &mut #input_ty| {
-                let outer = ::core::mem::replace(&mut i.state.diagnosing, <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING);
+                let outer = ::core::mem::replace(&mut ::winnow_grammar::Ctx::cx_mut(&mut i.state).diagnosing, <__WgEr as ::winnow_grammar::Diagnostics>::RECORDING);
                 let r = #rule_path(i, #(#arg_exprs),*);
-                i.state.diagnosing = outer;
+                ::winnow_grammar::Ctx::cx_mut(&mut i.state).diagnosing = outer;
                 r.map_err(|e| ::winnow::error::ErrMode::Backtrack(<__WgEr as ::winnow_grammar::Diagnostics>::from_parse_error(e)))
             }) }
         }
