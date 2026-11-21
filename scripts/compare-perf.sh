@@ -31,7 +31,7 @@ tolerance=${PERF_TOLERANCE_PCT:-0.01}
 profiles=(
     "cut_profile none stmts_none stmts_cut grouped_none grouped_cut stream_none stream_cut"
     "stream_profile none plain memory stream frames_memory frames_reader list"
-    "slice_profile none memory slice list"
+    "slice_profile none memory slice list doc_none doc_cut"
     "param_profile none yaml"
 )
 
