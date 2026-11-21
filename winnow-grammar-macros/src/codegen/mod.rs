@@ -93,6 +93,11 @@ pub struct Codegen<'a> {
     /// `Pass::last`. Only there - the reader's steps never do, so that the
     /// plain rules get no second caller where no slice entry is used.
     pub plain_calls: std::cell::Cell<bool>,
+    /// With `plain_calls`: the fold's item step calls its `…_plain` copy
+    /// too. Only in a slice entry: in the reader the plain item rule would
+    /// get a second caller, and the fold in memory would no longer take it
+    /// in. A prefix or suffix calls its plain copy in the reader as well.
+    pub plain_items: std::cell::Cell<bool>,
     /// Whether every rule's parser is generated twice (ADR 27 §3, *Per-mode
     /// copies*): untracked for the plain entry points, and tracked under
     /// `__edge_…` names for the stream readers and everything they reach.
@@ -159,11 +164,16 @@ impl Codegen<'_> {
         }
     }
 
-    /// `f` with `plain_calls` set, where the grammar has a plain copy.
-    pub fn with_plain_calls<T>(&self, f: impl FnOnce() -> T) -> T {
-        let before = self.plain_calls.replace(self.dual);
+    /// `f` with `plain_calls` set, where the grammar has a plain copy, and
+    /// `plain_items` as `items` says.
+    pub fn with_plain_calls<T>(&self, items: bool, f: impl FnOnce() -> T) -> T {
+        let before = (
+            self.plain_calls.replace(self.dual),
+            self.plain_items.replace(self.dual && items),
+        );
         let r = f();
-        self.plain_calls.set(before);
+        self.plain_calls.set(before.0);
+        self.plain_items.set(before.1);
         r
     }
 
@@ -241,6 +251,7 @@ impl<'a> Codegen<'a> {
             streaming: std::cell::Cell::new(all_edges),
             plain_steps: std::cell::Cell::new(false),
             plain_calls: std::cell::Cell::new(false),
+            plain_items: std::cell::Cell::new(false),
             dual,
             tracked_rules,
             edge_k: edge::lookahead(grammar),

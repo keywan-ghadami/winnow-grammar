@@ -10,9 +10,10 @@
   is (`Stream::whole`, nothing copied), so every step has the rest of the
   input (`Pass::last`), and the generated steps then run step functions made
   from the plain rules (`…_plain`) instead of the edge-tracked copy: noting
-  where the window ends can change nothing there. Only the slice entries call
-  them; the reader's steps do not, so a program that uses the reader and the
-  parse in memory but no slice entry gives no plain rule a second caller.
+  where the window ends can change nothing there. The reader's prefix,
+  suffix and end steps call them too, but not its fold's item: the plain item
+  rule would get a second caller there, and the fold in memory would no
+  longer take it in (`cut_profile stmts_*`, a call per item).
   In a grammar with a `#[stream]` rule the plain copy moves its spans by
   `ParseContext::origin` too (0 in memory), so positions agree. The passes
   are the parse in memory's (ADR 17, `rt::stream::slice_passes`): a stream
@@ -23,7 +24,9 @@
   across a fold costs it no second pass. Errors and the user state are the
   parse in memory's (`stream_slice_test`, and `stream_diagnose_test`,
   `cut_error_wins_test`, `stream_step_records_test` under every mode).
-  callgrind, `examples/slice_profile.rs`, one codegen unit: `slice` 41.4M
+  The stream picks its source when it is compiled (`Stream`'s `WHOLE`), so
+  the reader pays no test for it. callgrind, `examples/slice_profile.rs`, one
+  codegen unit: `slice` 41.2M
   against `memory` 39.8M; `doc_cut` (a cut open across 200 000 items)
   445.2M against `doc_none` 428.0M.
 

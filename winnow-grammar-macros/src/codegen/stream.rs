@@ -57,15 +57,20 @@ impl Codegen<'_> {
         };
         let end_fn = self.step_name(format!("__stream_{}_end", rule.name));
         let mut helpers = end_def(&end_fn, &ws);
-        let body = self.stream_level(path, 0, &view, &mut helpers, false);
+        // The reader's body: a prefix, a suffix and the end call their plain
+        // copy under `Pass::last`, the fold's item does not (`plain_items`).
+        let body = self.with_plain_calls(false, || {
+            self.stream_level(path, 0, &view, &mut helpers, false)
+        });
         // The slice entry's body: the same steps, calling the plain step
         // functions once the input is all there. The reader's body does not
         // call them, so that a program with the reader and the parse in
         // memory but no slice entry does not instantiate them: a plain rule
         // with a second caller is no longer taken into the fold in memory
         // (cut_profile `stmts_*`, one call per item).
-        let slice_body = self
-            .with_plain_calls(|| self.stream_level(path, 0, &view, &mut TokenStream::new(), false));
+        let slice_body = self.with_plain_calls(true, || {
+            self.stream_level(path, 0, &view, &mut TokenStream::new(), false)
+        });
         if self.dual {
             // The same steps again from the plain rules, for an input that is
             // all there (`step_call`); their calls are already in `body`.
@@ -82,7 +87,7 @@ impl Codegen<'_> {
             let keep = step_keep(&kind, &view, &end_fn, &[]);
             quote! { #call, #keep }
         };
-        let (finish, slice_finish) = (finish(false), finish(self.dual));
+        let (finish, slice_finish) = (finish(self.dual), finish(self.dual));
         let slice_entry = self.stream_slice_fn(rule, &slice_body, &slice_finish, (&params, &names));
         let each_fn = if path.each {
             self.stream_each_fn(
@@ -153,7 +158,7 @@ impl Codegen<'_> {
                 let mut __run = |context: &mut ::winnow_grammar::ParseContext<__WgS>, #(#params),*|
                     -> ::core::result::Result<#ret, ::winnow_grammar::ParseError>
                 {
-                    let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::whole(
+                    let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach, true>::whole(
                         input, context, #k,
                     );
                     let __value = #slice_body;
@@ -187,9 +192,12 @@ impl Codegen<'_> {
         let each_fn = format_ident!("parse_{}_reader_each", rule.name, span = span);
         let slice_each_fn = format_ident!("parse_{}_slice_each", rule.name, span = span);
         let slice_doc = slice_doc(&format!("parse_{}_reader_each", rule.name));
-        let body = self.stream_level(path, 0, view, &mut TokenStream::new(), true);
-        let slice_body = self
-            .with_plain_calls(|| self.stream_level(path, 0, view, &mut TokenStream::new(), true));
+        let body = self.with_plain_calls(false, || {
+            self.stream_level(path, 0, view, &mut TokenStream::new(), true)
+        });
+        let slice_body = self.with_plain_calls(true, || {
+            self.stream_level(path, 0, view, &mut TokenStream::new(), true)
+        });
         let item = self.stream_item_type(path);
         let emitted = emitted_type(&item);
         quote_spanned! {span=>
@@ -233,7 +241,7 @@ impl Codegen<'_> {
                     -> ::core::result::Result<::core::ops::ControlFlow<__WgB, #ret>, ::winnow_grammar::ParseError>
                 {
                     let mut __broken: ::core::option::Option<__WgB> = ::core::option::Option::None;
-                    let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach>::whole(
+                    let mut __stream = ::winnow_grammar::rt::stream::Stream::<#kind, _, __WgS, #reach, true>::whole(
                         input, context, #k,
                     );
                     __stream.context().emits.open::<#emitted>();
@@ -712,7 +720,7 @@ impl Codegen<'_> {
         sep_arg: &TokenStream,
         args: &[TokenStream],
     ) -> TokenStream {
-        if !self.plain_calls.get() {
+        if !self.plain_items.get() {
             return quote! {};
         }
         let span = Span::mixed_site();

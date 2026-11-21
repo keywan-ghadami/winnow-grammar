@@ -560,11 +560,12 @@ pub fn see<T: ?Sized, B>(
     }
 }
 
-/// What the steps read: the input all in memory under `whole`, the read
-/// buffer otherwise. A macro, so that it borrows those two fields only.
+/// What the steps read: the input all in memory under `WHOLE`, the read
+/// buffer otherwise - decided when the stream is compiled, so the reader
+/// pays no test for it. A macro, so that it borrows those two fields only.
 macro_rules! bytes {
     ($s:expr) => {
-        if $s.whole {
+        if WHOLE {
             $s.src
         } else {
             $s.buf.bytes()
@@ -575,7 +576,7 @@ macro_rules! bytes {
 /// The length of [`bytes!`].
 macro_rules! filled {
     ($s:expr) => {
-        if $s.whole {
+        if WHOLE {
             $s.src.len()
         } else {
             $s.buf.len()
@@ -585,7 +586,14 @@ macro_rules! filled {
 
 /// The reader, the buffer and the context of a stream parse. See the module
 /// documentation; the generated `parse_<rule>_reader` is its only user.
-pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool = false> {
+pub struct Stream<
+    'c,
+    K: Kind,
+    R: Read,
+    S: Clone + std::fmt::Debug,
+    const TRACK: bool = false,
+    const WHOLE: bool = false,
+> {
     reader: R,
     block: usize,
     /// How far past the start of a step a parse may look before the step is
@@ -607,10 +615,8 @@ pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK:
     /// Matched steps whose records the diagnosing pass has not taken yet,
     /// oldest first: see [`Pending`].
     pending: Vec<Pending<'c, K, S>>,
-    /// The input is all in memory ([`Stream::whole`]): the steps read
-    /// `src`, not `buf`, and nothing is copied.
-    whole: bool,
-    /// The input all in memory, under `whole`; empty otherwise.
+    /// The input all in memory, under `WHOLE` ([`Stream::whole`]): the
+    /// steps read it, not `buf`, and nothing is copied. Empty otherwise.
     src: &'c [u8],
     /// The grammar's own lookahead.
     k: usize,
@@ -638,8 +644,8 @@ pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK:
     _kind: PhantomData<K>,
 }
 
-impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
-    Stream<'c, K, R, S, TRACK>
+impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const WHOLE: bool>
+    Stream<'c, K, R, S, TRACK, WHOLE>
 {
     /// A stream over `reader`, parsing with a copy of `context`, which gets
     /// the copy back - user state, recoveries and all - when the stream is
@@ -664,7 +670,6 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             prev_item: None,
             reaching: Vec::new(),
             pending: Vec::new(),
-            whole: false,
             src: &[],
             k,
             base: 0,
@@ -820,7 +825,11 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             self.scan_window(ctx, f, n, &pass, mode, lazy);
         ctx.rules.clear();
         ctx.origin = 0;
-        let mut ctx = self.flush_before_cut(ctx);
+        // Checked here: the call moves the context out and back, twice its
+        // size copied, which every step paid while nothing was pending.
+        if !ctx.cut_stash.is_empty() && !self.pending.is_empty() {
+            ctx = self.flush_before_cut(ctx);
+        }
         end_step(&mut self.furthest, &mut self.cut_stash, &mut ctx, origin);
         for e in &mut ctx.recovered[recovered..] {
             *e = shift(e.clone(), origin);
@@ -1147,7 +1156,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         if at <= self.visible {
             e.found = crate::error::next_word(&bytes!(self)[at..self.visible]);
         }
-        e.excerpt = if self.whole {
+        e.excerpt = if WHOLE {
             reader::Lines {
                 bytes: self.src,
                 dropped: 0,
@@ -1465,10 +1474,9 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     /// Before a step that leaves a cut open sets aside what was recorded
     /// (`end_step`), what is pending is recorded: in memory the cut's
     /// `commit` takes it too. `ctx` is the step's, taken out of the stream.
+    /// Called only where both hold: a cut is open and something is pending.
+    #[cold]
     fn flush_before_cut(&mut self, mut ctx: ParseContext<S>) -> ParseContext<S> {
-        if ctx.cut_stash.is_empty() || self.pending.is_empty() {
-            return ctx;
-        }
         let open = std::mem::take(&mut ctx.cut_stash);
         let recorded = ctx.furthest.take();
         let back = self.ctx.replace(ctx);
@@ -1606,7 +1614,11 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         };
         ctx.rules.clear();
         ctx.origin = 0;
-        let mut ctx = self.flush_before_cut(ctx);
+        // Checked here: the call moves the context out and back, twice its
+        // size copied, which every step paid while nothing was pending.
+        if !ctx.cut_stash.is_empty() && !self.pending.is_empty() {
+            ctx = self.flush_before_cut(ctx);
+        }
         end_step(&mut self.furthest, &mut self.cut_stash, &mut ctx, origin);
         for e in &mut ctx.recovered[recovered..] {
             *e = shift(e.clone(), origin);
@@ -1651,7 +1663,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     /// One read, of at least `want` bytes asked (at least a block), after
     /// dropping what lies before the next step when that is a block or more.
     fn read_once(&mut self, want: usize) -> Result<(), ParseError> {
-        if self.whole {
+        if WHOLE {
             // All in memory: the one read is to the end, and drops nothing.
             self.eof = true;
             return self.validate();
@@ -1728,7 +1740,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
 }
 
 impl<'c, K: Kind, S: Clone + std::fmt::Debug, const TRACK: bool>
-    Stream<'c, K, std::io::Empty, S, TRACK>
+    Stream<'c, K, std::io::Empty, S, TRACK, true>
 {
     /// A stream over an input that is all in memory: the steps read it
     /// where it is, nothing is copied, and every step knows it has the rest
@@ -1755,14 +1767,13 @@ impl<'c, K: Kind, S: Clone + std::fmt::Debug, const TRACK: bool>
             },
             k,
         );
-        stream.whole = true;
         stream.src = input;
         stream
     }
 }
 
-impl<K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool> Drop
-    for Stream<'_, K, R, S, TRACK>
+impl<K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const WHOLE: bool> Drop
+    for Stream<'_, K, R, S, TRACK, WHOLE>
 {
     fn drop(&mut self) {
         if let Some(mut ctx) = self.ctx.take() {

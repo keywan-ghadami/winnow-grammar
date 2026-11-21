@@ -362,14 +362,17 @@ still recorded at once. The buffer keeps what a pending entry starts at.
 An input that is all in memory need not pay for the edge tracking at all
 (2026-11-20): `parse_<rule>_slice` / `_slice_each` build the stream with
 `Stream::whole`, whose steps read the slice where it is - no read buffer, no
-copy - so every step runs with `Pass::last`. The generator writes each step
-function twice, from the tracked rules and from the plain ones (`…_plain`,
-`Codegen::plain_steps`), and the slice entry's step closures take the plain
-one under `Pass::last`, in both passes (`Codegen::plain_calls`). The reader's
-closures never do: a plain rule called from a plain step has a second caller,
-and the fold in memory then no longer takes its body in - a call per item
-for every program with the reader and the parse in memory (`cut_profile
-stmts_*`, +0.5 % and +1.0 %). For the slice the plain copy of a grammar with a
+copy - so every step runs with `Pass::last`. Which source a stream reads is a
+const parameter (`WHOLE`), so the reader compiles no test for it. The
+generator writes each step function twice, from the tracked rules and from
+the plain ones (`…_plain`, `Codegen::plain_steps`), and the step closures take
+the plain one under `Pass::last`, in both passes (`Codegen::plain_calls`). The
+reader's item closure does not (`Codegen::plain_items`, set for the slice
+only): the plain item rule called from a plain step has a second caller, and
+the fold in memory then no longer takes its body in - a call per item for
+every program with the reader and the parse in memory (`cut_profile
+stmts_*`, +0.5 % and +1.0 %). A prefix, a suffix and the end do take their
+plain copy in the reader. For the slice the plain copy of a grammar with a
 `#[stream]` rule moves its spans by `origin` like the tracked one
 (`Codegen::moves_spans`; `origin` is 0 in memory).
 
