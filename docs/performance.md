@@ -137,6 +137,7 @@ only those counts are the ones CI checks.
 | `slice_profile` | a `#[stream]` rule over an input all in memory (`parse_<rule>_slice`), next to its parse in memory |
 | `str_profile` | the same over a `&str` (`parse_<rule>_str`), which skips the second UTF-8 check |
 | `param_profile` | rules with value parameters, passed on at nearly every call (ADR 26) |
+| `span_profile` | spans bound with `@`, in memory, in a grammar without and with a `#[stream]` rule (whose spans add `origin`) |
 
 `scripts/profile-cut.sh` and `scripts/profile-stream.sh` turn the counts of
 one revision into instructions per item, the tables of the ADRs. A new

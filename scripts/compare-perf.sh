@@ -34,6 +34,7 @@ profiles=(
     "slice_profile none memory slice list doc_none doc_cut"
     "str_profile none slice list"
     "param_profile none yaml"
+    "span_profile none plain dual"
 )
 
 base_sha=$(git rev-parse --verify "$base_rev^{commit}")
