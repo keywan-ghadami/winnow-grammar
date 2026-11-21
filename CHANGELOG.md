@@ -162,6 +162,8 @@
   (-0.01 % / -1.7 %) - the register allocation of one function in that
   binary, five instructions a row.
 
+### Performance
+
 - **A stream parses on the caller's context, not a clone of it.**
   `Stream::new` cloned the context and its `Drop` wrote the clone back - Vec
   and Arc clones, a drop of the old context and three copies of 256 bytes a
