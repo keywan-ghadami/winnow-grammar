@@ -78,8 +78,31 @@ impl Buf {
     /// The line the stream position `offset` is on, if the buffer still
     /// holds it.
     pub(crate) fn excerpt(&self, offset: usize) -> Option<crate::error::Excerpt> {
+        Lines {
+            bytes: self.bytes(),
+            dropped: self.dropped,
+            lines: self.lines,
+            line_start: self.line_start,
+        }
+        .excerpt(offset)
+    }
+}
+
+/// Bytes at the stream's offset `dropped`, after `lines` lines, the one
+/// they begin on starting at `line_start`: what [`Buf::excerpt`] reads, and
+/// an input all in memory (`dropped`, `lines` and `line_start` 0).
+pub(crate) struct Lines<'b> {
+    pub(crate) bytes: &'b [u8],
+    pub(crate) dropped: usize,
+    pub(crate) lines: usize,
+    pub(crate) line_start: usize,
+}
+
+impl Lines<'_> {
+    /// The line the stream position `offset` is on, if the bytes hold it.
+    pub(crate) fn excerpt(&self, offset: usize) -> Option<crate::error::Excerpt> {
         let at = offset.checked_sub(self.dropped)?;
-        let bytes = self.bytes();
+        let bytes = self.bytes;
         if at > bytes.len() {
             return None;
         }

@@ -226,12 +226,41 @@ pub struct EmitSink {
     open: Option<Box<OpenSink>>,
 }
 
-/// An open [`EmitSink`]: the item type, its name and what is held.
+/// An open [`EmitSink`]: the item type, its name and what is held - a
+/// `Vec` of the item type itself, so that an emit is a push, not a box.
 struct OpenSink {
     item: TypeId,
     name: &'static str,
-    pending: Vec<Box<dyn Any + Send>>,
+    pending: Box<dyn Held>,
 }
+
+/// What an open sink holds: a `Vec<T>` of its item type, behind one box.
+trait Held: Send {
+    fn len(&self) -> usize;
+    fn clear(&mut self);
+    /// What is held, leaving the same type empty.
+    fn take(&mut self) -> Box<dyn Held>;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+impl<T: Any + Send> Held for Vec<T> {
+    fn len(&self) -> usize {
+        Vec::len(self)
+    }
+    fn clear(&mut self) {
+        Vec::clear(self);
+    }
+    fn take(&mut self) -> Box<dyn Held> {
+        Box::new(std::mem::take(self))
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+/// What [`EmitSink::set_aside`] took, for [`EmitSink::restore`].
+#[doc(hidden)]
+pub struct Kept(Option<Box<dyn Held>>);
 
 // SAFETY: `pending` holds `Send` values that are not `Sync`. Nothing reads
 // them through a shared reference: every method that touches them takes
@@ -248,11 +277,11 @@ impl EmitSink {
     }
 
     /// Opens the sink for items of type `T`, empty.
-    pub fn open<T: Any>(&mut self) {
+    pub fn open<T: Any + Send>(&mut self) {
         self.open = Some(Box::new(OpenSink {
             item: TypeId::of::<T>(),
             name: std::any::type_name::<T>(),
-            pending: Vec::new(),
+            pending: Box::new(Vec::<T>::new()),
         }));
     }
 
@@ -278,19 +307,30 @@ impl EmitSink {
             std::any::type_name::<T>(),
             open.name,
         );
-        open.pending.push(Box::new(value));
+        open.pending
+            .as_any_mut()
+            .downcast_mut::<Vec<T>>()
+            .expect("the sink holds its item type")
+            .push(value);
         true
     }
 
     /// Whether nothing is held.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.open.as_ref().is_none_or(|o| o.pending.is_empty())
+        self.open.as_ref().is_none_or(|o| o.pending.len() == 0)
     }
 
-    /// Hands out what is held, oldest first, for `each`.
-    pub fn drain(&mut self) -> impl Iterator<Item = Box<dyn Any + Send>> + '_ {
-        self.open.iter_mut().flat_map(|o| o.pending.drain(..))
+    /// Hands out what is held, oldest first, for `each`: items of type `T`,
+    /// the type the sink was opened for.
+    pub fn drain<T: Any + Send>(&mut self) -> impl Iterator<Item = T> + '_ {
+        self.open.iter_mut().flat_map(|o| {
+            o.pending
+                .as_any_mut()
+                .downcast_mut::<Vec<T>>()
+                .expect("`each` takes the sink's item type")
+                .drain(..)
+        })
     }
 
     /// Drops what is held: its attempt was thrown away.
@@ -307,17 +347,14 @@ impl EmitSink {
 
     /// Takes what is held, leaving the sink open and empty: around a parse
     /// whose emits are thrown away, with [`restore`](Self::restore).
-    pub fn set_aside(&mut self) -> Vec<Box<dyn Any + Send>> {
-        match &mut self.open {
-            Some(open) => std::mem::take(&mut open.pending),
-            None => Vec::new(),
-        }
+    pub fn set_aside(&mut self) -> Kept {
+        Kept(self.open.as_mut().map(|open| open.pending.take()))
     }
 
     /// Puts back what [`set_aside`](Self::set_aside) took, dropping what was
     /// emitted since.
-    pub fn restore(&mut self, kept: Vec<Box<dyn Any + Send>>) {
-        if let Some(open) = &mut self.open {
+    pub fn restore(&mut self, kept: Kept) {
+        if let (Some(open), Some(kept)) = (&mut self.open, kept.0) {
             open.pending = kept;
         }
     }

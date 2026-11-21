@@ -315,10 +315,18 @@ impl Codegen<'_> {
         }
     }
 
+    /// Whether spans are moved to the whole input's positions: in a
+    /// stream's steps, and in every copy of a grammar with a `#[stream]`
+    /// rule, whose plain copy a stream runs once its input is all there
+    /// (`Pass::last`). In memory `origin` is 0.
+    pub fn moves_spans(&self) -> bool {
+        self.streaming.get() || self.dual
+    }
+
     /// `+ input.state.origin` where spans are moved to the whole input's
     /// positions - in a stream's steps.
     pub fn origin(&self) -> TokenStream {
-        if !self.streaming.get() {
+        if !self.moves_spans() {
             return TokenStream::new();
         }
         let input = &self.input_ident;
