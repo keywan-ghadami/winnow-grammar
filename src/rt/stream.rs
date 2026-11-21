@@ -528,6 +528,29 @@ impl<K: Kind, S> Pending<'_, K, S> {
     }
 }
 
+/// What the steps read: the input all in memory under `whole`, the read
+/// buffer otherwise. A macro, so that it borrows those two fields only.
+macro_rules! bytes {
+    ($s:expr) => {
+        if $s.whole {
+            $s.src
+        } else {
+            $s.buf.bytes()
+        }
+    };
+}
+
+/// The length of [`bytes!`].
+macro_rules! filled {
+    ($s:expr) => {
+        if $s.whole {
+            $s.src.len()
+        } else {
+            $s.buf.len()
+        }
+    };
+}
+
 /// The reader, the buffer and the context of a stream parse. See the module
 /// documentation; the generated `parse_<rule>_reader` is its only user.
 pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool = false> {
@@ -552,9 +575,11 @@ pub struct Stream<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK:
     /// Matched steps whose records the diagnosing pass has not taken yet,
     /// oldest first: see [`Pending`].
     pending: Vec<Pending<'c, K, S>>,
-    /// The input is all in memory ([`Stream::whole`]): a read takes it to
-    /// the end.
+    /// The input is all in memory ([`Stream::whole`]): the steps read
+    /// `src`, not `buf`, and nothing is copied.
     whole: bool,
+    /// The input all in memory, under `whole`; empty otherwise.
+    src: &'c [u8],
     /// Over an input all in memory, where the current fold's first item
     /// starts, in `buf`: a diagnosis replays the items from there.
     fold_first: Option<usize>,
@@ -611,6 +636,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             reaching: Vec::new(),
             pending: Vec::new(),
             whole: false,
+            src: &[],
             fold_first: None,
             k,
             base: 0,
@@ -622,24 +648,6 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
             cut_stash: Vec::new(),
             _kind: PhantomData,
         }
-    }
-
-    /// A stream over an input that is all in memory: it is read at once, so
-    /// every step knows it has the rest of the input (`Pass::last`) and
-    /// runs the plain parsers. The generated `parse_<rule>_slice` and
-    /// `parse_<rule>_slice_each` use it.
-    pub fn whole(input: R, context: &'c mut ParseContext<S>, k: usize) -> Self {
-        let mut stream = Stream::new(
-            input,
-            context,
-            super::Reading {
-                block: 1 << 16,
-                max_frame: usize::MAX / 4,
-            },
-            k,
-        );
-        stream.whole = true;
-        stream
     }
 
     /// The context, for the actions the driver runs between steps.
@@ -763,7 +771,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         if self.whole && *n == 0 {
             self.fold_first = Some(self.pos);
         }
-        let last = self.eof && self.visible == self.buf.len();
+        let last = self.eof && self.visible == filled!(self);
         let pass = Pass {
             diagnose: mode == Diagnose::Eager,
             last,
@@ -839,7 +847,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         let mut reaching = Vec::new();
         let mut input = Input {
             input: winnow::stream::LocatingSlice::new(K::view(
-                &self.buf.bytes()[self.pos..self.visible],
+                &bytes!(self)[self.pos..self.visible],
             )),
             state: ctx,
         };
@@ -1032,7 +1040,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 let (e, ctx) = {
                     let input = Input {
                         input: winnow::stream::LocatingSlice::new(K::view(
-                            &self.buf.bytes()[self.pos..self.visible],
+                            &bytes!(self)[self.pos..self.visible],
                         )),
                         state: ctx,
                     };
@@ -1067,7 +1075,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         while self.visible == self.pos && !self.eof {
             self.read_once(0)?;
         }
-        if self.visible == self.pos && self.buf.len() == self.pos {
+        if self.visible == self.pos && filled!(self) == self.pos {
             return Ok(());
         }
         if self.context().diagnose == Diagnose::Off {
@@ -1078,7 +1086,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         let (e, ctx) = {
             let input = Input {
                 input: winnow::stream::LocatingSlice::new(K::view(
-                    &self.buf.bytes()[self.pos..self.visible],
+                    &bytes!(self)[self.pos..self.visible],
                 )),
                 state: ctx,
             };
@@ -1112,9 +1120,19 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         }
         let at = e.offset - self.base;
         if at <= self.visible {
-            e.found = crate::error::next_word(&self.buf.bytes()[at..self.visible]);
+            e.found = crate::error::next_word(&bytes!(self)[at..self.visible]);
         }
-        e.excerpt = self.buf.excerpt(e.offset);
+        e.excerpt = if self.whole {
+            reader::Lines {
+                bytes: self.src,
+                dropped: 0,
+                lines: 0,
+                line_start: 0,
+            }
+            .excerpt(e.offset)
+        } else {
+            self.buf.excerpt(e.offset)
+        };
         Err(e)
     }
 
@@ -1147,7 +1165,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         }
         loop {
             let window = self.visible - self.pos;
-            let mut last = self.eof && self.visible == self.buf.len();
+            let mut last = self.eof && self.visible == filled!(self);
             let full = window >= self.lookahead;
             let snapshot = (!zst && (mode == Diagnose::Replay || (lazy && !last && !full)))
                 .then(|| self.context().user_state.clone());
@@ -1181,7 +1199,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 while self.base + self.visible == before && !self.eof {
                     self.read_once(more)?;
                 }
-                if self.base + self.visible != before || self.visible != self.buf.len() {
+                if self.base + self.visible != before || self.visible != filled!(self) {
                     // What the attempt's cut set aside comes back: it is
                     // parsed again, and sets it aside again if it still cuts.
                     self.cut_end(depth);
@@ -1396,7 +1414,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         };
         let emitted = self.context().emits.set_aside();
         let keep = self.context().user_state.clone();
-        let last = self.eof && self.visible == self.buf.len();
+        let last = self.eof && self.visible == filled!(self);
         let pass = Pass {
             diagnose: true,
             last,
@@ -1585,7 +1603,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
         let (r, touched, mut ctx) = {
             let mut input = Input {
                 input: winnow::stream::LocatingSlice::new(K::view(
-                    &self.buf.bytes()[start..self.visible],
+                    &bytes!(self)[start..self.visible],
                 )),
                 state: ctx,
             };
@@ -1663,6 +1681,11 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     /// One read, of at least `want` bytes asked (at least a block), after
     /// dropping what lies before the next step when that is a block or more.
     fn read_once(&mut self, want: usize) -> Result<(), ParseError> {
+        if self.whole {
+            // All in memory: the one read is to the end, and drops nothing.
+            self.eof = true;
+            return self.validate();
+        }
         self.prune();
         let oldest = self.reaching.first().map_or(self.pos, |r| r.start);
         let pending = self
@@ -1692,16 +1715,13 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
                 p.shift_back(keep);
             }
         }
-        let len = self.buf.len();
+        let len = filled!(self);
         loop {
             match self.buf.read_from(&mut self.reader, want.max(self.block)) {
                 Ok(0) => {
                     self.eof = true;
                     break;
                 }
-                // All in memory: read on to the end, so that every step
-                // knows it has the rest.
-                Ok(_) if self.whole => {}
                 Ok(_) => break,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(e) => {
@@ -1719,21 +1739,44 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool>
     /// as UTF-8, up to the last whole character.
     fn validate(&mut self) -> Result<(), ParseError> {
         if !K::TEXT {
-            self.visible = self.buf.len();
+            self.visible = filled!(self);
             return Ok(());
         }
-        match std::str::from_utf8(&self.buf.bytes()[self.visible..]) {
-            Ok(_) => self.visible = self.buf.len(),
+        match std::str::from_utf8(&bytes!(self)[self.visible..]) {
+            Ok(_) => self.visible = filled!(self),
             Err(e) => {
                 self.visible += e.valid_up_to();
                 if e.error_len().is_some() || self.eof {
                     let mut err = reader::at(self.base + self.visible, "invalid UTF-8");
-                    err.invalid_utf8 = Some(self.buf.bytes()[self.visible]);
+                    err.invalid_utf8 = Some(bytes!(self)[self.visible]);
                     return Err(err);
                 }
             }
         }
         Ok(())
+    }
+}
+
+impl<'c, K: Kind, S: Clone + std::fmt::Debug, const TRACK: bool>
+    Stream<'c, K, std::io::Empty, S, TRACK>
+{
+    /// A stream over an input that is all in memory: the steps read it
+    /// where it is, nothing is copied, and every step knows it has the rest
+    /// of the input (`Pass::last`) and runs the plain parsers. The
+    /// generated `parse_<rule>_slice` and `parse_<rule>_slice_each` use it.
+    pub fn whole(input: &'c [u8], context: &'c mut ParseContext<S>, k: usize) -> Self {
+        let mut stream = Stream::new(
+            std::io::empty(),
+            context,
+            super::Reading {
+                block: 1 << 16,
+                max_frame: usize::MAX / 4,
+            },
+            k,
+        );
+        stream.whole = true;
+        stream.src = input;
+        stream
     }
 }
 
