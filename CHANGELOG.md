@@ -176,6 +176,16 @@
   list` -11.8 % / -11.9 %; nothing slower in both builds. Reusing one
   context for many short parses saves another ~10 % there (two allocations
   and their frees a `ParseContext::default()`).
+- **Fewer allocations for a short input.** An interner's map and its stash
+  of lookup tables share one `Arc` (one allocation and free a
+  `ParseContext::default()` instead of two); the reader's buffer does not
+  grow for the read after a short one, which most likely finds the end; and
+  the items a fold's end may have to parse again keep the last two inline
+  (`Replay::Ended`). callgrind against the previous main, default build /
+  one codegen unit: `stream_profile list` -14.5 % / -15.0 %,
+  `slice_profile list` -5.1 % / -6.1 %, `str_profile list` -5.3 % / -5.2 %;
+  nothing slower in both builds. What remains a short stream allocates:
+  the context's `Arc`, the reader's buffer and the stream's `pending`.
 - **`examples/span_profile.rs`**: in a grammar with a `#[stream]` rule a span
   bound with `@` adds the context's `origin` - one instruction a span,
   +0.48 % / +0.38 % on 200 000 spans (#43).
