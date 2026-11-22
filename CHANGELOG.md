@@ -5,6 +5,13 @@
 
 ### Added
 
+- **`parse_<rule>_str` and `parse_<rule>_str_each`: the slice entries over a
+  `&str`.** In a text grammar the input of a `&str` is known to be UTF-8, so
+  the stream does not check it again (`Stream::whole(.., checked, ..)`); both
+  entries call one function with the slice entries. `examples/str_profile.rs`
+  against `slice_profile`, default build: `slice` 40.0M against 41.0M,
+  `list` (20 000 short inputs) 75.3M against 87.1M.
+
 - **`parse_<rule>_slice` and `parse_<rule>_slice_each`: a `#[stream]` rule
   over an input that is all in memory.** The stream reads the slice where it
   is (`Stream::whole`, nothing copied), so every step has the rest of the
@@ -154,6 +161,24 @@
   +2.5 %): the same rule as `stream_profile memory`, which is faster
   (-0.01 % / -1.7 %) - the register allocation of one function in that
   binary, five instructions a row.
+
+### Performance
+
+- **A stream parses on the caller's context, not a clone of it.**
+  `Stream::new` cloned the context and its `Drop` wrote the clone back - Vec
+  and Arc clones, a drop of the old context and three copies of 256 bytes a
+  parse. The stream now borrows the caller's context for its length; steps
+  that run once are lent it, and the item loop reads it out once a window
+  and writes it back (`rt::stream::Hold`), also as a panic unwinds through
+  the loop, so the caller's context is never left moved-from
+  (`tests/stream_panic_test.rs`). callgrind against main, default build /
+  one codegen unit: `stream_profile list` -10.1 % / -9.1 %, `slice_profile
+  list` -11.8 % / -11.9 %; nothing slower in both builds. Reusing one
+  context for many short parses saves another ~10 % there (two allocations
+  and their frees a `ParseContext::default()`).
+- **`examples/span_profile.rs`**: in a grammar with a `#[stream]` rule a span
+  bound with `@` adds the context's `origin` - one instruction a span,
+  +0.48 % / +0.38 % on 200 000 spans (#43).
 
 ### Fixed
 

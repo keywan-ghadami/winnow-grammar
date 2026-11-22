@@ -32,7 +32,9 @@ profiles=(
     "cut_profile none stmts_none stmts_cut grouped_none grouped_cut stream_none stream_cut"
     "stream_profile none plain memory stream frames_memory frames_reader list"
     "slice_profile none memory slice list doc_none doc_cut"
+    "str_profile none slice list"
     "param_profile none yaml"
+    "span_profile none plain dual"
 )
 
 base_sha=$(git rev-parse --verify "$base_rev^{commit}")

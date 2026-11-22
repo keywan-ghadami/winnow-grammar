@@ -402,6 +402,69 @@ pub type Step<'w, 'x, K, S> = InputOf<<K as Kind>::View<'w>, &'x mut ParseContex
 /// (`stream_profile stream`: 26 instructions an item).
 pub type Held<'w, K, S> = Input<<K as Kind>::View<'w>, S>;
 
+/// The stream's context moved out of the caller's for the item loop, which
+/// holds it ([`Held`]): read out once a window and written back - when the
+/// loop is done, or as a panic unwinds through it, so that the caller's
+/// context is never left moved-from.
+struct Hold<'h, V, S> {
+    home: &'h mut ParseContext<S>,
+    input: std::mem::ManuallyDrop<Input<V, S>>,
+}
+
+impl<'h, V: Clone + winnow::stream::Offset, S> Hold<'h, V, S> {
+    #[inline(always)]
+    fn new(home: &'h mut ParseContext<S>, view: V) -> Self {
+        // SAFETY: the context is moved out of `home`, which `Hold` borrows
+        // until it writes the context back (`put_back`, or `drop` as a
+        // panic unwinds): nothing reads or drops `home` in between, and the
+        // copy left in it is overwritten, not dropped.
+        let state = unsafe { std::ptr::read(&*home) };
+        Hold {
+            home,
+            input: std::mem::ManuallyDrop::new(Input {
+                input: winnow::stream::LocatingSlice::new(view),
+                state,
+            }),
+        }
+    }
+
+    /// Writes the context back and gives back where it came from.
+    #[inline(always)]
+    fn put_back(self) -> &'h mut ParseContext<S> {
+        let mut this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: `this` is not dropped, so `input` is taken once, here; the
+        // borrow of `home` is moved out of it once, here.
+        unsafe {
+            let input = std::mem::ManuallyDrop::take(&mut this.input);
+            let home: &'h mut ParseContext<S> = std::ptr::read(&this.home);
+            std::ptr::write(&mut *home, input.state);
+            home
+        }
+    }
+}
+
+impl<V, S> Drop for Hold<'_, V, S> {
+    fn drop(&mut self) {
+        // SAFETY: only as a panic unwinds (`put_back` forgets `Hold`): the
+        // context goes back over the bits it was read from.
+        unsafe {
+            let input = std::mem::ManuallyDrop::take(&mut self.input);
+            std::ptr::write(&mut *self.home, input.state);
+        }
+    }
+}
+
+/// What the item loop of a window gives back: how it stopped, where, the
+/// context, the last item taken and the failures that reach past their item.
+type Scanned<'h, S> = (
+    Stop,
+    usize,
+    &'h mut ParseContext<S>,
+    Option<usize>,
+    Vec<Reaching>,
+    Option<usize>,
+);
+
 /// Why a step stopped parsing items from its window.
 enum Stop {
     /// An item may need more input than the window has: read more.
@@ -628,8 +691,9 @@ pub struct Stream<
     /// The end of what a step may see: for text, of what is checked as UTF-8.
     visible: usize,
     eof: bool,
-    ctx: Option<ParseContext<S>>,
-    out: &'c mut ParseContext<S>,
+    /// The caller's context, which the parse runs on: taken out of here for
+    /// a step and put back after it - a pointer moved, not the context.
+    ctx: Option<&'c mut ParseContext<S>>,
     /// What the diagnosing pass recorded, at stream positions.
     furthest: Option<ParseError>,
     /// What a cut set aside that is still open after the step that made
@@ -650,19 +714,18 @@ pub struct Stream<
 impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const WHOLE: bool>
     Stream<'c, K, R, S, TRACK, WHOLE>
 {
-    /// A stream over `reader`, parsing with a copy of `context`, which gets
-    /// the copy back - user state, recoveries and all - when the stream is
-    /// dropped. `k` is the grammar's own lookahead; `TRACK`, whether its
-    /// parsers note how far failures reach (`edge_reach`), so that the items
-    /// an error further on has to be diagnosed with are kept.
+    /// A stream over `reader`, parsing on `context`: user state, recoveries
+    /// and all are there as the parse leaves them - no copy is made. `k` is
+    /// the grammar's own lookahead; `TRACK`, whether its parsers note how far
+    /// failures reach (`edge_reach`), so that the items an error further on
+    /// has to be diagnosed with are kept.
     pub fn new(
         reader: R,
         context: &'c mut ParseContext<S>,
         reading: super::Reading,
         k: usize,
     ) -> Self {
-        let mut ctx = context.clone();
-        ctx.begin_parse();
+        context.begin_parse();
         Stream {
             reader,
             block: reading.block.max(1),
@@ -678,8 +741,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
             base: 0,
             visible: 0,
             eof: false,
-            ctx: Some(ctx),
-            out: context,
+            ctx: Some(context),
             furthest: None,
             cut_stash: Vec::new(),
             _kind: PhantomData,
@@ -689,7 +751,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
     /// The context, for the actions the driver runs between steps.
     pub fn context(&mut self) -> &mut ParseContext<S> {
         self.ctx
-            .as_mut()
+            .as_deref_mut()
             .expect("the context is back between steps")
     }
 
@@ -811,7 +873,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
             replay: false,
         };
         let origin = self.base + self.pos;
-        let mut ctx = self.ctx.take().expect("the context is back between steps");
+        let ctx = self.ctx.take().expect("the context is back between steps");
         let recovered = ctx.recovered.len();
         ctx.touched = false;
         ctx.trivia_memo = TRIVIA_UNSEEN;
@@ -831,14 +893,14 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
         };
         ctx.rules.clear();
         ctx.origin = 0;
-        // Checked here: the call moves the context out and back, twice its
-        // size copied, which every step paid while nothing was pending.
+        // Checked here: the flush is cold, and nearly every step has nothing
+        // pending.
         if !ctx.cut_stash.is_empty() && !self.pending.is_empty() {
             self.ctx = Some(ctx);
             self.flush_before_cut();
             ctx = self.ctx.take().expect("the flush gives the context back");
         }
-        end_step(&mut self.furthest, &mut self.cut_stash, &mut ctx, origin);
+        end_step(&mut self.furthest, &mut self.cut_stash, ctx, origin);
         for e in &mut ctx.recovered[recovered..] {
             *e = shift(e.clone(), origin);
         }
@@ -861,22 +923,15 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
     /// Parses items from the window until one stops the step: the item
     /// loop, whole, with where it stopped, the context back, the start of
     /// the last item taken and the failures that reach past their item.
-    fn scan_window<const LAST: bool, F>(
+    fn scan_window<'h, const LAST: bool, F>(
         &self,
-        ctx: ParseContext<S>,
+        home: &'h mut ParseContext<S>,
         f: &mut F,
         n: &mut usize,
         pass: &Pass,
         mode: Diagnose,
         lazy: bool,
-    ) -> (
-        Stop,
-        usize,
-        ParseContext<S>,
-        Option<usize>,
-        Vec<Reaching>,
-        Option<usize>,
-    )
+    ) -> Scanned<'h, S>
     where
         F: for<'w> FnMut(&mut Held<'w, K, S>, &Pass, usize) -> Result<bool, Fail>,
     {
@@ -888,12 +943,8 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
         let mut prev = None;
         let (k, track) = (self.k, TRACK);
         let mut reaching = Vec::new();
-        let mut input = Input {
-            input: winnow::stream::LocatingSlice::new(K::view(
-                &bytes!(self)[self.pos..self.visible],
-            )),
-            state: ctx,
-        };
+        let mut hold = Hold::new(home, K::view(&bytes!(self)[self.pos..self.visible]));
+        let input: &mut Held<'_, K, S> = &mut hold.input;
         // What an eager pass recorded before the item being parsed.
         let mut recorded = None;
         let stop = loop {
@@ -921,7 +972,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
             // ends the loop, after which `items` discards what it emitted.
             // Not discarded here: this is the hot loop of every stream.
             debug_assert!(input.state.emits.is_empty());
-            let r = f(&mut input, pass, *n + 1);
+            let r = f(input, pass, *n + 1);
             if input.state.touched && !last {
                 input.reset(&cp);
                 if let Some(s) = snapshot {
@@ -983,14 +1034,8 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
         // How far the failures of the item that ended the fold got, in the
         // window: unknown (`None`) where the grammar does not track it.
         let reach = (track && input.state.reach != usize::MAX).then(|| window - input.state.reach);
-        (
-            stop,
-            input.current_token_start(),
-            input.state,
-            prev,
-            reaching,
-            reach,
-        )
+        let at = input.current_token_start();
+        (stop, at, hold.put_back(), prev, reaching, reach)
     }
 
     /// Acts on how the step stopped: reads more, takes the error, or parses
@@ -1084,7 +1129,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
             None => {
                 let ctx = self.ctx.take().expect("the context is back between steps");
                 let (e, ctx) = {
-                    let input = Input {
+                    let input = InputOf {
                         input: winnow::stream::LocatingSlice::new(K::view(
                             &bytes!(self)[self.pos..self.visible],
                         )),
@@ -1130,7 +1175,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
         self.flush();
         let ctx = self.ctx.take().expect("the context is back between steps");
         let (e, ctx) = {
-            let input = Input {
+            let input = InputOf {
                 input: winnow::stream::LocatingSlice::new(K::view(
                     &bytes!(self)[self.pos..self.visible],
                 )),
@@ -1571,7 +1616,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
         let visible = self.visible;
         let ctx = self
             .ctx
-            .as_mut()
+            .as_deref_mut()
             .expect("the context is back between steps");
         let recovered = begin_attempt(ctx, origin, rules, &pass, item);
         // The view ends here, before the stream takes the context back.
@@ -1604,20 +1649,17 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
         F: for<'w> FnMut(&mut Held<'w, K, S>, &Pass, usize) -> Result<T, Fail>,
     {
         let origin = self.base + start;
-        let mut ctx = self.ctx.take().expect("the context is back between steps");
-        let recovered = begin_attempt(&mut ctx, origin, rules, &pass, item);
+        let ctx = self.ctx.take().expect("the context is back between steps");
+        let recovered = begin_attempt(ctx, origin, rules, &pass, item);
         // The view ends here, before the context goes back to the stream.
         let (r, touched, ctx) = {
-            let mut input = Input {
-                input: winnow::stream::LocatingSlice::new(K::view(
-                    &bytes!(self)[start..self.visible],
-                )),
-                state: ctx,
-            };
-            let r = f(&mut input, &pass, item.unwrap_or(0));
+            let mut hold = Hold::new(ctx, K::view(&bytes!(self)[start..self.visible]));
+            let input: &mut Held<'_, K, S> = &mut hold.input;
+            let r = f(input, &pass, item.unwrap_or(0));
             let consumed = input.current_token_start();
             let r = attempt_result(r, consumed, item, rules, &mut input.state);
-            (r, input.state.touched, input.state)
+            let touched = input.state.touched;
+            (r, touched, hold.put_back())
         };
         self.ctx = Some(ctx);
         (self.end_attempt(r, origin, recovered), touched)
@@ -1633,7 +1675,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
     ) -> Result<(T, usize), Fail> {
         let ctx = self
             .ctx
-            .as_mut()
+            .as_deref_mut()
             .expect("the context is back between steps");
         ctx.rules.clear();
         ctx.origin = 0;
@@ -1642,7 +1684,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
         }
         let ctx = self
             .ctx
-            .as_mut()
+            .as_deref_mut()
             .expect("the context is back between steps");
         end_step(&mut self.furthest, &mut self.cut_stash, ctx, origin);
         for e in &mut ctx.recovered[recovered..] {
@@ -1775,7 +1817,15 @@ impl<'c, K: Kind, S: Clone + std::fmt::Debug, const TRACK: bool>
     /// no reach, so a step kept for a diagnosis that may come
     /// (`Pending`) would not know which items to parse again.
     /// [`slice_passes`] runs the two passes of the other modes.
-    pub fn whole(input: &'c [u8], context: &'c mut ParseContext<S>, k: usize) -> Self {
+    ///
+    /// `checked`: the input is known to be UTF-8 - it came as a `&str` - so
+    /// a text stream does not check it again.
+    pub fn whole(
+        input: &'c [u8],
+        checked: bool,
+        context: &'c mut ParseContext<S>,
+        k: usize,
+    ) -> Self {
         debug_assert!(
             matches!(context.diagnose, Diagnose::Off | Diagnose::Eager),
             "a whole stream runs one pass: {:?}",
@@ -1791,6 +1841,10 @@ impl<'c, K: Kind, S: Clone + std::fmt::Debug, const TRACK: bool>
             k,
         );
         stream.src = input;
+        if checked {
+            stream.visible = input.len();
+            stream.eof = true;
+        }
         stream
     }
 }
@@ -1799,10 +1853,9 @@ impl<K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const WHOL
     for Stream<'_, K, R, S, TRACK, WHOLE>
 {
     fn drop(&mut self) {
-        if let Some(mut ctx) = self.ctx.take() {
+        if let Some(ctx) = self.ctx.take() {
             // The caller's context takes no emits after the parse.
             ctx.emits.close();
-            *self.out = ctx;
         }
     }
 }
