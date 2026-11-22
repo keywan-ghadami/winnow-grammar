@@ -552,7 +552,38 @@ enum Replay {
     /// taken before it whose failures may reach it, oldest first, the last
     /// item taken, and the item that did not come - each at its start in
     /// `buf`, with its number.
-    Ended(Vec<(usize, usize)>),
+    Ended(Ended),
+}
+
+/// The items a [`Replay::Ended`] parses again, oldest first. The last item
+/// taken and the one that did not come are held inline: a fold that ends
+/// cleanly has no earlier ones, and a Vec for its one or two items was an
+/// allocation a stream (`stream_profile list`).
+struct Ended {
+    earlier: Vec<(usize, usize)>,
+    prev: Option<(usize, usize)>,
+    next: (usize, usize),
+}
+
+impl Ended {
+    fn iter(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.earlier
+            .iter()
+            .copied()
+            .chain(self.prev)
+            .chain(std::iter::once(self.next))
+    }
+
+    fn shift_back(&mut self, by: usize) {
+        for i in self
+            .earlier
+            .iter_mut()
+            .chain(self.prev.as_mut())
+            .chain(std::iter::once(&mut self.next))
+        {
+            i.0 -= by;
+        }
+    }
 }
 
 impl<K: Kind, S> Pending<'_, K, S> {
@@ -568,7 +599,7 @@ impl<K: Kind, S> Pending<'_, K, S> {
         self.reach -= by;
         match &mut self.what {
             Replay::Chunk(s) => *s -= by,
-            Replay::Ended(items) => items.iter_mut().for_each(|i| i.0 -= by),
+            Replay::Ended(items) => items.shift_back(by),
         }
     }
 }
@@ -1448,18 +1479,21 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
     ) where
         G: FnOnce() -> Replayer<'c, K, S>,
     {
-        let mut items = Vec::new();
+        let mut items = Ended {
+            earlier: Vec::new(),
+            prev: None,
+            next: (self.pos, n + 1),
+        };
         if let Some(prev) = self.prev_item {
             self.prune();
-            items.extend(
+            items.earlier.extend(
                 self.reaching
                     .iter()
                     .filter(|r| r.start < prev)
                     .map(|r| (r.start, r.n)),
             );
-            items.push((prev, n));
+            items.prev = Some((prev, n));
         }
-        items.push((self.pos, n + 1));
         let reach = reach.unwrap_or(self.pos).max(self.pos);
         let state = self.context().user_state.clone();
         self.pending.push(Pending {
@@ -1515,7 +1549,7 @@ impl<'c, K: Kind, R: Read, S: Clone + std::fmt::Debug, const TRACK: bool, const 
                     }
                 }
                 Replay::Ended(items) => {
-                    for (start, n) in items {
+                    for (start, n) in items.iter() {
                         let _ = self.attempt(start, rules, &mut run, pass, Some(n));
                     }
                 }

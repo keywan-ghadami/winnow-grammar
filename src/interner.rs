@@ -118,26 +118,44 @@ impl Symbol {
 /// or `intern(…)` never interns, and should not pay for a map it will not
 /// read - so it does not. The check is one relaxed atomic load on the interner
 /// path, which is reached only when the context's lookup cache misses.
+///
+/// **One allocation.** The map and the lookup tables the contexts on it
+/// leave behind share one `Arc`: a context built per short parse paid two
+/// allocations and two frees for them (`slice_profile list`).
 #[derive(Debug, Clone)]
 pub struct InternerContext {
-    backend: Arc<OnceLock<ThreadedRodeo<Spur, Hasher>>>,
+    shared: Arc<Shared>,
+}
+
+/// What the clones of one interner share.
+#[derive(Default)]
+pub(crate) struct Shared {
+    backend: OnceLock<ThreadedRodeo<Spur, Hasher>>,
     /// Lookup tables the contexts on this interner have finished with - see
     /// `InternCache::fill`.
-    tables: Arc<crate::intern_cache::Stash>,
+    pub(crate) tables: crate::intern_cache::Stash,
+}
+
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shared")
+            .field("backend", &self.backend)
+            .finish_non_exhaustive()
+    }
 }
 
 impl InternerContext {
     pub fn new() -> Self {
         Self {
-            backend: Arc::new(OnceLock::new()),
-            tables: Arc::default(),
+            shared: Arc::default(),
         }
     }
 
     /// The map, built if this is the first time anyone asked.
     #[inline]
     fn rodeo(&self) -> &ThreadedRodeo<Spur, Hasher> {
-        self.backend
+        self.shared
+            .backend
             .get_or_init(|| ThreadedRodeo::with_hasher(Hasher::default()))
     }
 
@@ -154,24 +172,24 @@ impl InternerContext {
     /// the largest [`Symbol::index`] it has handed out, so it is the size a
     /// caller's parallel `Vec` needs.
     pub fn len(&self) -> usize {
-        self.backend.get().map_or(0, |r| r.len())
+        self.shared.backend.get().map_or(0, |r| r.len())
     }
 
     /// Whether nothing has been interned yet.
     pub fn is_empty(&self) -> bool {
-        self.backend.get().is_none_or(|r| r.is_empty())
+        self.shared.backend.get().is_none_or(|r| r.is_empty())
     }
 
     /// Where the contexts on this interner leave their lookup tables.
-    pub(crate) fn stash(&self) -> &Arc<crate::intern_cache::Stash> {
-        &self.tables
+    pub(crate) fn stash(&self) -> &Arc<Shared> {
+        &self.shared
     }
 
     /// Identifies the interner *behind* this handle: two clones of one
     /// interner share it, two separate ones do not. Used to tell whether a
     /// cache of symbols still belongs to the interner it was filled from.
     pub(crate) fn id(&self) -> usize {
-        Arc::as_ptr(&self.backend) as usize
+        Arc::as_ptr(&self.shared) as usize
     }
 }
 

@@ -104,7 +104,7 @@ pub struct InternCache {
     interner: usize,
     /// The stash of the interner the slots belong to, where they go when this
     /// cache is dropped or rebound. `None` until the first `intern`.
-    home: Option<Arc<Stash>>,
+    home: Option<Arc<crate::interner::Shared>>,
     /// `1 << bits` slots. Settable per context, because how many distinct
     /// strings a parse will see is the caller's knowledge - see
     /// [`ParseContext::expect_distinct_keys`](crate::ParseContext::expect_distinct_keys).
@@ -224,7 +224,7 @@ impl InternCache {
     fn give_back(&mut self) {
         let slots = std::mem::take(&mut self.slots);
         if let (false, Some(home)) = (slots.is_empty(), &self.home) {
-            home.put(self.bits, slots);
+            home.tables.put(self.bits, slots);
         }
     }
 
@@ -243,6 +243,7 @@ impl InternCache {
     fn fill(&mut self, interner: &InternerContext) {
         let home = Arc::clone(interner.stash());
         self.slots = home
+            .tables
             .take(self.bits)
             .unwrap_or_else(|| vec![Self::empty_slot(); 1 << self.bits]);
         self.interner = interner.id();
