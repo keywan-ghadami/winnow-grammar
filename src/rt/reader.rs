@@ -27,6 +27,8 @@ pub(crate) struct Buf {
     lines: usize,
     /// The stream's offset where the line `data[0]` is on begins.
     line_start: usize,
+    /// The last read returned less than it was asked: the end may be next.
+    short: bool,
 }
 
 impl Buf {
@@ -39,13 +41,21 @@ impl Buf {
     }
 
     /// One read of up to `n` bytes, appended; `Ok(0)` is the end.
+    ///
+    /// After a read that returned less than it was asked, the next one does
+    /// not grow the buffer while it has room: it is most likely the one that
+    /// finds the end, and growing for it cost a short input a `realloc`
+    /// (`stream_profile list`). Otherwise a read gets room for all of `n`.
     pub(crate) fn read_from(&mut self, reader: &mut impl Read, n: usize) -> std::io::Result<usize> {
-        let need = self.filled + n.max(1);
-        if self.data.len() < need {
+        let n = n.max(1);
+        let free = self.data.len() - self.filled;
+        if free < n && !(self.short && free > 0) {
+            let need = self.filled + n;
             self.data.resize(need.max(self.data.len() * 2), 0);
         }
-        let end = (self.filled + n.max(1)).min(self.data.len());
+        let end = (self.filled + n).min(self.data.len());
         let got = reader.read(&mut self.data[self.filled..end])?;
+        self.short = got < end - self.filled;
         self.filled += got;
         Ok(got)
     }
